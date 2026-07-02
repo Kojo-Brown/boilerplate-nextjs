@@ -10,7 +10,7 @@
 - [x] Route groups: `(auth)` for login/register, `(dashboard)` for protected
 
 ## Phase 2 — Auth
-- [ ] NextAuth.js v5 (credentials + Google provider) with Prisma adapter
+- [x] NextAuth.js v5 (credentials + Google provider) with Prisma adapter
 - [ ] Middleware for protected routes (redirect to /login)
 - [ ] Session-aware server components via `auth()` helper
 - [ ] Role-based access: admin guard via middleware matcher
