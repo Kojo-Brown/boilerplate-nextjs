@@ -72,6 +72,15 @@ model Post {
   @@map("posts")
 }
 
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@id([identifier, token])
+  @@map("verification_tokens")
+}
+
 enum Role {
   USER
   ADMIN
