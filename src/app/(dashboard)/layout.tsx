@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getRequiredSession } from "@/lib/session";
+import { UserAvatar } from "@/components/session/user-avatar";
 import { signOutAction } from "@/actions/auth";
 
 export default async function DashboardLayout({
@@ -7,8 +7,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth();
-  if (!session) redirect("/login");
+  const session = await getRequiredSession();
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -25,6 +24,7 @@ export default async function DashboardLayout({
             >
               {session.user.name ?? session.user.email}
             </span>
+            <UserAvatar size="sm" />
             <form action={signOutAction}>
               <button
                 type="submit"

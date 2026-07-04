@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { auth } from "@/auth";
+import { getRequiredSession } from "@/lib/session";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -7,14 +7,14 @@ export const metadata: Metadata = {
 };
 
 export default async function DashboardPage() {
-  const session = await auth();
+  const session = await getRequiredSession();
 
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
-          Welcome back, {session?.user.name ?? "there"}!
+          Welcome back, {session.user.name ?? "there"}!
         </p>
       </div>
 
@@ -32,7 +32,7 @@ export default async function DashboardPage() {
               Name
             </dt>
             <dd className="mt-0.5 text-sm font-medium">
-              {session?.user.name ?? "—"}
+              {session.user.name ?? "—"}
             </dd>
           </div>
           <div>
@@ -40,7 +40,7 @@ export default async function DashboardPage() {
               Email
             </dt>
             <dd className="mt-0.5 text-sm font-medium">
-              {session?.user.email ?? "—"}
+              {session.user.email ?? "—"}
             </dd>
           </div>
           <div>
@@ -48,14 +48,14 @@ export default async function DashboardPage() {
               Role
             </dt>
             <dd className="mt-0.5 text-sm font-medium">
-              {session?.user.role ?? "—"}
+              {session.user.role ?? "—"}
             </dd>
           </div>
           <div>
             <dt className="text-xs" style={{ color: "var(--muted-foreground)" }}>
               User ID
             </dt>
-            <dd className="mt-0.5 font-mono text-xs">{session?.user.id ?? "—"}</dd>
+            <dd className="mt-0.5 font-mono text-xs">{session.user.id ?? "—"}</dd>
           </div>
         </dl>
       </div>
