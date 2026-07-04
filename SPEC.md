@@ -12,7 +12,7 @@
 ## Phase 2 — Auth
 - [x] NextAuth.js v5 (credentials + Google provider) with Prisma adapter
 - [x] Middleware for protected routes (redirect to /login)
-- [ ] Session-aware server components via `auth()` helper
+- [x] Session-aware server components via `auth()` helper
 - [ ] Role-based access: admin guard via middleware matcher
 
 ## Phase 3 — UI System
