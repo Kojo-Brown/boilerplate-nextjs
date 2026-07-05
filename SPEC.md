@@ -13,7 +13,7 @@
 - [x] NextAuth.js v5 (credentials + Google provider) with Prisma adapter
 - [x] Middleware for protected routes (redirect to /login)
 - [x] Session-aware server components via `auth()` helper
-- [ ] Role-based access: admin guard via middleware matcher
+- [x] Role-based access: admin guard via middleware matcher
 
 ## Phase 3 — UI System
 - [ ] shadcn/ui-compatible component primitives (Button, Input, Card, Dialog)
