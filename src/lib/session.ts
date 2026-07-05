@@ -34,3 +34,14 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
   const session = await getSession();
   return session?.user ?? null;
 }
+
+/**
+ * Returns the current session if the user is authenticated and has the ADMIN role.
+ * Redirects to /login if not authenticated, or /forbidden if authenticated but not ADMIN.
+ */
+export async function getRequiredAdminSession(): Promise<AuthSession> {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  if (session.user.role !== "ADMIN") redirect("/forbidden");
+  return session;
+}
