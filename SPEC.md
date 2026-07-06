@@ -16,7 +16,7 @@
 - [x] Role-based access: admin guard via middleware matcher
 
 ## Phase 3 — UI System
-- [ ] shadcn/ui-compatible component primitives (Button, Input, Card, Dialog)
+- [x] shadcn/ui-compatible component primitives (Button, Input, Card, Dialog)
 - [ ] Dark mode via `next-themes` with CSS variables
 - [ ] Toast notifications (Sonner)
 - [ ] Responsive nav layout with mobile drawer
