@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Toaster } from "sonner";
 import { auth } from "@/auth";
 import { SessionProvider } from "@/components/providers/session-provider";
+import { ThemeProvider } from "@/components/providers/theme-provider";
 import "@/styles/globals.css";
 
 export const metadata: Metadata = {
@@ -14,10 +15,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
-        <SessionProvider session={session}>
-          {children}
-          <Toaster richColors closeButton />
-        </SessionProvider>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <SessionProvider session={session}>
+            {children}
+            <Toaster richColors closeButton />
+          </SessionProvider>
+        </ThemeProvider>
       </body>
     </html>
   );
