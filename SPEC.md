@@ -18,7 +18,7 @@
 ## Phase 3 — UI System
 - [x] shadcn/ui-compatible component primitives (Button, Input, Card, Dialog)
 - [x] Dark mode via `next-themes` with CSS variables
-- [ ] Toast notifications (Sonner)
+- [x] Toast notifications (Sonner)
 - [ ] Responsive nav layout with mobile drawer
 
 ## Phase 4 — Data Layer
