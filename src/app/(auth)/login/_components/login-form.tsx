@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import Link from "next/link";
 import { loginAction, signInWithGoogleAction } from "@/actions/auth";
 import type { ActionResult } from "@/lib/actions";
+import { toast } from "@/lib/toast";
 
 function fieldError(
   state: ActionResult<void> | null,
@@ -16,15 +17,14 @@ function fieldError(
 export function LoginForm() {
   const [state, formAction, isPending] = useActionState(loginAction, null);
 
+  useEffect(() => {
+    if (!state || state.success || state.fieldErrors) return;
+    toast.error(state.error);
+  }, [state]);
+
   return (
     <div className="flex flex-col gap-4">
       <form action={formAction} className="flex flex-col gap-4">
-        {state && !state.success && !state.fieldErrors && (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {state.error}
-          </p>
-        )}
-
         <div className="flex flex-col gap-1.5">
           <label htmlFor="email" className="text-sm font-medium">
             Email
