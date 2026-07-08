@@ -22,7 +22,7 @@
 - [x] Responsive nav layout with mobile drawer
 
 ## Phase 4 — Data Layer
-- [ ] Server components with Prisma direct queries (no API layer)
+- [x] Server components with Prisma direct queries (no API layer)
 - [ ] TanStack Query for client-side mutations + optimistic updates
 - [ ] Cursor-based pagination helper
 - [ ] Image upload with Next.js Server Actions + S3 presigned URLs
