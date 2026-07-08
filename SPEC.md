@@ -19,7 +19,7 @@
 - [x] shadcn/ui-compatible component primitives (Button, Input, Card, Dialog)
 - [x] Dark mode via `next-themes` with CSS variables
 - [x] Toast notifications (Sonner)
-- [ ] Responsive nav layout with mobile drawer
+- [x] Responsive nav layout with mobile drawer
 
 ## Phase 4 — Data Layer
 - [ ] Server components with Prisma direct queries (no API layer)
