@@ -16,6 +16,8 @@ import {
   getPostsByUser,
   getPostById,
   getPostCountByUser,
+  getPaginatedPostsByUser,
+  getPaginatedPublishedPosts,
 } from "./posts";
 
 const mockPost = {
@@ -112,5 +114,75 @@ describe("getPostCountByUser", () => {
 
     expect(prisma.post.count).toHaveBeenCalledWith({ where: { authorId: "user-1" } });
     expect(count).toBe(3);
+  });
+});
+
+describe("getPaginatedPostsByUser", () => {
+  it("fetches take=limit+1 posts for cursor detection", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    await getPaginatedPostsByUser("user-1", { limit: 10 });
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 11, where: { authorId: "user-1" } }),
+    );
+  });
+
+  it("passes cursor and skip when cursor is provided", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    await getPaginatedPostsByUser("user-1", { cursor: "post-1", limit: 5 });
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: { id: "post-1" }, skip: 1, take: 6 }),
+    );
+  });
+
+  it("returns hasMore=true and nextCursor when more items exist", async () => {
+    const items = Array.from({ length: 6 }, (_, i) => ({
+      ...mockPost,
+      id: `post-${i + 1}`,
+    }));
+    vi.mocked(prisma.post.findMany).mockResolvedValue(items as never);
+
+    const page = await getPaginatedPostsByUser("user-1", { limit: 5 });
+
+    expect(page.hasMore).toBe(true);
+    expect(page.nextCursor).toBe("post-5");
+    expect(page.items).toHaveLength(5);
+  });
+
+  it("returns hasMore=false when on last page", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    const page = await getPaginatedPostsByUser("user-1", { limit: 10 });
+
+    expect(page.hasMore).toBe(false);
+    expect(page.nextCursor).toBeNull();
+  });
+});
+
+describe("getPaginatedPublishedPosts", () => {
+  it("filters by published=true", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    await getPaginatedPublishedPosts({ limit: 10 });
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { published: true } }),
+    );
+  });
+
+  it("returns paginated results", async () => {
+    const items = Array.from({ length: 4 }, (_, i) => ({
+      ...mockPost,
+      id: `post-${i + 1}`,
+    }));
+    vi.mocked(prisma.post.findMany).mockResolvedValue(items as never);
+
+    const page = await getPaginatedPublishedPosts({ limit: 10 });
+
+    expect(page.items).toHaveLength(4);
+    expect(page.hasMore).toBe(false);
   });
 });
