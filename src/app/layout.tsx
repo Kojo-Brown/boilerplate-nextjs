@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
 import { auth } from "@/auth";
+import { QueryProvider } from "@/components/providers/query-provider";
 import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import "@/styles/globals.css";
@@ -17,8 +18,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <SessionProvider session={session}>
-            {children}
-            <Toaster richColors closeButton />
+            <QueryProvider>
+              {children}
+              <Toaster richColors closeButton />
+            </QueryProvider>
           </SessionProvider>
         </ThemeProvider>
       </body>
