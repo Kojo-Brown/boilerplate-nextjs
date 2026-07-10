@@ -28,7 +28,7 @@
 - [x] Image upload with Next.js Server Actions + S3 presigned URLs
 
 ## Phase 5 — Performance
-- [ ] Route-level streaming with `loading.tsx` skeletons
+- [x] Route-level streaming with `loading.tsx` skeletons
 - [ ] `next/image` wrapper with blur placeholder + LQIP
 - [ ] Parallel routes for dashboard widgets
 - [ ] ISR (incremental static regen) example for public pages
