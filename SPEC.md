@@ -25,7 +25,7 @@
 - [x] Server components with Prisma direct queries (no API layer)
 - [x] TanStack Query for client-side mutations + optimistic updates
 - [x] Cursor-based pagination helper
-- [ ] Image upload with Next.js Server Actions + S3 presigned URLs
+- [x] Image upload with Next.js Server Actions + S3 presigned URLs
 
 ## Phase 5 — Performance
 - [ ] Route-level streaming with `loading.tsx` skeletons
