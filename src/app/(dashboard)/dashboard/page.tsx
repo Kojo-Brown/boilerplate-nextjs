@@ -1,10 +1,5 @@
-import { Suspense } from "react";
 import type { Metadata } from "next";
 import { getRequiredSession } from "@/lib/session";
-import { DashboardStats } from "./_components/dashboard-stats";
-import { DashboardStatsSkeleton } from "./_components/dashboard-stats-skeleton";
-import { RecentPosts } from "./_components/recent-posts";
-import { RecentPostsSkeleton } from "./_components/recent-posts-skeleton";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -15,7 +10,7 @@ export default async function DashboardPage() {
   const session = await getRequiredSession();
 
   return (
-    <div className="flex flex-col gap-6">
+    <>
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
@@ -23,7 +18,6 @@ export default async function DashboardPage() {
         </p>
       </div>
 
-      {/* Session info — available immediately, no Suspense needed */}
       <div
         className="rounded-xl border p-6"
         style={{ backgroundColor: "var(--background)" }}
@@ -53,22 +47,6 @@ export default async function DashboardPage() {
           </div>
         </dl>
       </div>
-
-      {/*
-       * Streamed independently — stats resolve as soon as the DB query returns.
-       * The skeleton is shown until the async DashboardStats component resolves.
-       */}
-      <Suspense fallback={<DashboardStatsSkeleton />}>
-        <DashboardStats userId={session.user.id} />
-      </Suspense>
-
-      {/*
-       * Streamed independently — recent posts can resolve at a different time
-       * than stats. Both queries run in parallel with the session card above.
-       */}
-      <Suspense fallback={<RecentPostsSkeleton />}>
-        <RecentPosts userId={session.user.id} />
-      </Suspense>
-    </div>
+    </>
   );
 }
