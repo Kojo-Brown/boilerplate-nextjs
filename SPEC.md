@@ -30,7 +30,7 @@
 ## Phase 5 — Performance
 - [x] Route-level streaming with `loading.tsx` skeletons
 - [x] `next/image` wrapper with blur placeholder + LQIP
-- [ ] Parallel routes for dashboard widgets
+- [x] Parallel routes for dashboard widgets
 - [ ] ISR (incremental static regen) example for public pages
 
 ## Phase 6 — Testing
