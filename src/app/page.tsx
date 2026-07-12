@@ -7,7 +7,7 @@ export default function HomePage() {
       <p className="max-w-md text-center text-muted-foreground">
         Next.js 16 · App Router · TypeScript 6 · TailwindCSS 4 · Prisma 7 · NextAuth v5
       </p>
-      <div className="flex gap-3">
+      <div className="flex flex-wrap justify-center gap-3">
         <Link
           href="/login"
           className="rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground"
@@ -19,6 +19,12 @@ export default function HomePage() {
           className="rounded-lg border px-5 py-2.5 text-sm font-medium"
         >
           Dashboard
+        </Link>
+        <Link
+          href="/blog"
+          className="rounded-lg border px-5 py-2.5 text-sm font-medium"
+        >
+          Blog (ISR)
         </Link>
       </div>
     </main>
