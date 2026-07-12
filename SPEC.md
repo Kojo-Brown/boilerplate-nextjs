@@ -34,7 +34,7 @@
 - [x] ISR (incremental static regen) example for public pages
 
 ## Phase 6 — Testing
-- [ ] Vitest + Testing Library for server/client components
+- [x] Vitest + Testing Library for server/client components
 - [ ] Playwright E2E: auth flow, protected page, form submission
 - [ ] MSW for API route mocking in tests
 
