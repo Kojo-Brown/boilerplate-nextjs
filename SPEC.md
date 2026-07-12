@@ -31,7 +31,7 @@
 - [x] Route-level streaming with `loading.tsx` skeletons
 - [x] `next/image` wrapper with blur placeholder + LQIP
 - [x] Parallel routes for dashboard widgets
-- [ ] ISR (incremental static regen) example for public pages
+- [x] ISR (incremental static regen) example for public pages
 
 ## Phase 6 — Testing
 - [ ] Vitest + Testing Library for server/client components
