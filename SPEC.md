@@ -35,7 +35,7 @@
 
 ## Phase 6 — Testing
 - [x] Vitest + Testing Library for server/client components
-- [ ] Playwright E2E: auth flow, protected page, form submission
+- [x] Playwright E2E: auth flow, protected page, form submission
 - [ ] MSW for API route mocking in tests
 
 ## Phase 7 — DevOps
