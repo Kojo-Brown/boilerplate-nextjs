@@ -39,6 +39,6 @@
 - [x] MSW for API route mocking in tests
 
 ## Phase 7 — DevOps
-- [ ] GitHub Actions: lint → typecheck → test → build
+- [x] GitHub Actions: lint → typecheck → test → build
 - [ ] Dockerfile (standalone output mode)
 - [ ] Vercel config (`vercel.json`) + GitHub deploy action

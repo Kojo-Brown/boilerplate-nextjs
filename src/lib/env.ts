@@ -18,10 +18,19 @@ const client = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
 });
 
-const parsed = server.merge(client).safeParse({
-  ...process.env,
-  NEXT_PUBLIC_APP_URL: process.env["NEXT_PUBLIC_APP_URL"],
-});
+const skip = process.env["SKIP_ENV_VALIDATION"] === "1";
+
+const parsed = skip
+  ? server.merge(client).safeParse({
+      DATABASE_URL: "postgresql://placeholder:placeholder@localhost:5432/placeholder",
+      NEXTAUTH_SECRET: "placeholder-secret-for-build-validation-only",
+      NEXT_PUBLIC_APP_URL: process.env["NEXT_PUBLIC_APP_URL"] ?? "http://localhost:3000",
+      ...process.env,
+    })
+  : server.merge(client).safeParse({
+      ...process.env,
+      NEXT_PUBLIC_APP_URL: process.env["NEXT_PUBLIC_APP_URL"],
+    });
 
 if (!parsed.success) {
   console.error("Invalid environment variables:", parsed.error.flatten().fieldErrors);
