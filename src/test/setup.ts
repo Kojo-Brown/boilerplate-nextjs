@@ -1,9 +1,15 @@
 import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
 import { createElement } from "react";
-import { afterEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { server } from "./server";
 
-afterEach(cleanup);
+beforeAll(() => server.listen({ onUnhandledRequest: "warn" }));
+afterEach(() => {
+  cleanup();
+  server.resetHandlers();
+});
+afterAll(() => server.close());
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({

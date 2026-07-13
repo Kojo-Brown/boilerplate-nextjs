@@ -36,7 +36,7 @@
 ## Phase 6 — Testing
 - [x] Vitest + Testing Library for server/client components
 - [x] Playwright E2E: auth flow, protected page, form submission
-- [ ] MSW for API route mocking in tests
+- [x] MSW for API route mocking in tests
 
 ## Phase 7 — DevOps
 - [ ] GitHub Actions: lint → typecheck → test → build
