@@ -41,4 +41,4 @@
 ## Phase 7 — DevOps
 - [x] GitHub Actions: lint → typecheck → test → build
 - [x] Dockerfile (standalone output mode)
-- [ ] Vercel config (`vercel.json`) + GitHub deploy action
+- [x] Vercel config (`vercel.json`) + GitHub deploy action
