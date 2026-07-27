@@ -3,12 +3,33 @@
 ## What this repo is
 Production-grade Next.js 16 App Router boilerplate with full-stack patterns. Spec-driven.
 
-## Your job (scheduled agent)
-1. Read `SPEC.md` — find the first `- [ ]` item
-2. Implement it completely using App Router conventions
-3. `pnpm typecheck && pnpm lint && pnpm test` before committing
-4. `git add -A && git commit -m "feat: <feature>" && git push origin main`
-5. Mark done in SPEC.md and push; update PROGRESS.md
+## Your job (scheduled agent, every 4h)
+1. `git checkout main && git pull --ff-only origin main`
+2. Read `SPEC.md`, take the **first** `- [ ]` item. Phase 0 items always win.
+3. `git checkout -b <type>/<kebab-slug>` (`feat`/`fix`/`chore`/`ci`/`docs`)
+4. Implement it completely using App Router conventions — plus tests and docs.
+5. Run every gate locally; **all must pass** before pushing:
+   ```
+   pnpm install
+   pnpm typecheck
+   pnpm lint
+   pnpm test
+   pnpm build
+   ```
+6. Commit, `git push -u origin <branch>`, then `gh pr create`.
+7. `gh pr checks --watch` → **merge only if every check is green**:
+   `gh pr merge --squash --delete-branch`
+8. Pull main, mark the item `- [x]` in `SPEC.md`, update `../PROGRESS.md`,
+   push as a `chore:` commit.
+
+If a check fails, fix forward on the same branch. Never merge red. Never weaken
+a test to force green.
+
+## Secrets
+Never commit real credentials, tokens, keys, or `.env` files. `AUTH_SECRET` and
+provider keys come from the environment. Anything reachable from a client
+component is public — keep secrets behind `server-only`. Scan
+`git diff --cached` before every push.
 
 ## Versions (do not change)
 - Next.js 16.2.9 | React 19.2.7 | TypeScript 6.0.3 | TailwindCSS 4.3.2

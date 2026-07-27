@@ -2,6 +2,12 @@
 
 > Spec-driven. Mark `[x]` only after pushing.
 
+## Phase 0 — Green Baseline (blocks all feature work)
+- [ ] Verify every dependency version actually exists on the registry and fix the ones that do not, then commit a lockfile
+- [ ] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone
+- [ ] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
+- [ ] Add a CI job matrix covering the supported Node version and fail the build on any warning
+
 ## Phase 1 — Foundation
 - [x] Next.js 16 App Router + TypeScript 6 + TailwindCSS 4 scaffold
 - [x] Prisma 7 + PostgreSQL schema (User, Session, Post) with seed
@@ -42,3 +48,44 @@
 - [x] GitHub Actions: lint → typecheck → test → build
 - [x] Dockerfile (standalone output mode)
 - [x] Vercel config (`vercel.json`) + GitHub deploy action
+
+## Phase 8 — Advanced App Router
+- [ ] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide
+- [ ] Intercepting routes for a modal photo/detail view with a shareable URL
+- [ ] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route
+- [ ] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations
+- [ ] Draft mode for CMS preview with signed preview tokens
+- [ ] Streaming with granular Suspense boundaries and per-segment `loading.tsx` skeletons
+- [ ] `generateStaticParams` + on-demand ISR revalidation webhook
+
+## Phase 9 — Server Actions & Data Integrity
+- [ ] Server Action hardening: origin checks, auth assertion, and Zod input parsing on every action
+- [ ] `useOptimistic` + `useActionState` end-to-end on a real mutation with rollback
+- [ ] Idempotency keys for Server Actions to survive double-submit and retry
+- [ ] Optimistic concurrency with a `version` column and a conflict-resolution UI
+- [ ] Rate limiting Server Actions and route handlers at the edge
+- [ ] Transactional writes with Prisma interactive transactions + an outbox row
+- [ ] N+1 elimination in server components with batched Prisma queries
+
+## Phase 10 — Performance
+- [ ] Core Web Vitals instrumentation via `useReportWebVitals` shipped to an analytics sink
+- [ ] Bundle budget gate in CI + per-route JS payload report
+- [ ] `next/font` self-hosting with subsetting and zero layout shift
+- [ ] Third-party script strategy audit with `next/script` and a facade pattern
+- [ ] Edge middleware geo/AB routing with cookie-stable bucketing
+- [ ] React Compiler enabled with a memo-removal audit
+
+## Phase 11 — Security
+- [ ] CSP with per-request nonces via middleware, `strict-dynamic`, no `unsafe-inline`
+- [ ] Auth.js session hardening: rotation, reuse detection, and secure cookie flags
+- [ ] Server-only secrets enforced by `server-only` imports and a lint rule
+- [ ] OWASP Top 10 checklist with a test per mitigation
+- [ ] Multi-tenancy with row-level security and a tenant-scoped Prisma client
+- [ ] File-upload validation: content sniffing, size caps, and antivirus hook
+
+## Phase 12 — Accessibility & TDD
+- [ ] WCAG 2.2 AA audit with axe in CI, zero-violation gate
+- [ ] Focus management across App Router navigations with route announcements
+- [ ] i18n with `next-intl`: locale routing, plurals, and an RTL pass
+- [ ] TDD kata: one Server Action built red→green→refactor, one commit per step
+- [ ] Playwright a11y + visual regression suite on the critical journey
