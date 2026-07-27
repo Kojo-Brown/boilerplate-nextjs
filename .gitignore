@@ -8,3 +8,6 @@ e2e/.auth/*.json
 .env
 .env.local
 *.tsbuildinfo
+
+# macOS
+.DS_Store
