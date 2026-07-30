@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type * as AuthModule from "@/auth";
+import type { Session } from "next-auth";
 import type * as S3Module from "@/lib/s3";
 
 // Mocks must be defined before importing the module under test
@@ -25,19 +25,25 @@ const { auth } = await import("@/auth");
 const { createPresignedUploadUrl } = await import("@/lib/s3");
 const { env } = await import("@/lib/env");
 
-const mockAuth = vi.mocked(auth as typeof AuthModule.auth);
+// NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
+// `typeof AuthModule.auth` keeps all the overloads, and vi.mocked binds to the
+// middleware one — narrowing to the no-argument form fixes the stub types.
+const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
 const mockCreatePresignedUrl = vi.mocked(createPresignedUploadUrl);
 
 const FAKE_PRESIGNED: S3Module.PresignedUploadResult = {
-  uploadUrl: "https://my-bucket.s3.us-east-1.amazonaws.com/uploads/user_1/abc.png?sig=x",
-  publicUrl: "https://my-bucket.s3.us-east-1.amazonaws.com/uploads/user_1/abc.png",
+  uploadUrl:
+    "https://my-bucket.s3.us-east-1.amazonaws.com/uploads/user_1/abc.png?sig=x",
+  publicUrl:
+    "https://my-bucket.s3.us-east-1.amazonaws.com/uploads/user_1/abc.png",
   key: "uploads/user_1/abc.png",
 };
 
 beforeEach(() => {
-  mockAuth.mockResolvedValue({ user: { id: "user_1", email: "test@example.com" } } as Awaited<
-    ReturnType<typeof AuthModule.auth>
-  >);
+  mockAuth.mockResolvedValue({
+    user: { id: "user_1", email: "test@example.com", role: "USER" },
+    expires: "2099-01-01T00:00:00.000Z",
+  });
   mockCreatePresignedUrl.mockResolvedValue(FAKE_PRESIGNED);
   // Restore S3 env for each test
   const mutableEnv = env as Record<string, unknown>;

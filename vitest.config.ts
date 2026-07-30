@@ -7,6 +7,9 @@ export default defineConfig({
   test: {
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // `e2e/` holds Playwright specs, which use a different `test` runtime and
+    // throw if Vitest collects them. `pnpm test:e2e` owns that directory.
+    exclude: ["node_modules/**", "dist/**", ".next/**", "e2e/**"],
     environmentMatchGlobs: [
       ["**/*.test.tsx", "jsdom"],
       ["**/*.test.ts", "node"],

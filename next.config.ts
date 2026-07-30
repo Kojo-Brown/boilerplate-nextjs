@@ -2,9 +2,8 @@ import type { NextConfig } from "next";
 
 const config: NextConfig = {
   output: "standalone",
-  experimental: {
-    typedRoutes: true,
-  },
+  // Promoted out of `experimental` in Next 16.
+  typedRoutes: true,
   images: {
     formats: ["image/avif", "image/webp"],
     remotePatterns: [

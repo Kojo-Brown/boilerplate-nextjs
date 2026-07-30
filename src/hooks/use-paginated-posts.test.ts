@@ -1,10 +1,16 @@
+// @vitest-environment jsdom
+// renderHook mounts a real component tree, which needs a DOM; the default
+// environment for `*.test.ts` is node.
 import { describe, it, expect } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import { http, HttpResponse } from "msw";
 import { server } from "@/test/server";
-import { usePaginatedPosts, PAGINATED_POSTS_QUERY_KEY } from "./use-paginated-posts";
+import {
+  usePaginatedPosts,
+  PAGINATED_POSTS_QUERY_KEY,
+} from "./use-paginated-posts";
 import { mockPostSummary } from "@/test/handlers";
 import type { CursorPage } from "@/lib/pagination";
 import type { SerializedPostSummary } from "@/hooks/use-posts";
@@ -17,9 +23,18 @@ function makePage(
 }
 
 function makeWrapper() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  // Named rather than an arrow so react/display-name can see a component name.
+  function QueryWrapper({ children }: { children: ReactNode }) {
+    return createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      children,
+    );
+  }
+  return QueryWrapper;
 }
 
 describe("usePaginatedPosts", () => {
@@ -30,12 +45,14 @@ describe("usePaginatedPosts", () => {
       ),
     );
 
-    const { result } = renderHook(() => usePaginatedPosts(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePaginatedPosts(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data?.pages[0].items).toHaveLength(1);
-    expect(result.current.data?.pages[0].items[0].id).toBe("post-1");
+    expect(result.current.data?.pages[0]?.items).toHaveLength(1);
+    expect(result.current.data?.pages[0]?.items[0]?.id).toBe("post-1");
   });
 
   it("calls the correct URL with limit param", async () => {
@@ -48,7 +65,9 @@ describe("usePaginatedPosts", () => {
       }),
     );
 
-    const { result } = renderHook(() => usePaginatedPosts(5), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePaginatedPosts(5), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -62,7 +81,9 @@ describe("usePaginatedPosts", () => {
       ),
     );
 
-    const { result } = renderHook(() => usePaginatedPosts(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePaginatedPosts(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -76,7 +97,9 @@ describe("usePaginatedPosts", () => {
       ),
     );
 
-    const { result } = renderHook(() => usePaginatedPosts(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePaginatedPosts(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -90,12 +113,16 @@ describe("usePaginatedPosts", () => {
       ),
     );
 
-    const { result } = renderHook(() => usePaginatedPosts(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePaginatedPosts(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
 
     expect(result.current.error).toBeInstanceOf(Error);
-    expect((result.current.error as Error).message).toBe("Failed to fetch posts");
+    expect((result.current.error as Error).message).toBe(
+      "Failed to fetch posts",
+    );
   });
 
   it("exposes correct query key structure", () => {

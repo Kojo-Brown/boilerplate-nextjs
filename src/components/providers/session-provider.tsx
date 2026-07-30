@@ -14,7 +14,10 @@ interface SessionProviderProps {
  */
 export function SessionProvider({ children, session }: SessionProviderProps) {
   return (
-    <NextAuthSessionProvider session={session}>
+    // Spread conditionally: NextAuth treats an absent `session` as "fetch it on
+    // mount" and `null` as "definitely signed out", so forwarding an explicit
+    // `undefined` would not mean the same thing as omitting the prop.
+    <NextAuthSessionProvider {...(session !== undefined && { session })}>
       {children}
     </NextAuthSessionProvider>
   );

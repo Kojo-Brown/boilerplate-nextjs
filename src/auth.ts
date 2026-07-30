@@ -20,10 +20,15 @@ declare module "next-auth" {
   }
 }
 
-declare module "next-auth/jwt" {
+// `next-auth/jwt` is a bare `export * from "@auth/core/jwt"` re-export, so an
+// interface declared there has nothing to merge into. The JWT interface itself
+// lives in @auth/core, which is why the augmentation targets it directly.
+declare module "@auth/core/jwt" {
   interface JWT {
-    id?: string;
-    role?: "USER" | "ADMIN";
+    // Explicit `| undefined` because `exactOptionalPropertyTypes` is on and the
+    // provider `user` these are copied from has an optional `id` of its own.
+    id?: string | undefined;
+    role?: "USER" | "ADMIN" | undefined;
   }
 }
 

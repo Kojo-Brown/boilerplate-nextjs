@@ -9,10 +9,20 @@ vi.mock("@/actions/upload", () => ({
   getPresignedUploadUrlAction: vi.fn(),
 }));
 
-// Stub URL.createObjectURL / revokeObjectURL
+// jsdom does not implement the object-URL APIs at all, so there is nothing for
+// `vi.spyOn` to replace — they have to be installed on URL first. Defined as
+// configurable so `vi.restoreAllMocks()` and later redefinitions still work.
 beforeEach(() => {
-  vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:http://localhost/test-preview");
-  vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+  Object.defineProperty(URL, "createObjectURL", {
+    value: vi.fn(() => "blob:http://localhost/test-preview"),
+    writable: true,
+    configurable: true,
+  });
+  Object.defineProperty(URL, "revokeObjectURL", {
+    value: vi.fn(),
+    writable: true,
+    configurable: true,
+  });
 });
 
 function makeFile(name = "photo.png", type = "image/png", size = 1024) {
@@ -36,7 +46,9 @@ describe("ImageUpload", () => {
 
   it("shows error for disallowed MIME type", async () => {
     render(<ImageUpload />);
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
 
     const badFile = makeFile("doc.pdf", "application/pdf");
     fireEvent.change(input, { target: { files: [badFile] } });
@@ -48,7 +60,9 @@ describe("ImageUpload", () => {
 
   it("shows error for file exceeding size limit", async () => {
     render(<ImageUpload />);
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
 
     const bigFile = makeFile("huge.png", "image/png", 6 * 1024 * 1024);
     fireEvent.change(input, { target: { files: [bigFile] } });
@@ -67,11 +81,15 @@ describe("ImageUpload", () => {
     const onError = vi.fn();
     render(<ImageUpload onUploadError={onError} />);
 
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [makeFile()] } });
 
     await waitFor(() => {
-      expect(onError).toHaveBeenCalledWith("File uploads are not configured on this server.");
+      expect(onError).toHaveBeenCalledWith(
+        "File uploads are not configured on this server.",
+      );
     });
   });
 
@@ -96,12 +114,16 @@ describe("ImageUpload", () => {
       send: vi.fn(),
       status: 200,
     };
-    vi.spyOn(globalThis, "XMLHttpRequest").mockImplementation(() => xhrMock as unknown as XMLHttpRequest);
+    vi.spyOn(globalThis, "XMLHttpRequest").mockImplementation(
+      () => xhrMock as unknown as XMLHttpRequest,
+    );
 
     const onComplete = vi.fn();
     render(<ImageUpload onUploadComplete={onComplete} />);
 
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [makeFile()] } });
 
     await waitFor(() => {
@@ -133,11 +155,15 @@ describe("ImageUpload", () => {
       send: vi.fn(),
       status: 200,
     };
-    vi.spyOn(globalThis, "XMLHttpRequest").mockImplementation(() => xhrMock as unknown as XMLHttpRequest);
+    vi.spyOn(globalThis, "XMLHttpRequest").mockImplementation(
+      () => xhrMock as unknown as XMLHttpRequest,
+    );
 
     render(<ImageUpload />);
 
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = document.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
     fireEvent.change(input, { target: { files: [makeFile()] } });
 
     await waitFor(() => screen.getByText("Replace"));

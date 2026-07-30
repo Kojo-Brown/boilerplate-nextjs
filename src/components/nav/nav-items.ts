@@ -1,6 +1,11 @@
+import type { Route } from "next";
+
 export interface NavItem {
   label: string;
-  href: string;
+  // Typed routes are enabled, so `href` is checked against the routes Next
+  // generates from `app/`. A link to a page that does not exist is a type error
+  // rather than a 404 found at runtime.
+  href: Route;
 }
 
 export const NAV_ITEMS: NavItem[] = [

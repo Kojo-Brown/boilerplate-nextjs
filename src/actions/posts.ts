@@ -9,13 +9,17 @@ import type { ActionResult } from "@/lib/actions";
 import type { PostSummary } from "@/lib/dal/posts";
 
 const createPostSchema = z.object({
-  title: z.string().min(1, "Title is required").max(255, "Title must be under 255 characters"),
+  title: z
+    .string()
+    .min(1, "Title is required")
+    .max(255, "Title must be under 255 characters"),
   content: z.string().optional(),
 });
 
-export async function createPostAction(
-  input: { title: string; content?: string },
-): Promise<ActionResult<PostSummary>> {
+export async function createPostAction(input: {
+  title: string;
+  content?: string;
+}): Promise<ActionResult<PostSummary>> {
   const session = await auth();
   if (!session?.user?.id) {
     return err("You must be signed in to create a post.");
@@ -29,7 +33,11 @@ export async function createPostAction(
   const { title, content } = parsed.data;
 
   const post = await prisma.post.create({
-    data: { title, content, authorId: session.user.id },
+    data: {
+      title,
+      ...(content !== undefined && { content }),
+      authorId: session.user.id,
+    },
     select: {
       id: true,
       title: true,
@@ -44,7 +52,9 @@ export async function createPostAction(
   return ok(post);
 }
 
-export async function deletePostAction(postId: string): Promise<ActionResult<void>> {
+export async function deletePostAction(
+  postId: string,
+): Promise<ActionResult<void>> {
   const session = await auth();
   if (!session?.user?.id) {
     return err("You must be signed in to delete a post.");
@@ -69,7 +79,9 @@ export async function deletePostAction(postId: string): Promise<ActionResult<voi
   return ok(undefined);
 }
 
-export async function togglePublishAction(postId: string): Promise<ActionResult<PostSummary>> {
+export async function togglePublishAction(
+  postId: string,
+): Promise<ActionResult<PostSummary>> {
   const session = await auth();
   if (!session?.user?.id) {
     return err("You must be signed in to update a post.");

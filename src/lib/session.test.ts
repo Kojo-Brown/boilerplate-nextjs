@@ -4,14 +4,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/auth", () => ({ auth: vi.fn() }));
 vi.mock("next/navigation", () => ({ redirect: vi.fn() }));
 
+import type { Session } from "next-auth";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { getSession, getRequiredSession, getCurrentUser } from "@/lib/session";
 
-const mockAuth = auth as ReturnType<typeof vi.fn>;
-const mockRedirect = redirect as ReturnType<typeof vi.fn>;
+// NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
+// `vi.mocked` binds to the middleware overload, so narrow it to the no-argument
+// form that `@/lib/session` actually calls before stubbing return values.
+const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
+const mockRedirect = vi.mocked(redirect);
 
-const fakeSession = {
+const fakeSession: Session = {
   user: {
     id: "user-1",
     email: "test@example.com",

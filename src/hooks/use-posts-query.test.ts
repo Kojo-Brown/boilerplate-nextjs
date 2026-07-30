@@ -1,4 +1,19 @@
-import { describe, it, expect } from "vitest";
+// @vitest-environment jsdom
+// renderHook mounts a real component tree, which needs a DOM; the default
+// environment for `*.test.ts` is node.
+import { describe, it, expect, vi } from "vitest";
+
+// `@/hooks/use-posts` imports the post server actions at module scope, which
+// drags next-auth — and therefore `next/server` — into this jsdom environment,
+// where Vite resolves it against browser conditions and the import fails. The
+// query hook under test only ever goes through fetch, so the mutation actions
+// are stubbed rather than loaded.
+vi.mock("@/actions/posts", () => ({
+  createPostAction: vi.fn(),
+  deletePostAction: vi.fn(),
+  togglePublishAction: vi.fn(),
+}));
+
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
@@ -8,9 +23,18 @@ import { usePostsQuery, POSTS_QUERY_KEY } from "./use-posts";
 import { mockPostSummary } from "@/test/handlers";
 
 function makeWrapper() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return ({ children }: { children: ReactNode }) =>
-    createElement(QueryClientProvider, { client: queryClient }, children);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  // Named rather than an arrow so react/display-name can see a component name.
+  function QueryWrapper({ children }: { children: ReactNode }) {
+    return createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      children,
+    );
+  }
+  return QueryWrapper;
 }
 
 describe("usePostsQuery", () => {
@@ -19,21 +43,23 @@ describe("usePostsQuery", () => {
       http.get("/api/posts", () => HttpResponse.json([mockPostSummary])),
     );
 
-    const { result } = renderHook(() => usePostsQuery(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePostsQuery(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data).toHaveLength(1);
-    expect(result.current.data?.[0].id).toBe("post-1");
-    expect(result.current.data?.[0].title).toBe("Hello, MSW");
+    expect(result.current.data?.[0]?.id).toBe("post-1");
+    expect(result.current.data?.[0]?.title).toBe("Hello, MSW");
   });
 
   it("returns an empty array when /api/posts responds with []", async () => {
-    server.use(
-      http.get("/api/posts", () => HttpResponse.json([])),
-    );
+    server.use(http.get("/api/posts", () => HttpResponse.json([])));
 
-    const { result } = renderHook(() => usePostsQuery(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePostsQuery(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
@@ -47,11 +73,15 @@ describe("usePostsQuery", () => {
       ),
     );
 
-    const { result } = renderHook(() => usePostsQuery(), { wrapper: makeWrapper() });
+    const { result } = renderHook(() => usePostsQuery(), {
+      wrapper: makeWrapper(),
+    });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
 
-    expect((result.current.error as Error).message).toBe("Failed to fetch posts");
+    expect((result.current.error as Error).message).toBe(
+      "Failed to fetch posts",
+    );
   });
 
   it("renders initialData synchronously before the background fetch resolves", async () => {
@@ -74,9 +104,11 @@ describe("usePostsQuery", () => {
       wrapper: makeWrapper(),
     });
 
-    expect(result.current.data?.[0].id).toBe("post-1");
+    expect(result.current.data?.[0]?.id).toBe("post-1");
 
-    await waitFor(() => expect(result.current.data?.[0].id).toBe("fresh-post"));
+    await waitFor(() =>
+      expect(result.current.data?.[0]?.id).toBe("fresh-post"),
+    );
   });
 
   it("exposes the canonical query key", () => {

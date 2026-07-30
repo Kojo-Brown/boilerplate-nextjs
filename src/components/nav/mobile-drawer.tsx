@@ -2,6 +2,7 @@
 
 import React from "react";
 import { createPortal } from "react-dom";
+import { useIsHydrated } from "@/hooks/use-is-hydrated";
 import { NavLinks } from "./nav-links";
 
 interface MobileDrawerProps {
@@ -15,11 +16,7 @@ export function MobileDrawer({
   onClose,
   appName = "App",
 }: MobileDrawerProps) {
-  const [mounted, setMounted] = React.useState(false);
-
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
+  const hydrated = useIsHydrated();
 
   React.useEffect(() => {
     if (!open) return;
@@ -37,7 +34,7 @@ export function MobileDrawer({
     };
   }, [open, onClose]);
 
-  if (!mounted || !open) return null;
+  if (!hydrated || !open) return null;
 
   return createPortal(
     <div className="fixed inset-0 z-50 lg:hidden">
