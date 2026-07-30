@@ -3,10 +3,21 @@
 > Spec-driven. Mark `[x]` only after pushing.
 
 ## Phase 0 — Green Baseline (blocks all feature work)
-- [ ] Verify every dependency version actually exists on the registry and fix the ones that do not, then commit a lockfile
-- [ ] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone
-- [ ] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
+- [x] Verify every dependency version actually exists on the registry and fix the ones that do not, then commit a lockfile — `next-auth@^5.0.0` was unsatisfiable (v5 is prerelease-only), `jsdom` and `@vitest/coverage-v8` were used but undeclared, and the `linux-musl-openssl-3.x.x` binary target does not exist (PR #18)
+- [x] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone — required a full Prisma 7 migration and an ESLint flat config, since there was no ESLint config at all and Next 16 removed `next lint` (PR #18)
+- [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR — green on PR #18 with a Postgres service for the build job
 - [ ] Add a CI job matrix covering the supported Node version and fail the build on any warning
+
+Phase 0 items 1-3 complete as of PR #18 (2026-07-30): install
+(`--frozen-lockfile`, zero warnings), lint (0 errors, 0 warnings), format check
+on changed files, typecheck, 223 unit tests across 28 files, and build all green
+in CI on Node 22, with the build prerendering `/blog/[slug]` against a real
+Postgres 16 service container.
+
+Known gaps carried into item 4: Prettier has never run repo-wide (~79
+pre-existing offenders, so `format:check` gates only changed files); Playwright
+E2E is not wired into CI; Vitest still warns that `environmentMatchGlobs` is
+deprecated; and there is no migrations directory, so CI uses `prisma db push`.
 
 ## Phase 1 — Foundation
 - [x] Next.js 16 App Router + TypeScript 6 + TailwindCSS 4 scaffold
