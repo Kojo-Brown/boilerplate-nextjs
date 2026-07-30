@@ -3,10 +3,20 @@
 > Spec-driven. Mark `[x]` only after pushing.
 
 ## Phase 0 — Green Baseline (blocks all feature work)
-- [ ] Verify every dependency version actually exists on the registry and fix the ones that do not, then commit a lockfile
-- [ ] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone
-- [ ] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR
+- [x] Verify every dependency version actually exists on the registry and fix the ones that do not, then commit a lockfile — `next-auth@^5.0.0` was unsatisfiable (v5 exists only as `5.0.0-beta.*`, and a caret range cannot match a prerelease), so the repo had never been installable; `jsdom` and `@vitest/coverage-v8` were required by `vitest.config.ts` but undeclared (PR #18)
+- [x] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone — required migrating `prisma/schema.prisma` off the Prisma 6 `datasource.url` form to `prisma.config.ts` + driver adapter, and replacing `next lint` with an ESLint flat config (PR #18)
+- [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR — green on PR #18: lint, format, typecheck, 223 unit tests, and a build against a real Postgres service container
 - [ ] Add a CI job matrix covering the supported Node version and fail the build on any warning
+
+Phase 0 items 1–3 complete as of PR #18 (2026-07-30): install
+(`--frozen-lockfile`, zero warnings), typecheck, lint (0 errors, 0 warnings),
+format, 223 unit tests, and build all green in CI on Node 22.
+
+Still open for item 4: CI pins a single `NODE_VERSION: "22"` while
+`engines.node` is `^22.12.0 || ^24.0.0`, so the matrix needs to cover both.
+Playwright E2E is not wired into CI yet, and `prettier --check` currently runs
+only over files changed against `main` — roughly 79 pre-existing files still
+fail a whole-tree format check.
 
 ## Phase 1 — Foundation
 - [x] Next.js 16 App Router + TypeScript 6 + TailwindCSS 4 scaffold
