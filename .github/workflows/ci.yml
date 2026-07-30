@@ -196,6 +196,10 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
+      # and dot-directories by default, and the whole build output lives under
+      # `.next/`. Without it the glob matches nothing and `if-no-files-found:
+      # error` fails the job even though the build itself succeeded.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -203,3 +207,4 @@ jobs:
           path: .next/
           retention-days: 7
           if-no-files-found: error
+          include-hidden-files: true
