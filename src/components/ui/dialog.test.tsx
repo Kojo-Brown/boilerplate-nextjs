@@ -21,7 +21,7 @@ function TestDialog({
   onOpenChange?: (open: boolean) => void;
 }) {
   return (
-    <Dialog defaultOpen={defaultOpen} onOpenChange={onOpenChange}>
+    <Dialog defaultOpen={defaultOpen} {...(onOpenChange && { onOpenChange })}>
       <DialogTrigger>Open</DialogTrigger>
       <DialogContent>
         <DialogHeader>

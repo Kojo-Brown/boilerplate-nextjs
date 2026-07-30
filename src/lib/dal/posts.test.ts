@@ -33,7 +33,12 @@ const mockFullPost = {
   ...mockPost,
   content: "Some content",
   authorId: "user-1",
-  author: { id: "user-1", name: "Alice", email: "alice@example.com", image: null },
+  author: {
+    id: "user-1",
+    name: "Alice",
+    email: "alice@example.com",
+    image: null,
+  },
 };
 
 beforeEach(() => {
@@ -53,7 +58,7 @@ describe("getPublishedPosts", () => {
       }),
     );
     expect(result).toHaveLength(1);
-    expect(result[0].title).toBe("Hello World");
+    expect(result[0]?.title).toBe("Hello World");
   });
 
   it("returns an empty array when no published posts exist", async () => {
@@ -82,7 +87,7 @@ describe("getPostsByUser", () => {
 
     const result = await getPostsByUser("user-1");
     expect(result).toHaveLength(1);
-    expect(result[0].author.id).toBe("user-1");
+    expect(result[0]?.author.id).toBe("user-1");
   });
 });
 
@@ -112,7 +117,9 @@ describe("getPostCountByUser", () => {
 
     const count = await getPostCountByUser("user-1");
 
-    expect(prisma.post.count).toHaveBeenCalledWith({ where: { authorId: "user-1" } });
+    expect(prisma.post.count).toHaveBeenCalledWith({
+      where: { authorId: "user-1" },
+    });
     expect(count).toBe(3);
   });
 });

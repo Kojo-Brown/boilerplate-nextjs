@@ -9,7 +9,10 @@ function toHex(buffer: ArrayBuffer): string {
     .join("");
 }
 
-async function hmacSHA256(key: BufferSource | string, message: string): Promise<ArrayBuffer> {
+async function hmacSHA256(
+  key: BufferSource | string,
+  message: string,
+): Promise<ArrayBuffer> {
   const keyData: BufferSource =
     typeof key === "string" ? new TextEncoder().encode(key) : key;
   const cryptoKey = await crypto.subtle.importKey(
@@ -19,7 +22,11 @@ async function hmacSHA256(key: BufferSource | string, message: string): Promise<
     false,
     ["sign"],
   );
-  return crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(message));
+  return crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(message),
+  );
 }
 
 async function getSigningKey(
@@ -54,18 +61,33 @@ export interface PresignedUploadResult {
 export async function createPresignedUploadUrl(
   options: PresignedUrlOptions,
 ): Promise<PresignedUploadResult> {
-  const { bucket, key, region, accessKeyId, secretAccessKey, contentType, expiresIn = 3600 } =
-    options;
+  const {
+    bucket,
+    key,
+    region,
+    accessKeyId,
+    secretAccessKey,
+    contentType,
+    expiresIn = 3600,
+  } = options;
 
   const host = `${bucket}.s3.${region}.amazonaws.com`;
   const service = "s3";
+  // `content-type` is signed, not just validated: binding it into the signature
+  // is what stops a caller who obtained a URL for an allowed MIME type from
+  // uploading something else under it. Canonical headers must be sorted by
+  // lowercased name, which puts content-type ahead of host.
+  const signedHeaders = "content-type;host";
+  const canonicalHeaders = `content-type:${contentType}\nhost:${host}\n`;
 
   const now = new Date();
-  const amzDate = now.toISOString().replace(/[:-]/g, "").replace(/\.\d{3}/, "");
+  const amzDate = now
+    .toISOString()
+    .replace(/[:-]/g, "")
+    .replace(/\.\d{3}/, "");
   const dateStamp = amzDate.slice(0, 8);
 
   const credential = `${accessKeyId}/${dateStamp}/${region}/${service}/aws4_request`;
-  const signedHeaders = "host";
 
   const encodedKey = key
     .split("/")
@@ -91,13 +113,16 @@ export async function createPresignedUploadUrl(
     "PUT",
     `/${encodedKey}`,
     sortedParams,
-    `host:${host}\n`,
+    canonicalHeaders,
     signedHeaders,
     "UNSIGNED-PAYLOAD",
   ].join("\n");
 
   const canonicalRequestHash = toHex(
-    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonicalRequest)),
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(canonicalRequest),
+    ),
   );
 
   const stringToSign = [
@@ -107,7 +132,12 @@ export async function createPresignedUploadUrl(
     canonicalRequestHash,
   ].join("\n");
 
-  const signingKey = await getSigningKey(secretAccessKey, dateStamp, region, service);
+  const signingKey = await getSigningKey(
+    secretAccessKey,
+    dateStamp,
+    region,
+    service,
+  );
   const signature = toHex(await hmacSHA256(signingKey, stringToSign));
 
   const uploadUrl = `https://${host}/${encodedKey}?${sortedParams}&X-Amz-Signature=${signature}`;
@@ -117,11 +147,7 @@ export async function createPresignedUploadUrl(
 }
 
 export type AllowedMimeType =
-  | "image/jpeg"
-  | "image/png"
-  | "image/webp"
-  | "image/gif"
-  | "image/svg+xml";
+  "image/jpeg" | "image/png" | "image/webp" | "image/gif" | "image/svg+xml";
 
 export const ALLOWED_MIME_TYPES: AllowedMimeType[] = [
   "image/jpeg",

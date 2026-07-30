@@ -19,12 +19,27 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
 
+import type { Session } from "next-auth";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
-import { createPostAction, deletePostAction, togglePublishAction } from "./posts";
+import {
+  createPostAction,
+  deletePostAction,
+  togglePublishAction,
+} from "./posts";
 
-const mockSession = {
-  user: { id: "user-1", name: "Alice", email: "alice@example.com" },
+// NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
+// `vi.mocked` binds to the middleware overload, so narrow it to the no-argument
+// form the server actions call before stubbing return values.
+const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
+
+const mockSession: Session = {
+  user: {
+    id: "user-1",
+    name: "Alice",
+    email: "alice@example.com",
+    role: "USER",
+  },
   expires: "2099-01-01",
 };
 
@@ -40,7 +55,7 @@ const mockPost = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(auth).mockResolvedValue(mockSession as never);
+  mockAuth.mockResolvedValue(mockSession);
 });
 
 describe("createPostAction", () => {
@@ -55,13 +70,16 @@ describe("createPostAction", () => {
     }
     expect(prisma.post.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ title: "Hello World", authorId: "user-1" }),
+        data: expect.objectContaining({
+          title: "Hello World",
+          authorId: "user-1",
+        }),
       }),
     );
   });
 
   it("returns error when not authenticated", async () => {
-    vi.mocked(auth).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
 
     const result = await createPostAction({ title: "Test" });
 
@@ -83,9 +101,15 @@ describe("createPostAction", () => {
   });
 
   it("creates a post with optional content", async () => {
-    vi.mocked(prisma.post.create).mockResolvedValue({ ...mockPost, content: "Some body" } as never);
+    vi.mocked(prisma.post.create).mockResolvedValue({
+      ...mockPost,
+      content: "Some body",
+    } as never);
 
-    const result = await createPostAction({ title: "Post", content: "Some body" });
+    const result = await createPostAction({
+      title: "Post",
+      content: "Some body",
+    });
 
     expect(result.success).toBe(true);
     expect(prisma.post.create).toHaveBeenCalledWith(
@@ -98,13 +122,17 @@ describe("createPostAction", () => {
 
 describe("deletePostAction", () => {
   it("deletes a post owned by the user", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue({ authorId: "user-1" } as never);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+    } as never);
     vi.mocked(prisma.post.delete).mockResolvedValue(mockPost as never);
 
     const result = await deletePostAction("post-1");
 
     expect(result.success).toBe(true);
-    expect(prisma.post.delete).toHaveBeenCalledWith({ where: { id: "post-1" } });
+    expect(prisma.post.delete).toHaveBeenCalledWith({
+      where: { id: "post-1" },
+    });
   });
 
   it("returns error when post not found", async () => {
@@ -120,7 +148,9 @@ describe("deletePostAction", () => {
   });
 
   it("returns error when user does not own the post", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue({ authorId: "user-2" } as never);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-2",
+    } as never);
 
     const result = await deletePostAction("post-1");
 
@@ -132,7 +162,7 @@ describe("deletePostAction", () => {
   });
 
   it("returns error when not authenticated", async () => {
-    vi.mocked(auth).mockResolvedValue(null);
+    mockAuth.mockResolvedValue(null);
 
     const result = await deletePostAction("post-1");
 
@@ -143,8 +173,14 @@ describe("deletePostAction", () => {
 
 describe("togglePublishAction", () => {
   it("toggles a draft post to published", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue({ authorId: "user-1", published: false } as never);
-    vi.mocked(prisma.post.update).mockResolvedValue({ ...mockPost, published: true } as never);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: false,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      published: true,
+    } as never);
 
     const result = await togglePublishAction("post-1");
 
@@ -158,8 +194,14 @@ describe("togglePublishAction", () => {
   });
 
   it("toggles a published post to draft", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue({ authorId: "user-1", published: true } as never);
-    vi.mocked(prisma.post.update).mockResolvedValue({ ...mockPost, published: false } as never);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: true,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      published: false,
+    } as never);
 
     const result = await togglePublishAction("post-1");
 
@@ -179,7 +221,10 @@ describe("togglePublishAction", () => {
   });
 
   it("returns error when user does not own the post", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue({ authorId: "user-2", published: false } as never);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-2",
+      published: false,
+    } as never);
 
     const result = await togglePublishAction("post-1");
 

@@ -6,13 +6,19 @@ import type { ImageProps } from "next/image";
 import { cn } from "@/lib/cn";
 import { shimmerDataUrl } from "@/lib/lqip";
 
-export interface BlurImageProps extends Omit<ImageProps, "placeholder"> {
+// `blurDataURL` is re-declared rather than inherited: next/image types it as
+// `blurDataURL?: string`, and under `exactOptionalPropertyTypes` that would stop
+// callers passing an optional value straight through.
+export interface BlurImageProps extends Omit<
+  ImageProps,
+  "placeholder" | "blurDataURL"
+> {
   /**
    * Base64-encoded LQIP data URL. When omitted, a shimmer gradient is used.
    * Generate a real LQIP via `plaiceholder`:
    *   const { base64 } = await getPlaiceholder(src);
    */
-  blurDataURL?: string;
+  blurDataURL?: string | undefined;
   /**
    * Width × height used to generate the shimmer when no blurDataURL is supplied.
    * Defaults to the image width/height (or 700×475 if those are not numeric).
@@ -52,6 +58,16 @@ export function BlurImage({
 
   const placeholder = blurDataURL ?? shimmerDataUrl(shimmerW, shimmerH);
 
+  // next/image accepts either `fill` or a width/height pair, never both, and
+  // `exactOptionalPropertyTypes` forbids passing an explicit `undefined` to
+  // either. Building the two shapes separately keeps both rules satisfied.
+  const sizingProps = fill
+    ? { fill: true as const }
+    : {
+        ...(width !== undefined && { width }),
+        ...(height !== undefined && { height }),
+      };
+
   function handleLoad(e: React.SyntheticEvent<HTMLImageElement>) {
     setIsLoaded(true);
     if (typeof onLoad === "function") onLoad(e);
@@ -76,9 +92,7 @@ export function BlurImage({
       <Image
         src={src}
         alt={alt}
-        width={fill ? undefined : width}
-        height={fill ? undefined : height}
-        fill={fill}
+        {...sizingProps}
         placeholder="blur"
         blurDataURL={placeholder}
         onLoad={handleLoad}

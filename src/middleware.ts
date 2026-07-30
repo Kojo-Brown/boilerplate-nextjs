@@ -1,7 +1,12 @@
 import NextAuth from "next-auth";
 import { authConfig } from "@/auth.config";
 
-export const { auth: middleware } = NextAuth(authConfig);
+// Next 16 statically verifies that this file exports a function. A destructured
+// re-export (`export const { auth: middleware } = NextAuth(...)`) is not
+// recognised as one, so the handler is bound to a plain const and exported.
+const { auth } = NextAuth(authConfig);
+
+export default auth;
 
 export const config = {
   // Run on all routes except Next.js internals and static assets.

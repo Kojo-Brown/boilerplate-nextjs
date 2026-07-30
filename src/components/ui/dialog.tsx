@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { useIsHydrated } from "@/hooks/use-is-hydrated";
 import { cn } from "@/lib/cn";
 
 interface DialogContextValue {
@@ -50,8 +51,7 @@ export function Dialog({
 }
 Dialog.displayName = "Dialog";
 
-export interface DialogTriggerProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface DialogTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Reserved for future asChild support */
   asChild?: boolean;
 }
@@ -78,12 +78,8 @@ export const DialogTrigger = React.forwardRef<
 DialogTrigger.displayName = "DialogTrigger";
 
 function DialogPortal({ children }: { children: React.ReactNode }) {
-  const [mounted, setMounted] = React.useState(false);
-  React.useEffect(() => {
-    setMounted(true);
-    return () => setMounted(false);
-  }, []);
-  if (!mounted || typeof document === "undefined") return null;
+  const hydrated = useIsHydrated();
+  if (!hydrated) return null;
   return createPortal(children, document.body);
 }
 

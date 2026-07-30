@@ -19,13 +19,12 @@ export function NavLinks({ onNavigate, className }: NavLinksProps) {
       aria-label="Main navigation"
     >
       {NAV_ITEMS.map(({ label, href }) => {
-        const isActive =
-          pathname === href || pathname.startsWith(href + "/");
+        const isActive = pathname === href || pathname.startsWith(href + "/");
         return (
           <Link
             key={href}
             href={href}
-            onClick={onNavigate}
+            {...(onNavigate && { onClick: onNavigate })}
             aria-current={isActive ? "page" : undefined}
             className={cn(
               "flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors",

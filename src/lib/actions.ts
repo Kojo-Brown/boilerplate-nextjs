@@ -6,6 +6,11 @@ export function ok<T>(data: T): ActionResult<T> {
   return { success: true, data };
 }
 
-export function err(error: string, fieldErrors?: Record<string, string[]>): ActionResult<never> {
-  return { success: false, error, fieldErrors };
+export function err(
+  error: string,
+  fieldErrors?: Record<string, string[]>,
+): ActionResult<never> {
+  // Spread rather than assign: `exactOptionalPropertyTypes` distinguishes an
+  // absent `fieldErrors` from one explicitly set to `undefined`.
+  return { success: false, error, ...(fieldErrors && { fieldErrors }) };
 }

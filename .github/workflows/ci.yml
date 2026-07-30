@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  NEXTAUTH_URL: http://localhost:3000
+  # Every job runs `prisma generate`, which loads prisma.config.ts, which
+  # resolves DATABASE_URL eagerly and fails if it is unset — even though
+  # generate never opens a connection. Only the build job actually reaches a
+  # database, and it gets the same URL from its Postgres service.
+  DATABASE_URL: postgresql://postgres@localhost:5432/nextjs_ci
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose — the action reads `packageManager`
+      # from package.json, and specifying both is a hard error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so the diff below has a merge base to work from.
+          fetch-depth: 0
+
+      # No `version:` input on purpose — the action reads `packageManager`
+      # from package.json, and specifying both is a hard error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Scoped to the files this branch touched rather than the whole tree:
+      # Prettier has never run over this repo and reports ~79 pre-existing
+      # offenders. Reformatting them is its own change, not this one's.
+      - name: Check formatting of changed files
+        run: |
+          git fetch --no-tags origin "${{ github.base_ref || 'main' }}"
+          changed=$(git diff --name-only --diff-filter=ACMR \
+            "origin/${{ github.base_ref || 'main' }}"...HEAD \
+            -- '*.ts' '*.tsx' '*.mjs' '*.json' '*.css' '*.md' '*.yml')
+          if [ -z "$changed" ]; then
+            echo "No formattable files changed."
+            exit 0
+          fi
+          echo "$changed"
+          echo "$changed" | xargs pnpm exec prettier --check
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose — the action reads `packageManager`
+      # from package.json, and specifying both is a hard error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Prisma 7 emits the client into node_modules, so nothing in src/lib/dal
+      # type checks until this runs. It needs no database — the connection URL
+      # lives in prisma.config.ts and is only read by migrate/introspect.
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # `pnpm typecheck` runs `next typegen` first, which materialises the typed
+      # routes that `src/components/nav/nav-items.ts` depends on.
+      - name: Typecheck
+        run: pnpm typecheck
+        env:
+          SKIP_ENV_VALIDATION: "1"
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose — the action reads `packageManager`
+      # from package.json, and specifying both is a hard error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # The unit suite mocks `@/lib/prisma` everywhere, so it never opens a
+      # connection; DATABASE_URL only has to satisfy the Zod env schema.
+      - name: Run unit tests
+        run: pnpm test
+        env:
+          SKIP_ENV_VALIDATION: "1"
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, format, typecheck, test]
+
+    # `app/blog` is an ISR page that reads posts through Prisma, so Next queries
+    # the database while prerendering. A real Postgres is the honest way to
+    # build it; without one the build fails at "Collecting page data".
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: nextjs_ci
+          # No password at all rather than a throwaway one. The container is
+          # reachable only from this job and is destroyed with it, so a shared
+          # dummy password would add no security — only a credential-shaped
+          # string in the repository for scanners to flag.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` input on purpose — the action reads `packageManager`
+      # from package.json, and specifying both is a hard error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      # NextAuth only needs >=32 characters to derive its JWT key, and nothing
+      # built here is ever served to a real client. Minted per run so no
+      # credential-shaped literal has to live in the repository.
+      - name: Mint a throwaway auth secret for this run
+        run: echo "NEXTAUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      # `db push` rather than `migrate deploy`: this repo has no migrations
+      # directory yet, and the build only needs the tables to exist.
+      - name: Apply schema to the CI database
+        run: pnpm exec prisma db push
+
+      - name: Build
+        run: pnpm build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build
+          path: .next/
+          retention-days: 7
+          if-no-files-found: error

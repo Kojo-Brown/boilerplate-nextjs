@@ -27,14 +27,15 @@ export function CreatePostDialog() {
     if (!title) return;
 
     createPost.mutate(
-      { title, content: content || undefined },
+      { title, ...(content && { content }) },
       {
-        onSuccess: (result) => {
-          if (result.success) {
-            setOpen(false);
-            if (titleRef.current) titleRef.current.value = "";
-            if (contentRef.current) contentRef.current.value = "";
-          }
+        // `useCreatePost` rejects on a failed action, so reaching onSuccess
+        // already means the post was created — there is no result envelope to
+        // unwrap here, and errors surface through the hook's onError toast.
+        onSuccess: () => {
+          setOpen(false);
+          if (titleRef.current) titleRef.current.value = "";
+          if (contentRef.current) contentRef.current.value = "";
         },
       },
     );
