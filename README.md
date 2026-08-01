@@ -92,12 +92,17 @@ Every gate is warning-fatal — a warning fails the job rather than scrolling pa
 | `pnpm install`                      | `--strict-peer-dependencies`       |
 | `pnpm lint`                         | `eslint --max-warnings 0`          |
 | `pnpm typecheck` / `test` / `build` | `pnpm run strict <cmd>`            |
-| all jobs                            | `NODE_OPTIONS=--throw-deprecation` |
+| the same three, plus `lint`         | `NODE_OPTIONS=--throw-deprecation` |
 
 `pnpm run strict <cmd>` wraps a command with `scripts/fail-on-warnings.ts`,
 which mirrors the output, then exits non-zero if it contained a Next.js `⚠`,
 a Vitest `DEPRECATED` banner, a Node process warning, or a package-manager
 `WARN`. Tools like `next build` and `vitest run` print these and still exit 0.
+
+`--throw-deprecation` is set per step, not workflow-wide: a workflow-level
+value is inherited by JavaScript actions too, and `pnpm/action-setup` calls a
+deprecated Node API during setup. It is also off for `pnpm install`, whose own
+gate is `--strict-peer-dependencies`.
 
 Run it locally the same way CI does:
 

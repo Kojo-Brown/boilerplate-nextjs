@@ -17,10 +17,18 @@ env:
   # generate never opens a connection. Only the build job actually reaches a
   # database, and it gets the same URL from its Postgres service.
   DATABASE_URL: postgresql://postgres@localhost:5432/nextjs_ci
-  # Turn Node's own deprecation notices into thrown errors. Warnings that only
-  # print are warnings nobody reads; this is the one class of warning the
-  # runtime can escalate for us, so it is on for every job.
-  NODE_OPTIONS: --throw-deprecation
+
+# `NODE_OPTIONS: --throw-deprecation` turns Node's own deprecation notices into
+# thrown errors, which is the one class of warning the runtime can escalate for
+# us. It is set per step rather than here on purpose: a workflow-level value is
+# inherited by every JavaScript *action* too, and those run on the runner's own
+# Node (24) before `setup-node` has done anything. `pnpm/action-setup@v4`'s
+# bundled installer calls `url.parse()` (DEP0169), so a workflow-level setting
+# killed all six jobs during setup — see the first run on this PR.
+#
+# It is also deliberately absent from `pnpm install`: the same DEP0169 path runs
+# when pnpm builds its registry auth headers, and that is pnpm's code to fix,
+# not ours. `--strict-peer-dependencies` is the install step's warning gate.
 
 jobs:
   lint:
@@ -58,6 +66,8 @@ jobs:
       # warning-fatal without the wrapper.
       - name: Lint
         run: pnpm lint
+        env:
+          NODE_OPTIONS: --throw-deprecation
 
   format:
     # Deliberately not matrixed: Prettier's output is a pure function of the
@@ -130,6 +140,7 @@ jobs:
         run: pnpm run strict pnpm typecheck
         env:
           SKIP_ENV_VALIDATION: "1"
+          NODE_OPTIONS: --throw-deprecation
 
   test:
     name: Unit Tests (Node ${{ matrix.node-version }})
@@ -161,6 +172,7 @@ jobs:
         run: pnpm run strict pnpm test
         env:
           SKIP_ENV_VALIDATION: "1"
+          NODE_OPTIONS: --throw-deprecation
 
   build:
     name: Build (Node ${{ matrix.node-version }})
@@ -225,6 +237,8 @@ jobs:
       # build that is telling us it is about to break.
       - name: Build
         run: pnpm run strict pnpm build
+        env:
+          NODE_OPTIONS: --throw-deprecation
 
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
