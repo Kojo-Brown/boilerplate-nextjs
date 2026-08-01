@@ -39,6 +39,23 @@ const WARNING_MARKERS: ReadonlyArray<{ kind: string; pattern: RegExp }> = [
   { kind: "package-manager", pattern: /^\s*(?:WARN|npm warn)\b/ },
 ];
 
+/**
+ * Warnings that describe the CI environment rather than the code, and that no
+ * change to this repository can remove. Keep this list as short as it can be —
+ * every entry is a hole in the gate — and give each one a reason.
+ */
+const IGNORED_WARNINGS: ReadonlyArray<{ reason: string; pattern: RegExp }> = [
+  {
+    // `⚠ No build cache found. Please configure build caching for faster
+    // rebuilds.` Next prints this only under CI, whenever `.next/cache` is
+    // absent. The build job does restore that cache, so this fires on a cold
+    // runner or an evicted key — it reports the state of the machine, not of
+    // the source, and no edit here can prevent it.
+    reason: "cold .next/cache on a CI runner; not fixable from this repo",
+    pattern: /No build cache found/,
+  },
+];
+
 // Colourised output would otherwise hide a `⚠` behind a leading escape
 // sequence. The escape is spelled as a unicode escape rather than embedded as
 // a literal control byte, so the source survives editors and formatters.
@@ -54,9 +71,9 @@ export function findWarnings(output: string): DetectedWarning[] {
   output.split("\n").forEach((rawLine, index) => {
     const text = stripAnsi(rawLine).trimEnd();
     const marker = WARNING_MARKERS.find(({ pattern }) => pattern.test(text));
-    if (marker) {
-      warnings.push({ line: index + 1, text: text.trim(), kind: marker.kind });
-    }
+    if (!marker) return;
+    if (IGNORED_WARNINGS.some(({ pattern }) => pattern.test(text))) return;
+    warnings.push({ line: index + 1, text: text.trim(), kind: marker.kind });
   });
 
   return warnings;

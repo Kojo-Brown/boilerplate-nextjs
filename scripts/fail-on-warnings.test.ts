@@ -91,6 +91,23 @@ describe("findWarnings", () => {
     expect(findWarnings(output)).toEqual([]);
   });
 
+  it("ignores the cold-build-cache notice, which describes the runner", () => {
+    expect(
+      findWarnings(
+        "⚠ No build cache found. Please configure build caching for faster rebuilds. Read more: https://nextjs.org/docs/messages/no-cache\n",
+      ),
+    ).toEqual([]);
+  });
+
+  it("still catches a real warning printed alongside an ignored one", () => {
+    const warnings = findWarnings(
+      "⚠ No build cache found. Please configure build caching for faster rebuilds.\n" +
+        '⚠ The "middleware" file convention is deprecated.\n',
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.text).toContain("middleware");
+  });
+
   it("reports 1-based line numbers", () => {
     expect(findWarnings("a\nb\n⚠ third line\n")[0]?.line).toBe(3);
   });
