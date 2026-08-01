@@ -11,7 +11,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: "22"
   NEXTAUTH_URL: http://localhost:3000
   # Every job runs `prisma generate`, which loads prisma.config.ts, which
   # resolves DATABASE_URL eagerly and fails if it is unset — even though
@@ -19,10 +18,32 @@ env:
   # database, and it gets the same URL from its Postgres service.
   DATABASE_URL: postgresql://postgres@localhost:5432/nextjs_ci
 
+# `NODE_OPTIONS: --throw-deprecation` turns Node's own deprecation notices into
+# thrown errors, which is the one class of warning the runtime can escalate for
+# us. It is set per step rather than here on purpose: a workflow-level value is
+# inherited by every JavaScript *action* too, and those run on the runner's own
+# Node (24) before `setup-node` has done anything. `pnpm/action-setup@v4`'s
+# bundled installer calls `url.parse()` (DEP0169), so a workflow-level setting
+# killed all six jobs during setup — see the first run on this PR.
+#
+# It is also deliberately absent from `pnpm install`: the same DEP0169 path runs
+# when pnpm builds its registry auth headers, and that is pnpm's code to fix,
+# not ours. `--strict-peer-dependencies` is the install step's warning gate.
+
 jobs:
   lint:
-    name: Lint
+    # The Node major is in the name so a failure identifies itself in the
+    # checks list without opening the job.
+    name: Lint (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      # One major failing should not hide the state of the other.
+      fail-fast: false
+      matrix:
+        # Mirrors `engines.node` (^22.12.0 || ^24.0.0). Changing one without
+        # the other means CI is testing a version the package does not claim
+        # to support, or claiming support for a version CI never runs.
+        node-version: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
 
@@ -32,16 +53,26 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
+      # `--strict-peer-dependencies` is the install step's warning gate: pnpm
+      # prints unmet peers and carries on by default, which is how a peer range
+      # that only breaks on one Node major goes unnoticed.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
 
+      # `--max-warnings 0` lives in the `lint` script, so this is already
+      # warning-fatal without the wrapper.
       - name: Lint
         run: pnpm lint
+        env:
+          NODE_OPTIONS: --throw-deprecation
 
   format:
+    # Deliberately not matrixed: Prettier's output is a pure function of the
+    # source and its config, so running it twice would only buy a second copy
+    # of the same answer.
     name: Format
     runs-on: ubuntu-latest
     steps:
@@ -50,17 +81,15 @@ jobs:
           # Full history so the diff below has a merge base to work from.
           fetch-depth: 0
 
-      # No `version:` input on purpose — the action reads `packageManager`
-      # from package.json, and specifying both is a hard error.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: "22"
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
 
       # Scoped to the files this branch touched rather than the whole tree:
       # Prettier has never run over this repo and reports ~79 pre-existing
@@ -79,22 +108,24 @@ jobs:
           echo "$changed" | xargs pnpm exec prettier --check
 
   typecheck:
-    name: Typecheck
+    name: Typecheck (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
 
-      # No `version:` input on purpose — the action reads `packageManager`
-      # from package.json, and specifying both is a hard error.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
 
       # Prisma 7 emits the client into node_modules, so nothing in src/lib/dal
       # type checks until this runs. It needs no database — the connection URL
@@ -103,44 +134,54 @@ jobs:
         run: pnpm db:generate
 
       # `pnpm typecheck` runs `next typegen` first, which materialises the typed
-      # routes that `src/components/nav/nav-items.ts` depends on.
+      # routes that `src/components/nav/nav-items.ts` depends on. Wrapped
+      # because `next typegen` reports config deprecations on stdout and exits 0.
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm run strict pnpm typecheck
         env:
           SKIP_ENV_VALIDATION: "1"
+          NODE_OPTIONS: --throw-deprecation
 
   test:
-    name: Unit Tests
+    name: Unit Tests (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24"]
     steps:
       - uses: actions/checkout@v4
 
-      # No `version:` input on purpose — the action reads `packageManager`
-      # from package.json, and specifying both is a hard error.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
 
       - name: Generate Prisma client
         run: pnpm db:generate
 
       # The unit suite mocks `@/lib/prisma` everywhere, so it never opens a
       # connection; DATABASE_URL only has to satisfy the Zod env schema.
+      # Wrapped because Vitest prints config deprecations and still exits 0.
       - name: Run unit tests
-        run: pnpm test
+        run: pnpm run strict pnpm test
         env:
           SKIP_ENV_VALIDATION: "1"
+          NODE_OPTIONS: --throw-deprecation
 
   build:
-    name: Build
+    name: Build (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     needs: [lint, format, typecheck, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24"]
 
     # `app/blog` is an ISR page that reads posts through Prisma, so Next queries
     # the database while prerendering. A real Postgres is the honest way to
@@ -167,20 +208,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No `version:` input on purpose — the action reads `packageManager`
-      # from package.json, and specifying both is a hard error.
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.node-version }}
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
 
       - name: Generate Prisma client
         run: pnpm db:generate
+
+      # This is what `⚠ No build cache found` asks for. Keyed on the lockfile
+      # plus the sources Next compiles, with a lockfile-only prefix to fall back
+      # on, so a source edit reuses the previous run's cache instead of starting
+      # cold. Per Node major, since the two produce different artefacts.
+      - name: Restore Next.js build cache
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: ${{ runner.os }}-node${{ matrix.node-version }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('src/**/*.[jt]s', 'src/**/*.[jt]sx') }}
+          restore-keys: |
+            ${{ runner.os }}-node${{ matrix.node-version }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-
 
       # NextAuth only needs >=32 characters to derive its JWT key, and nothing
       # built here is ever served to a real client. Minted per run so no
@@ -193,18 +244,51 @@ jobs:
       - name: Apply schema to the CI database
         run: pnpm exec prisma db push
 
+      # Wrapped: `next build` prints deprecation notices (file conventions,
+      # config keys) and still exits 0, so a bare `pnpm build` is green on a
+      # build that is telling us it is about to break.
       - name: Build
-        run: pnpm build
+        run: pnpm run strict pnpm build
+        env:
+          NODE_OPTIONS: --throw-deprecation
 
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:
       # error` fails the job even though the build itself succeeded.
+      #
+      # The artifact name carries the Node major, because two matrix legs
+      # uploading under one name is a hard error in upload-artifact v4.
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: nextjs-build
+          name: nextjs-build-node${{ matrix.node-version }}
           path: .next/
           retention-days: 7
           if-no-files-found: error
           include-hidden-files: true
+
+  # A matrix renames every check ("Build" became "Build (Node 22)"), which
+  # silently unsets any branch protection pinned to the old names — and adding
+  # a Node major later would rename them again. This job is the one stable
+  # name to require: it is green only when every leg above is.
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [lint, format, typecheck, test, build]
+    if: always()
+    steps:
+      - name: Verify every job succeeded
+        # String literals inside a `${{ }}` expression must be single-quoted —
+        # double quotes are a parse error that fails the whole workflow file
+        # before any job starts, so the shell quoting has to be the double one.
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "upstream results: $results"
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "::error::A required job did not succeed ($results)."
+              exit 1
+            fi
+          done
+          echo "All jobs succeeded."
