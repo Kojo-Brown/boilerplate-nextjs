@@ -253,8 +253,11 @@ jobs:
     if: always()
     steps:
       - name: Verify every job succeeded
+        # String literals inside a `${{ }}` expression must be single-quoted —
+        # double quotes are a parse error that fails the whole workflow file
+        # before any job starts, so the shell quoting has to be the double one.
         run: |
-          results='${{ join(needs.*.result, " ") }}'
+          results="${{ join(needs.*.result, ' ') }}"
           echo "upstream results: $results"
           for result in $results; do
             if [ "$result" != "success" ]; then
