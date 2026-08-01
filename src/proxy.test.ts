@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { authConfig, PROTECTED_PREFIXES, ADMIN_PREFIXES, AUTH_PAGES } from "@/auth.config";
+import {
+  authConfig,
+  PROTECTED_PREFIXES,
+  ADMIN_PREFIXES,
+  AUTH_PAGES,
+} from "@/auth.config";
 
 type AuthorizedParams = Parameters<
   NonNullable<NonNullable<typeof authConfig.callbacks>["authorized"]>
@@ -10,7 +15,9 @@ function makeRequest(path: string, origin = "http://localhost:3000") {
   return { nextUrl: url } as AuthorizedParams["request"];
 }
 
-function makeSession(role: "USER" | "ADMIN" = "USER"): AuthorizedParams["auth"] {
+function makeSession(
+  role: "USER" | "ADMIN" = "USER",
+): AuthorizedParams["auth"] {
   return {
     user: { id: "user-1", email: "user@example.com", name: "Test User", role },
     expires: new Date(Date.now() + 3600 * 1000).toISOString(),
@@ -46,12 +53,18 @@ describe("authorized callback — unauthenticated user", () => {
   });
 
   it("allows access to /register", () => {
-    const result = authorized({ auth: null, request: makeRequest("/register") });
+    const result = authorized({
+      auth: null,
+      request: makeRequest("/register"),
+    });
     expect(result).toBe(true);
   });
 
   it("redirects /dashboard to /login", () => {
-    const result = authorized({ auth: null, request: makeRequest("/dashboard") });
+    const result = authorized({
+      auth: null,
+      request: makeRequest("/dashboard"),
+    });
     expect(result).toBeInstanceOf(Response);
     const location = (result as Response).headers.get("location")!;
     expect(location).toContain("/login");
@@ -64,7 +77,9 @@ describe("authorized callback — unauthenticated user", () => {
     });
     const location = (result as Response).headers.get("location")!;
     const redirectUrl = new URL(location, "http://localhost:3000");
-    expect(redirectUrl.searchParams.get("callbackUrl")).toBe("/dashboard/settings");
+    expect(redirectUrl.searchParams.get("callbackUrl")).toBe(
+      "/dashboard/settings",
+    );
   });
 
   it("redirects all PROTECTED_PREFIXES to /login", () => {
@@ -218,7 +233,10 @@ describe("authorized callback — admin routes (ADMIN role)", () => {
 
 describe("authorized callback — /forbidden page", () => {
   it("allows unauthenticated access to /forbidden", () => {
-    const result = authorized({ auth: null, request: makeRequest("/forbidden") });
+    const result = authorized({
+      auth: null,
+      request: makeRequest("/forbidden"),
+    });
     expect(result).toBe(true);
   });
 
