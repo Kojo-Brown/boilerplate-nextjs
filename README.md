@@ -83,6 +83,14 @@ export async function createPost(data: {
 }
 ```
 
+## Rendering
+
+Every route currently renders on demand. `src/app/layout.tsx` awaits `auth()`,
+which reads cookies, and that makes the whole tree dynamic — including
+`app/blog`, whose `export const revalidate = 60` therefore never takes effect.
+[docs/partial-prerendering.md](./docs/partial-prerendering.md) measures this,
+explains what Partial Prerendering would buy, and sequences the migration.
+
 ## CI
 
 Every gate is warning-fatal — a warning fails the job rather than scrolling past:

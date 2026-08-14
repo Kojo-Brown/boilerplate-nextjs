@@ -87,6 +87,26 @@ Next's cold-cache notice, which describes the runner rather than the code.
 - [ ] Streaming with granular Suspense boundaries and per-segment `loading.tsx` skeletons
 - [ ] `generateStaticParams` + on-demand ISR revalidation webhook
 
+The tradeoff guide half of the Partial Prerendering item is written and merged
+as [docs/partial-prerendering.md](./docs/partial-prerendering.md); the mechanism
+half is not, so the item stays unchecked.
+
+`experimental.ppr` no longer exists in Next 16 — it was merged into
+`cacheComponents`, which is typed `boolean` and has **no incremental mode**.
+There is no per-route opt-in, so enabling PPR converts all 14 routes at once and
+requires, first: a `prisma/seed.ts` (referenced by `prisma.config.ts`, never
+written) and a seeded CI database, because `generateStaticParams` may no longer
+return `[]`; the `revalidate`/`dynamicParams` exports on both blog routes
+migrated to `"use cache"` + `cacheLife`/`cacheTag`, which redefines the Phase 5
+ISR items; and Suspense boundaries around all ten server-side session reads.
+
+Measured on the way: `src/app/layout.tsx` awaits `auth()`, which reads cookies
+and makes **every** route dynamic. Removing it turns five routes static and is
+the first build in which `/blog` reports a `Revalidate` column at all — its
+`export const revalidate = 60` has never taken effect. The Phase 5 ISR items are
+written but not in force. Fixing that is worth doing on its own merits and is
+step 3 of the migration plan in the guide.
+
 ## Phase 9 — Server Actions & Data Integrity
 
 - [ ] Server Action hardening: origin checks, auth assertion, and Zod input parsing on every action
