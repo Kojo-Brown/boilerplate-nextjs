@@ -85,11 +85,27 @@ export async function createPost(data: {
 
 ## Rendering
 
-Every route currently renders on demand. `src/app/layout.tsx` awaits `auth()`,
-which reads cookies, and that makes the whole tree dynamic — including
-`app/blog`, whose `export const revalidate = 60` therefore never takes effect.
-[docs/partial-prerendering.md](./docs/partial-prerendering.md) measures this,
-explains what Partial Prerendering would buy, and sequences the migration.
+Partial Prerendering is on (`cacheComponents: true`). Six routes are fully
+static, six are a prerendered shell with server-streamed holes, and only the API
+handlers are dynamic.
+
+Two rules follow from it:
+
+- **Caching is explicit.** Uncached data is dynamic. A route no longer declares
+  `export const revalidate`; the window goes on the function that fetches the
+  data, via `"use cache"` + `cacheLife` — see `src/lib/cache/blog.ts`. Invalidate
+  by tag (`updateTag`), not by path.
+- **Where you read the session decides what prerenders.** A session read in a
+  layout body puts everything below it in the hole. Keep the read in a component
+  behind its own `<Suspense>`, as `(dashboard)/layout.tsx` does with
+  `<UserChip>`, and never rely on a layout for authorisation — Next does not
+  re-render it when navigating between sibling routes.
+
+`pnpm exec tsx scripts/assert-route-shape.ts` runs in CI after the build and
+fails if a static route goes dynamic, an ISR window disappears, or a shell stops
+prerendering its navigation.
+[docs/partial-prerendering.md](./docs/partial-prerendering.md) has the full
+tradeoff guide and the measurements.
 
 ## CI
 

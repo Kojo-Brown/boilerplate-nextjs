@@ -1,36 +1,38 @@
-import { getRequiredSession } from "@/lib/session";
-import { UserAvatar } from "@/components/session/user-avatar";
-import { signOutAction } from "@/actions/auth";
+import { Suspense } from "react";
 import { AppShell } from "@/components/nav/app-shell";
+import { UserChip, UserChipSkeleton } from "@/components/session/user-chip";
 
-export default async function DashboardLayout({
+/**
+ * Synchronous on purpose.
+ *
+ * This layout used to `await getRequiredSession()` in its body. Everything it
+ * renders — sidebar, navigation, header, and the page inside it — therefore sat
+ * behind a cookie read, and under Cache Components that meant the static shell
+ * for every dashboard route was an empty document: `/posts` prerendered 2.6 KB
+ * consisting of a `<title>`.
+ *
+ * Now the chrome prerenders and only `<UserChip>` is a streamed hole.
+ *
+ * The session read that used to live here was also doing double duty as an
+ * authorisation check, and two routes leaned on it: `/images` and `/upload` are
+ * absent from `PROTECTED_PREFIXES` in `auth.config.ts`, so the proxy does not
+ * gate them. Both now call `getRequiredSession()` themselves. That is where the
+ * check belonged regardless of PPR — a layout does not re-render when the user
+ * navigates between sibling routes that share it, so a layout is not a place to
+ * enforce access.
+ */
+export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await getRequiredSession();
-
   return (
     <AppShell
       appName="App"
       headerSlot={
-        <>
-          <span
-            className="hidden text-sm lg:block"
-            style={{ color: "var(--muted-foreground)" }}
-          >
-            {session.user.name ?? session.user.email}
-          </span>
-          <UserAvatar size="sm" />
-          <form action={signOutAction}>
-            <button
-              type="submit"
-              className="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-[var(--muted)]"
-            >
-              Sign out
-            </button>
-          </form>
-        </>
+        <Suspense fallback={<UserChipSkeleton />}>
+          <UserChip />
+        </Suspense>
       }
     >
       {children}

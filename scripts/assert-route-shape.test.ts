@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   EXPECTED_ROUTES,
   checkRouteShape,
+  createShellReader,
   formatViolations,
   readPrerenderManifest,
   type PrerenderManifest,
+  type RouteExpectation,
 } from "./assert-route-shape";
 
 /**
@@ -29,14 +31,35 @@ function goodManifest(): PrerenderManifest {
         initialRevalidateSeconds: 300,
         srcRoute: "/blog/[slug]",
       },
+      "/dashboard": { initialRevalidateSeconds: false, srcRoute: "/dashboard" },
+      "/posts": { initialRevalidateSeconds: false, srcRoute: "/posts" },
+      "/admin": { initialRevalidateSeconds: false, srcRoute: "/admin" },
+      "/images": { initialRevalidateSeconds: false, srcRoute: "/images" },
+      "/upload": { initialRevalidateSeconds: false, srcRoute: "/upload" },
     },
     dynamicRoutes: { "/blog/[slug]": {} },
   };
 }
 
+/** A shell carrying the dashboard chrome — what a healthy build writes. */
+const CHROME =
+  "<html><body><nav>Dashboard Posts Upload Image Showcase</nav><main></main></body></html>";
+
+/**
+ * `checkRouteShape` with the healthy defaults filled in, so each test only has
+ * to describe the one thing it is breaking.
+ */
+function check(
+  manifest: PrerenderManifest,
+  expectations: readonly RouteExpectation[] = EXPECTED_ROUTES,
+  readShell: (route: string) => string | null = () => CHROME,
+) {
+  return checkRouteShape(manifest, expectations, readShell);
+}
+
 describe("checkRouteShape", () => {
   it("passes a manifest matching the expected route shape", () => {
-    expect(checkRouteShape(goodManifest())).toEqual([]);
+    expect(check(goodManifest())).toEqual([]);
   });
 
   it("catches the regression it exists for: a static route gone dynamic", () => {
@@ -45,7 +68,7 @@ describe("checkRouteShape", () => {
     const manifest = goodManifest();
     delete manifest.routes["/"];
 
-    const violations = checkRouteShape(manifest);
+    const violations = check(manifest);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.route).toBe("/");
@@ -59,7 +82,7 @@ describe("checkRouteShape", () => {
     delete manifest.routes["/login"];
     delete manifest.routes["/register"];
 
-    expect(checkRouteShape(manifest).map((v) => v.route)).toEqual([
+    expect(check(manifest).map((v) => v.route)).toEqual([
       "/login",
       "/register",
     ]);
@@ -74,7 +97,7 @@ describe("checkRouteShape", () => {
       srcRoute: "/blog",
     };
 
-    const violations = checkRouteShape(manifest);
+    const violations = check(manifest);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.problem).toContain(
@@ -87,12 +110,12 @@ describe("checkRouteShape", () => {
     const manifest = goodManifest();
     manifest.routes["/blog"] = { srcRoute: "/blog" };
 
-    expect(checkRouteShape(manifest)[0]?.problem).toContain("no window at all");
+    expect(check(manifest)[0]?.problem).toContain("no window at all");
 
     const wrong = goodManifest();
     wrong.routes["/blog"] = { initialRevalidateSeconds: 30, srcRoute: "/blog" };
 
-    expect(checkRouteShape(wrong)[0]?.problem).toContain("built with 30s");
+    expect(check(wrong)[0]?.problem).toContain("built with 30s");
   });
 
   it("catches generateStaticParams returning an empty array", () => {
@@ -102,7 +125,7 @@ describe("checkRouteShape", () => {
     delete manifest.routes["/blog/seed-post-cache-life"];
     delete manifest.routes["/blog/seed-post-partial-prerendering"];
 
-    const violations = checkRouteShape(manifest);
+    const violations = check(manifest);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.route).toBe("/blog/[slug]");
@@ -113,9 +136,7 @@ describe("checkRouteShape", () => {
     const manifest = goodManifest();
     manifest.dynamicRoutes = {};
 
-    expect(checkRouteShape(manifest)[0]?.problem).toContain(
-      "not in dynamicRoutes",
-    );
+    expect(check(manifest)[0]?.problem).toContain("not in dynamicRoutes");
   });
 
   it("checks the window on every prebuilt page, not only the first", () => {
@@ -125,7 +146,7 @@ describe("checkRouteShape", () => {
       srcRoute: "/blog/[slug]",
     };
 
-    const violations = checkRouteShape(manifest);
+    const violations = check(manifest);
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.route).toBe("/blog/seed-post-partial-prerendering");
@@ -136,7 +157,112 @@ describe("checkRouteShape", () => {
     // the manifest must not be an error.
     const manifest = goodManifest();
 
-    expect(checkRouteShape(manifest, [])).toEqual([]);
+    expect(check(manifest, [])).toEqual([]);
+  });
+});
+
+describe("checkRouteShape — Partial Prerendering shells", () => {
+  const SHELL: readonly RouteExpectation[] = [
+    {
+      route: "/posts",
+      kind: "shell",
+      shellMustContain: ["Dashboard", "Posts"],
+      because: "the posts shell must prerender its navigation",
+    },
+  ];
+
+  function manifestWithPosts(): PrerenderManifest {
+    const manifest = goodManifest();
+    manifest.routes["/posts"] = {
+      initialRevalidateSeconds: false,
+      srcRoute: "/posts",
+    };
+    return manifest;
+  }
+
+  it("passes when the shell contains the chrome", () => {
+    const violations = checkRouteShape(
+      manifestWithPosts(),
+      SHELL,
+      () => "<html><body><nav>Dashboard Posts</nav></body></html>",
+    );
+
+    expect(violations).toEqual([]);
+  });
+
+  it("catches the empty shell — the regression PPR is most likely to hide", () => {
+    // What `/posts` actually built when `(dashboard)/layout.tsx` awaited the
+    // session: 2.6 KB containing a <title> and nothing else. The manifest
+    // still called it partially static, which is why the check reads the HTML.
+    //
+    // Note the `<title>` satisfies the "Posts" marker on its own. That is why
+    // EXPECTED_ROUTES asks every dashboard route for all three sidebar links
+    // rather than its own name: a route's title always contains its own name,
+    // so a single self-named marker would be satisfied by an empty shell.
+    const violations = checkRouteShape(
+      manifestWithPosts(),
+      SHELL,
+      () => "<html><head><title>Posts | App</title></head><body></body></html>",
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("boundary is too high");
+    expect(violations[0]?.problem).toContain('"Dashboard"');
+  });
+
+  it("names only the markup that went missing", () => {
+    const violations = checkRouteShape(
+      manifestWithPosts(),
+      SHELL,
+      () => "<html><body><nav>Dashboard</nav></body></html>",
+    );
+
+    expect(violations[0]?.problem).toContain('"Posts"');
+    expect(violations[0]?.problem).not.toContain('"Dashboard"');
+  });
+
+  it("reports the shell size, so a near-empty page is obvious in the log", () => {
+    const violations = checkRouteShape(
+      manifestWithPosts(),
+      SHELL,
+      () => "<html></html>",
+    );
+
+    expect(violations[0]?.problem).toContain("prerendered 13 bytes");
+  });
+
+  it("catches a shell route that went fully dynamic", () => {
+    // Nothing prerendered for it at all — a dynamic read escaped every
+    // Suspense boundary, so there is no shell to serve.
+    const manifest = goodManifest();
+    delete manifest.routes["/posts"];
+
+    const violations = check(manifest, SHELL, () => null);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("built as fully dynamic");
+  });
+
+  it("distinguishes a missing HTML file from a missing manifest entry", () => {
+    const violations = checkRouteShape(manifestWithPosts(), SHELL, () => null);
+
+    expect(violations[0]?.problem).toContain("no prerendered HTML was written");
+  });
+
+  it("does not require shell markup that was never asked for", () => {
+    const violations = checkRouteShape(
+      manifestWithPosts(),
+      [{ route: "/posts", kind: "shell", because: "exists" }],
+      () => "",
+    );
+
+    expect(violations).toEqual([]);
+  });
+});
+
+describe("createShellReader", () => {
+  it("returns null rather than throwing when a route has no prerendered HTML", () => {
+    expect(createShellReader("does-not-exist")("/posts")).toBeNull();
   });
 });
 
@@ -158,7 +284,7 @@ describe("formatViolations", () => {
     const manifest = goodManifest();
     delete manifest.routes["/blog"];
 
-    const output = formatViolations(checkRouteShape(manifest));
+    const output = formatViolations(check(manifest));
 
     expect(output).toContain("/blog");
     expect(output).toContain("expected because:");

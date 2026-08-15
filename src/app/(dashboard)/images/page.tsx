@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { getRequiredSession } from "@/lib/session";
 import { BlurImage } from "@/components/ui/blur-image";
 import { shimmerDataUrl } from "@/lib/lqip";
 
@@ -25,12 +26,23 @@ const FIXED_SIZE_DEMOS = [
   },
 ];
 
-export default function ImagesPage() {
+/**
+ * `/images` is not in `PROTECTED_PREFIXES`, so the proxy does not gate it. It
+ * was protected only by the session read in `(dashboard)/layout.tsx`; now that
+ * the layout is synchronous, the check lives here where it applies on every
+ * navigation rather than only on a full page load.
+ */
+export default async function ImagesPage() {
+  await getRequiredSession();
+
   return (
     <div className="flex flex-col gap-8">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Image Showcase</h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
+        <p
+          className="mt-1 text-sm"
+          style={{ color: "var(--muted-foreground)" }}
+        >
           next/image wrapper with blur placeholder, shimmer animation, and LQIP
           support.
         </p>
@@ -52,7 +64,10 @@ export default function ImagesPage() {
                 sizes="(max-width: 640px) 100vw, 50vw"
               />
               <p className="text-sm font-medium">{img.label}</p>
-              <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+              <p
+                className="text-xs"
+                style={{ color: "var(--muted-foreground)" }}
+              >
                 {img.description}
               </p>
             </div>

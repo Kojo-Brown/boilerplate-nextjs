@@ -37,14 +37,31 @@ export interface RouteExpectation {
    * `static`   — must be prerendered at build time.
    * `prebuilt` — a dynamic segment whose `generateStaticParams` must yield at
    *              least one concrete prerendered page.
+   * `shell`    — Partial Prerendering: a prerendered shell with streamed holes.
+   *              Must additionally prove the shell is not empty (see
+   *              `shellMustContain`).
    */
-  kind: "static" | "prebuilt";
+  kind: "static" | "prebuilt" | "shell";
   /**
    * Required revalidation window in seconds. `undefined` means "don't care";
    * a number means the built value must match exactly, which is what catches a
    * `revalidate` export that never took effect.
    */
   revalidateSeconds?: number;
+  /**
+   * Markup that must appear in the prerendered shell for a `shell` route.
+   *
+   * This is the only honest way to check a shell. Under Cache Components the
+   * prerender manifest marks *every* route `PARTIALLY_STATIC` — a fully static
+   * page and a shell containing nothing but a `<title>` are indistinguishable
+   * in it. So the assertion is made against the HTML the build actually wrote:
+   * a shell that no longer contains the navigation is a shell that regressed,
+   * whatever the manifest says about it.
+   *
+   * `/posts` really did prerender 2.6 KB of nothing while the route table
+   * happily reported it as partially static.
+   */
+  shellMustContain?: readonly string[];
   /** Why this route is expected to be this shape — printed on failure. */
   because: string;
 }
@@ -55,10 +72,8 @@ export interface RouteExpectation {
  * prevent — the expectation has to be written down independently of the thing
  * it checks, or it is not a check.
  *
- * Dynamic routes are deliberately absent: `/dashboard`, `/posts`, `/admin`,
- * `/images`, `/upload` and the API handlers read the session and are supposed
- * to be `ƒ`. Asserting they stay dynamic would fail the day someone correctly
- * makes one of them a static shell with a streamed hole.
+ * The API handlers are deliberately absent — they are pure request/response and
+ * have no shell to speak of.
  */
 export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
   {
@@ -99,12 +114,55 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
     revalidateSeconds: 300,
     because: "generateStaticParams must enumerate seeded posts, not return []",
   },
+
+  // The Partial Prerendering routes. Each reads the session — that is the hole
+  // — but the dashboard chrome around it must prerender. "Sign out" is
+  // deliberately *not* in these lists: it lives in the streamed `<UserChip>`,
+  // so requiring it would assert the opposite of what we want.
+  ...(
+    [
+      ["/dashboard", "the dashboard shell"],
+      ["/posts", "the posts shell"],
+      ["/admin", "the admin shell"],
+      ["/images", "the image showcase shell"],
+      ["/upload", "the upload shell"],
+    ] as const
+  ).map(([route, what]): RouteExpectation => ({
+    route,
+    kind: "shell",
+    // The sidebar links, which `AppShell` renders without touching the
+    // session. If a session read creeps back into `(dashboard)/layout.tsx`
+    // these vanish from the shell and this fails.
+    shellMustContain: ["Dashboard", "Posts", "Upload"],
+    because: `${what} must prerender its navigation; only <UserChip> may stream`,
+  })),
 ];
 
 export interface Violation {
   route: string;
   problem: string;
   because: string;
+}
+
+/**
+ * Returns the prerendered HTML for a route, or `null` if the build wrote none.
+ * Injected so the tests can describe a regressed shell without running a build.
+ */
+export type ShellReader = (route: string) => string | null;
+
+/** Reads the shell Next wrote for a route, e.g. `.next/server/app/posts.html`. */
+export function createShellReader(nextDir: string): ShellReader {
+  return (route) => {
+    const relative = route === "/" ? "index" : route.replace(/^\//, "");
+    try {
+      return readFileSync(
+        path.join(nextDir, "server", "app", `${relative}.html`),
+        "utf8",
+      );
+    } catch {
+      return null;
+    }
+  };
 }
 
 /**
@@ -116,11 +174,52 @@ export interface Violation {
 export function checkRouteShape(
   manifest: PrerenderManifest,
   expectations: readonly RouteExpectation[] = EXPECTED_ROUTES,
+  readShell: ShellReader = () => null,
 ): Violation[] {
   const violations: Violation[] = [];
 
   for (const expectation of expectations) {
     const { route, because } = expectation;
+
+    if (expectation.kind === "shell") {
+      if (!(route in manifest.routes)) {
+        violations.push({
+          route,
+          problem:
+            "expected a partially prerendered (◐) route, but nothing was prerendered for it " +
+            "at all — it built as fully dynamic (ƒ). Every dynamic read on this route now " +
+            "sits outside a Suspense boundary.",
+          because,
+        });
+        continue;
+      }
+
+      const html = readShell(route);
+      if (html === null) {
+        violations.push({
+          route,
+          problem:
+            "the prerender manifest lists a shell, but no prerendered HTML was written for it.",
+          because,
+        });
+        continue;
+      }
+
+      const missing = (expectation.shellMustContain ?? []).filter(
+        (needle) => !html.includes(needle),
+      );
+      if (missing.length > 0) {
+        violations.push({
+          route,
+          problem:
+            `the shell prerendered ${html.length} bytes but is missing ${missing.map((m) => JSON.stringify(m)).join(", ")}. ` +
+            "The boundary is too high: content that does not depend on the request " +
+            "is being streamed instead of prerendered, so the 'static shell' is a near-empty page.",
+          because,
+        });
+      }
+      continue;
+    }
 
     if (expectation.kind === "static") {
       const entry = manifest.routes[route];
@@ -235,7 +334,11 @@ export function readPrerenderManifest(nextDir: string): PrerenderManifest {
 function main(argv: readonly string[]): number {
   const nextDir = argv[0] ?? ".next";
   const manifest = readPrerenderManifest(nextDir);
-  const violations = checkRouteShape(manifest);
+  const violations = checkRouteShape(
+    manifest,
+    EXPECTED_ROUTES,
+    createShellReader(nextDir),
+  );
 
   if (violations.length > 0) {
     console.error(
