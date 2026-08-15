@@ -79,7 +79,7 @@ Next's cold-cache notice, which describes the runner rather than the code.
 
 ## Phase 8 — Advanced App Router
 
-- [ ] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide
+- [x] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide — enabled via `cacheComponents` (there is no `experimental.ppr` in Next 16 and no incremental mode); found and fixed two invisible defects on the way, the root layout's `auth()` making every route dynamic and the dashboard layout's session read reducing its "static shell" to a `<title>` (PR #21)
 - [ ] Intercepting routes for a modal photo/detail view with a shareable URL
 - [ ] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route
 - [ ] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations
