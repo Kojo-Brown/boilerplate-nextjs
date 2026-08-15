@@ -1,28 +1,28 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getPostById, getPublishedPosts } from "@/lib/dal/posts";
+import { getPublishedPosts } from "@/lib/dal/posts";
+import { getCachedPost } from "@/lib/cache/blog";
 import { IsrBadge } from "../_components/isr-badge";
 import { RevalidateButton } from "../_components/revalidate-button";
 
 /**
- * ISR: individual post pages are statically generated at build time for all
- * published posts via generateStaticParams, then revalidated every 5 minutes.
- * Unknown slugs are rendered on-demand (dynamicParams = true) and cached.
+ * ISR under Cache Components.
+ *
+ * `export const revalidate = 300` and `export const dynamicParams = true` used
+ * to live here. Cache Components rejects both as route segment config: the
+ * window moved onto `getCachedPost`, and on-demand generation of unknown slugs
+ * is the default for a dynamic segment, so `dynamicParams` no longer has
+ * anything to say.
  */
-export const revalidate = 300;
-
-/** Allow on-demand generation of slugs not returned by generateStaticParams. */
-export const dynamicParams = true;
-
 export async function generateStaticParams(): Promise<{ slug: string }[]> {
-  try {
-    const posts = await getPublishedPosts();
-    return posts.map((post) => ({ slug: post.id }));
-  } catch {
-    // DB unavailable at build time — fall back to on-demand ISR for all slugs
-    return [];
-  }
+  // No try/catch fallback any more. It used to return `[]` when the database
+  // was unreachable, which Cache Components rejects outright
+  // (EmptyGenerateStaticParamsError) — and which quietly prerendered nothing on
+  // every CI run, since CI built against an empty database. Failing loudly here
+  // is the point: if the build cannot enumerate posts, the build is wrong.
+  const posts = await getPublishedPosts();
+  return posts.map((post) => ({ slug: post.id }));
 }
 
 export async function generateMetadata({
@@ -31,11 +31,13 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const post = await getPostById(slug);
+  const { data: post } = await getCachedPost(slug);
   if (!post) return { title: "Post not found" };
   return {
     title: post.title,
-    description: post.content?.slice(0, 155) ?? `A post by ${post.author.name ?? post.author.email}`,
+    description:
+      post.content?.slice(0, 155) ??
+      `A post by ${post.author.name ?? post.author.email}`,
   };
 }
 
@@ -45,8 +47,7 @@ export default async function BlogPostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const post = await getPostById(slug);
-  const renderedAt = new Date();
+  const { data: post, renderedAt } = await getCachedPost(slug);
 
   if (!post || !post.published) notFound();
 
@@ -68,7 +69,10 @@ export default async function BlogPostPage({
           <IsrBadge renderedAt={renderedAt} revalidateSeconds={300} />
         </div>
 
-        <div className="flex items-center gap-2 text-sm" style={{ color: "var(--muted-foreground)" }}>
+        <div
+          className="flex items-center gap-2 text-sm"
+          style={{ color: "var(--muted-foreground)" }}
+        >
           <span>By {post.author.name ?? post.author.email}</span>
           <span aria-hidden="true">·</span>
           <time dateTime={post.createdAt.toISOString()}>
@@ -90,19 +94,31 @@ export default async function BlogPostPage({
           color: "var(--muted-foreground)",
         }}
       >
-        <strong className="font-semibold" style={{ color: "var(--foreground)" }}>
+        <strong
+          className="font-semibold"
+          style={{ color: "var(--foreground)" }}
+        >
           ISR demo:
         </strong>{" "}
         This page was pre-built via{" "}
-        <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+        <code
+          className="rounded px-1 font-mono text-xs"
+          style={{ backgroundColor: "var(--border)" }}
+        >
           generateStaticParams
         </code>{" "}
         and revalidates every{" "}
-        <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+        <code
+          className="rounded px-1 font-mono text-xs"
+          style={{ backgroundColor: "var(--border)" }}
+        >
           300s
         </code>
         . Unknown post IDs are generated on-demand because{" "}
-        <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+        <code
+          className="rounded px-1 font-mono text-xs"
+          style={{ backgroundColor: "var(--border)" }}
+        >
           dynamicParams = true
         </code>
         .
@@ -118,7 +134,10 @@ export default async function BlogPostPage({
         )}
       </div>
 
-      <div className="flex flex-col gap-2 border-t pt-6" style={{ borderColor: "var(--border)" }}>
+      <div
+        className="flex flex-col gap-2 border-t pt-6"
+        style={{ borderColor: "var(--border)" }}
+      >
         <p className="text-sm font-medium">On-demand revalidation</p>
         <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
           Trigger an immediate cache purge without waiting for the 5-minute TTL.

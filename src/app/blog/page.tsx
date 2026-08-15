@@ -1,32 +1,36 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getPublishedPosts } from "@/lib/dal/posts";
+import { getCachedPublishedPosts } from "@/lib/cache/blog";
 import { IsrBadge } from "./_components/isr-badge";
 import { RevalidateButton } from "./_components/revalidate-button";
 
 export const metadata: Metadata = {
   title: "Blog",
-  description: "Browse published posts — served via Incremental Static Regeneration",
+  description:
+    "Browse published posts — served via Incremental Static Regeneration",
 };
 
 /**
- * ISR: this page is statically generated at build time and revalidated every
- * 60 seconds on the next request after the TTL expires. Stale content is served
- * immediately while Next.js regenerates in the background.
+ * ISR under Cache Components. The 60-second window that used to live here as
+ * `export const revalidate = 60` — a route segment config Cache Components
+ * rejects outright — now lives on `getCachedPublishedPosts`, which also stamps
+ * the render time so the badge reflects the cache entry rather than the request.
  */
-export const revalidate = 60;
-
 export default async function BlogPage() {
-  const posts = await getPublishedPosts();
-  const renderedAt = new Date();
+  const { data: posts, renderedAt } = await getCachedPublishedPosts();
 
   return (
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Published Posts</h1>
-            <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
+            <h1 className="text-3xl font-bold tracking-tight">
+              Published Posts
+            </h1>
+            <p
+              className="mt-1 text-sm"
+              style={{ color: "var(--muted-foreground)" }}
+            >
               {posts.length === 0
                 ? "No published posts yet."
                 : `${posts.length} post${posts.length === 1 ? "" : "s"} available`}
@@ -44,20 +48,32 @@ export default async function BlogPage() {
             color: "var(--muted-foreground)",
           }}
         >
-          <strong className="font-semibold" style={{ color: "var(--foreground)" }}>
+          <strong
+            className="font-semibold"
+            style={{ color: "var(--foreground)" }}
+          >
             ISR demo:
           </strong>{" "}
           This page is statically generated and revalidates every{" "}
-          <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+          <code
+            className="rounded px-1 font-mono text-xs"
+            style={{ backgroundColor: "var(--border)" }}
+          >
             60s
           </code>{" "}
           via{" "}
-          <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+          <code
+            className="rounded px-1 font-mono text-xs"
+            style={{ backgroundColor: "var(--border)" }}
+          >
             export const revalidate = 60
           </code>
-          . The &quot;Rendered at&quot; badge updates on each regeneration. Use the button
-          below to trigger on-demand revalidation via{" "}
-          <code className="rounded px-1 font-mono text-xs" style={{ backgroundColor: "var(--border)" }}>
+          . The &quot;Rendered at&quot; badge updates on each regeneration. Use
+          the button below to trigger on-demand revalidation via{" "}
+          <code
+            className="rounded px-1 font-mono text-xs"
+            style={{ backgroundColor: "var(--border)" }}
+          >
             revalidatePath
           </code>
           .
@@ -67,7 +83,10 @@ export default async function BlogPage() {
       </div>
 
       {posts.length === 0 ? (
-        <p className="py-12 text-center" style={{ color: "var(--muted-foreground)" }}>
+        <p
+          className="py-12 text-center"
+          style={{ color: "var(--muted-foreground)" }}
+        >
           Publish a post from the dashboard to see it here.
         </p>
       ) : (
@@ -82,7 +101,10 @@ export default async function BlogPage() {
                 <span className="text-lg font-semibold leading-snug group-hover:underline">
                   {post.title}
                 </span>
-                <span className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+                <span
+                  className="text-sm"
+                  style={{ color: "var(--muted-foreground)" }}
+                >
                   By {post.author.name ?? post.author.email} ·{" "}
                   {new Date(post.createdAt).toLocaleDateString("en-US", {
                     year: "numeric",

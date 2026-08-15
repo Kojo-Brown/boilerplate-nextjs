@@ -87,6 +87,32 @@ Next's cold-cache notice, which describes the runner rather than the code.
 - [ ] Streaming with granular Suspense boundaries and per-segment `loading.tsx` skeletons
 - [ ] `generateStaticParams` + on-demand ISR revalidation webhook
 
+Partial Prerendering is enabled (`cacheComponents: true`) with the tradeoff
+guide in [docs/partial-prerendering.md](./docs/partial-prerendering.md). Six
+routes are fully static, six are a prerendered shell with streamed holes.
+
+`experimental.ppr` no longer exists in Next 16 — it was merged into
+`cacheComponents`, which is typed `boolean` and has **no incremental mode**, so
+there is no per-route opt-in and all 14 routes had to comply at once.
+
+Three items below are affected by the move, and the Phase 5 ISR items are
+redefined by it: `revalidate`/`dynamicParams` are gone from both blog routes in
+favour of `"use cache"` + `cacheLife`/`cacheTag` in `src/lib/cache/blog.ts`, and
+`revalidatePath` is now `updateTag`.
+
+Two defects were found and fixed on the way, both of which had been invisible:
+
+- `src/app/layout.tsx` awaited `auth()`, which reads cookies and made **every**
+  route dynamic. `/blog`'s `export const revalidate = 60` had never taken
+  effect — the Phase 5 ISR items were written but not in force.
+- `(dashboard)/layout.tsx` awaited the session in its body, so the "static
+  shell" for `/posts` was 2,620 bytes containing a `<title>`. Its session read
+  was also the only authorisation check on `/images` and `/upload`, which are
+  absent from `PROTECTED_PREFIXES`; both now guard themselves.
+
+`scripts/assert-route-shape.ts` asserts the route table and the shell contents
+after every CI build, so neither defect can return quietly.
+
 ## Phase 9 — Server Actions & Data Integrity
 
 - [ ] Server Action hardening: origin checks, auth assertion, and Zod input parsing on every action
