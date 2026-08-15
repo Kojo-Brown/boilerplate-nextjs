@@ -244,11 +244,31 @@ jobs:
       - name: Apply schema to the CI database
         run: pnpm exec prisma db push
 
+      # The tables existing is not enough. `app/blog/[slug]` enumerates
+      # published posts in `generateStaticParams`, and an empty database makes
+      # that return `[]` — which builds "successfully" while prerendering
+      # nothing, exactly the silent hole the route-shape gate below now fails
+      # on. Seeding first is what gives the build real rows to enumerate.
+      - name: Seed the CI database
+        run: pnpm db:seed
+
       # Wrapped: `next build` prints deprecation notices (file conventions,
       # config keys) and still exits 0, so a bare `pnpm build` is green on a
       # build that is telling us it is about to break.
       - name: Build
         run: pnpm run strict pnpm build
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
+      # The build exiting 0 says nothing about *how* the routes built. Every
+      # route in this application was server-rendered on demand for weeks while
+      # the spec recorded ISR as done, because a cookie read in the root layout
+      # silently made them all dynamic and no gate looked at the route table.
+      # This reads the prerender manifest the build just wrote and fails if a
+      # route that should be static came out dynamic, or if an ISR route lost
+      # its revalidation window.
+      - name: Assert route shape
+        run: pnpm exec tsx scripts/assert-route-shape.ts
         env:
           NODE_OPTIONS: --throw-deprecation
 

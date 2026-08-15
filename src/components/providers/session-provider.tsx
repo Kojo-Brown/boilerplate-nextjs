@@ -10,7 +10,24 @@ interface SessionProviderProps {
 
 /**
  * Wraps NextAuth's SessionProvider so client components can call `useSession()`.
- * Pass the server-fetched session to avoid an extra round-trip on mount.
+ *
+ * The root layout mounts this **without** a `session`. That is a deliberate
+ * trade, not an oversight. Seeding the provider from the server means awaiting
+ * `auth()` above every route, and because that reads cookies it makes the whole
+ * application dynamic — which is precisely what kept `/blog`'s ISR from ever
+ * engaging. The static shell is worth more than the round trip.
+ *
+ * The round trip is real, though: with no `session` prop NextAuth's provider
+ * calls `/api/auth/session` once on mount (`__NEXTAUTH._session === undefined`
+ * takes the fetch branch in `next-auth/react`), for signed-out visitors too.
+ * Passing a `session` — including an explicit `null` — suppresses that fetch.
+ *
+ * So pass one on a subtree that is already dynamic and already has the session
+ * in hand, where the fetch buys nothing:
+ *
+ * @example
+ * // in a layout that has already awaited getRequiredSession()
+ * <SessionProvider session={session}>{children}</SessionProvider>
  */
 export function SessionProvider({ children, session }: SessionProviderProps) {
   return (
