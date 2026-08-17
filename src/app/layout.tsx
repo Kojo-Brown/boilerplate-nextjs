@@ -29,11 +29,22 @@ export const metadata: Metadata = {
  * `components/providers/session-provider.tsx`. Server components that need the
  * session still read it directly via `getSession()`; they just do it inside a
  * `<Suspense>` boundary of their own rather than at the root of the tree.
+ *
+ * ---
+ *
+ * `modal` is a parallel route slot (`app/@modal`), and it is at the root
+ * because that is where the interception has to be anchored: `@modal` and
+ * `photos` must be siblings for `(.)photos/[id]` to resolve. It renders
+ * `app/@modal/default.tsx` — `null` — on every URL that is not a photo, so it
+ * adds no markup to any other route and none of the static shells changed when
+ * it was introduced. See docs/intercepting-routes.md.
  */
 export default function RootLayout({
   children,
+  modal,
 }: {
   children: React.ReactNode;
+  modal: React.ReactNode;
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
@@ -47,6 +58,7 @@ export default function RootLayout({
           <SessionProvider>
             <QueryProvider>
               {children}
+              {modal}
               <Toaster richColors closeButton />
             </QueryProvider>
           </SessionProvider>

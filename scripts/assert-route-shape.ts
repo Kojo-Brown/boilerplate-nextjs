@@ -114,6 +114,22 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
     revalidateSeconds: 300,
     because: "generateStaticParams must enumerate seeded posts, not return []",
   },
+  {
+    route: "/photos",
+    kind: "static",
+    because:
+      "the gallery reads an in-repo catalogue; a session read in app/photos/layout.tsx would make it dynamic",
+  },
+  {
+    route: "/photos/[id]",
+    kind: "prebuilt",
+    // No window: the catalogue is a module, not a database, so there is
+    // nothing to revalidate against. `false` here is the correct answer, not a
+    // missing one — which is why this expectation omits `revalidateSeconds`
+    // rather than asserting a number.
+    because:
+      "the shareable half of the intercepting-routes pair; a shared link must hit a prebuilt page, not an on-demand render",
+  },
 
   // The Partial Prerendering routes. Each reads the session — that is the hole
   // — but the dashboard chrome around it must prerender. "Sign out" is

@@ -5,7 +5,8 @@ export default function HomePage() {
     <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-8">
       <h1 className="text-4xl font-bold tracking-tight">Next.js Boilerplate</h1>
       <p className="max-w-md text-center text-muted-foreground">
-        Next.js 16 · App Router · TypeScript 6 · TailwindCSS 4 · Prisma 7 · NextAuth v5
+        Next.js 16 · App Router · TypeScript 6 · TailwindCSS 4 · Prisma 7 ·
+        NextAuth v5
       </p>
       <div className="flex flex-wrap justify-center gap-3">
         <Link
@@ -25,6 +26,12 @@ export default function HomePage() {
           className="rounded-lg border px-5 py-2.5 text-sm font-medium"
         >
           Blog (ISR)
+        </Link>
+        <Link
+          href="/photos"
+          className="rounded-lg border px-5 py-2.5 text-sm font-medium"
+        >
+          Photos (intercepting routes)
         </Link>
       </div>
     </main>

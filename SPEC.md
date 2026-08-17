@@ -8,6 +8,36 @@
 - [x] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone — required a full Prisma 7 migration and an ESLint flat config, since there was no ESLint config at all and Next 16 removed `next lint` (PR #18)
 - [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR — green on PR #18 with a Postgres service for the build job
 - [x] Add a CI job matrix covering the supported Node version and fail the build on any warning — lint, typecheck, test, and build run on Node 22 and 24 with `fail-fast: false`; warnings fail via `--strict-peer-dependencies`, `--max-warnings 0`, `NODE_OPTIONS=--throw-deprecation`, and `pnpm run strict` (PR #20)
+- [ ] Compile TailwindCSS: there is no `postcss.config.*`, so `@tailwindcss/postcss` never runs and the application ships **unstyled**
+
+**Phase 0 reopened (2026-08-17, found while building `/photos` in PR #22).**
+The production CSS bundle is 1,103 bytes — the `:root` custom properties from
+`globals.css` and nothing else. Not one Tailwind utility reaches the browser:
+`.flex`, `.absolute`, `.grid-cols-3` and `aspect-ratio` are all absent, so
+every page in the application renders as unstyled block flow. `next build` is
+green, every unit test passes, and the route-shape gate is satisfied, because
+none of them look at the stylesheet.
+
+The cause is that `@tailwindcss/postcss` is in `devDependencies` but is never
+wired up — the repository has no `postcss.config.mjs`, so Next hands
+`@import "tailwindcss"` to Lightning CSS, which resolves it and drops the
+directives it does not understand.
+
+Verified during PR #22: adding
+
+```js
+// postcss.config.mjs
+const config = { plugins: { "@tailwindcss/postcss": {} } };
+export default config;
+```
+
+takes the bundle from 1,103 bytes to 33,686, and the `/photos` grid goes from
+three zero-height boxes with viewport-filling images to a correct three-column
+layout. It was left out of that PR because it restyles all 14 routes and is a
+separate change from the routing item; it belongs here, ahead of feature work.
+Re-check the `shellMustContain` assertions in `scripts/assert-route-shape.ts`
+when landing it, and re-run `e2e/photos.spec.ts` — all seven cases pass against
+a Tailwind-compiled build and cannot pass without one.
 
 Phase 0 items 1-3 complete as of PR #18 (2026-07-30): install
 (`--frozen-lockfile`, zero warnings), lint (0 errors, 0 warnings), format check

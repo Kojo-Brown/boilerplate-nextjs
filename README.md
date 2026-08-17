@@ -107,6 +107,29 @@ prerendering its navigation.
 [docs/partial-prerendering.md](./docs/partial-prerendering.md) has the full
 tradeoff guide and the measurements.
 
+## Routing
+
+`/photos` demonstrates **intercepting routes**: clicking a photo opens it in a
+modal and the URL becomes `/photos/<id>`; reloading that URL, or opening it in
+a new tab, renders a full page instead. Same route, two renderings, chosen by
+how you arrived.
+
+```
+app/@modal/(.)photos/[id]/page.tsx   soft navigation → modal
+app/photos/[id]/page.tsx             hard navigation → full page
+```
+
+The point is that a `useState` dialog has no URL, so it cannot be shared,
+reloaded, or closed with the Back button. Here closing the modal _is_ a
+`router.back()`.
+
+Every way of breaking this is silent — a wrong `(.)` marker, a misplaced
+`@modal`, or a root layout that stops rendering `{modal}` all still compile and
+still serve the right URLs. `src/app/photos/interception.test.ts` asserts the
+wiring for that reason.
+[docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
+walkthrough.
+
 ## CI
 
 Every gate is warning-fatal — a warning fails the job rather than scrolling past:
