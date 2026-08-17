@@ -55,7 +55,7 @@ src/
 │   ├── env.ts           # Zod-validated env vars
 │   └── prisma.ts        # Prisma singleton
 ├── styles/
-│   └── globals.css      # TailwindCSS + design tokens
+│   └── globals.css      # TailwindCSS + design tokens (@theme inline)
 └── types/               # Shared types
 prisma/
 ├── schema.prisma        # User, Account, Session, Post
@@ -129,6 +129,25 @@ still serve the right URLs. `src/app/photos/interception.test.ts` asserts the
 wiring for that reason.
 [docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
 walkthrough.
+
+## Styling
+
+TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`
+in `src/styles/globals.css` as ordinary CSS custom properties, and an
+`@theme inline` block publishes them into Tailwind's colour namespace so
+`bg-primary`, `text-muted-foreground` and `ring-border` generate.
+
+`postcss.config.mjs` is the whole switch, and it is worth knowing why it has a
+section here. Without it Next never runs PostCSS: it hands stylesheets to
+Lightning CSS, which resolves `@import "tailwindcss"` and drops every directive
+it does not understand. No error, no warning — just a 1,103-byte stylesheet and
+14 unstyled routes, which is how this repository shipped for six weeks with
+every check green.
+
+`pnpm exec tsx scripts/assert-css-output.ts` runs in CI after the build and
+fails if the emitted CSS is missing its utilities or still carries Tailwind's
+own at-rules. [docs/styling.md](./docs/styling.md) has the token conventions and
+the full account of the failure.
 
 ## CI
 
