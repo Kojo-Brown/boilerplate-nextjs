@@ -110,7 +110,7 @@ Next's cold-cache notice, which describes the runner rather than the code.
 ## Phase 8 — Advanced App Router
 
 - [x] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide — enabled via `cacheComponents` (there is no `experimental.ppr` in Next 16 and no incremental mode); found and fixed two invisible defects on the way, the root layout's `auth()` making every route dynamic and the dashboard layout's session read reducing its "static shell" to a `<title>` (PR #21)
-- [ ] Intercepting routes for a modal photo/detail view with a shareable URL
+- [x] Intercepting routes for a modal photo/detail view with a shareable URL — `@modal/(.)photos/[id]` renders a dialog on a soft navigation, `photos/[id]` renders a full page on a hard one; closing the modal is `router.back()`, not local state. Verified in a real browser (7/7 in `e2e/photos.spec.ts`), which is where the missing Tailwind build was found (PR #22)
 - [ ] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route
 - [ ] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations
 - [ ] Draft mode for CMS preview with signed preview tokens
