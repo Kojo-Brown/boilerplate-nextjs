@@ -8,7 +8,7 @@
 - [x] Get `install`, `typecheck`, `lint`, `test`, and `build` all passing locally from a clean clone — required a full Prisma 7 migration and an ESLint flat config, since there was no ESLint config at all and Next 16 removed `next lint` (PR #18)
 - [x] Promote `workflow-templates/ci.yml` to `.github/workflows/ci.yml` and confirm it runs green on a PR — green on PR #18 with a Postgres service for the build job
 - [x] Add a CI job matrix covering the supported Node version and fail the build on any warning — lint, typecheck, test, and build run on Node 22 and 24 with `fail-fast: false`; warnings fail via `--strict-peer-dependencies`, `--max-warnings 0`, `NODE_OPTIONS=--throw-deprecation`, and `pnpm run strict` (PR #20)
-- [ ] Compile TailwindCSS: there is no `postcss.config.*`, so `@tailwindcss/postcss` never runs and the application ships **unstyled**
+- [x] Compile TailwindCSS: there is no `postcss.config.*`, so `@tailwindcss/postcss` never runs and the application ships **unstyled** — `postcss.config.mjs` added; the bundle goes 1,103 → 34,240 bytes. With Tailwind actually running, three `@utility` rules turned out to have been reaching for something they could not express (`@utility primary` defines `.primary`, not `bg-primary`), so `bg-primary`, `text-primary-foreground`, `text-muted-foreground`, `bg-muted`/`hover:bg-muted` and `ring-border` still compiled to nothing across the landing page, both auth forms, the toast demo and the avatar; an `@theme inline` block publishing the existing tokens into Tailwind's `--color-*` namespace replaces them, verified in a browser to follow the `.dark` override. `scripts/assert-css-output.ts` now reads the built stylesheet in CI — checked against the failure it names by moving the config aside and rebuilding: `next build` exited 0, the gate exited 1 with 13 violations. The `/photos` grid measures three columns at 1280px, two at 700px, one at 500px, at a 3/2 aspect ratio; all 7 `e2e/photos.spec.ts` cases pass and the `shellMustContain` assertions were unaffected (PR #23)
 
 **Phase 0 reopened (2026-08-17, found while building `/photos` in PR #22).**
 The production CSS bundle is 1,103 bytes — the `:root` custom properties from
@@ -52,6 +52,13 @@ moved off the deprecated `environmentMatchGlobs` onto named `dom`/`node`
 projects. `pnpm run strict <cmd>` wraps commands that print warnings and still
 exit 0; the build job now caches `.next/cache`.
 
+**Phase 0 closed again as of PR #23 (2026-08-17).** Twelve checks green on both
+Node majors. The reopened item is fixed and, more to the point, is now checked:
+`scripts/assert-css-output.ts` reads the stylesheet the build wrote, so the
+class of failure that produced a green build and an unstyled application cannot
+recur silently. That gate was itself verified against the failure it names
+rather than only against a passing build.
+
 Known gaps carried into Phase 1: Prettier has never run repo-wide (~79
 pre-existing offenders, so `format:check` gates only changed files); Playwright
 E2E is still not wired into CI; there is no migrations directory, so CI uses
@@ -80,6 +87,7 @@ Next's cold-cache notice, which describes the runner rather than the code.
 - [x] Dark mode via `next-themes` with CSS variables
 - [x] Toast notifications (Sonner)
 - [x] Responsive nav layout with mobile drawer
+- [ ] Style the blog post body: `app/blog/[slug]/page.tsx` applies `prose prose-neutral`, but `@tailwindcss/typography` is not a dependency, so both classes compile to nothing and the post body renders with default paragraph spacing. Found while landing PR #23 and left out of it deliberately — adding a plugin is a dependency decision, not part of getting Tailwind to run. It is the one place the application is still knowingly unstyled.
 
 ## Phase 4 — Data Layer
 
