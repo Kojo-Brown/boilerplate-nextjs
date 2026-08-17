@@ -44,6 +44,11 @@ vi.mock("next/cache", () => ({
   unstable_cache: vi.fn((fn: unknown) => fn),
 }));
 
+// The real `next/image` consumes several props and never forwards them to the
+// DOM. The mock has to do the same: React logs "Received `true` for a
+// non-boolean attribute `fill`" and "does not recognize the `blurDataURL`
+// prop" for every one it leaks, which buries real failures under warnings that
+// describe the mock rather than the component.
 vi.mock("next/image", () => ({
   default: ({
     src,
@@ -52,6 +57,12 @@ vi.mock("next/image", () => ({
     height,
     className,
     priority: _priority,
+    fill,
+    placeholder: _placeholder,
+    blurDataURL: _blurDataURL,
+    quality: _quality,
+    loader: _loader,
+    unoptimized: _unoptimized,
     ...rest
   }: {
     src: string;
@@ -60,6 +71,23 @@ vi.mock("next/image", () => ({
     height?: number;
     className?: string;
     priority?: boolean;
+    fill?: boolean;
+    placeholder?: string;
+    blurDataURL?: string;
+    quality?: number;
+    loader?: unknown;
+    unoptimized?: boolean;
     [key: string]: unknown;
-  }) => createElement("img", { src, alt, width, height, className, ...rest }),
+  }) =>
+    createElement("img", {
+      src,
+      alt,
+      width,
+      height,
+      className,
+      // Surfaced as a data attribute rather than dropped, so a test can still
+      // tell a `fill` image from a sized one.
+      ...(fill && { "data-fill": "true" }),
+      ...rest,
+    }),
 }));

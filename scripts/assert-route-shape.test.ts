@@ -31,13 +31,26 @@ function goodManifest(): PrerenderManifest {
         initialRevalidateSeconds: 300,
         srcRoute: "/blog/[slug]",
       },
+      "/photos": { initialRevalidateSeconds: false, srcRoute: "/photos" },
+      "/photos/mountain-golden-hour": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/photos/[id]",
+      },
+      "/photos/ocean-at-sunset": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/photos/[id]",
+      },
+      "/photos/stars-over-the-range": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/photos/[id]",
+      },
       "/dashboard": { initialRevalidateSeconds: false, srcRoute: "/dashboard" },
       "/posts": { initialRevalidateSeconds: false, srcRoute: "/posts" },
       "/admin": { initialRevalidateSeconds: false, srcRoute: "/admin" },
       "/images": { initialRevalidateSeconds: false, srcRoute: "/images" },
       "/upload": { initialRevalidateSeconds: false, srcRoute: "/upload" },
     },
-    dynamicRoutes: { "/blog/[slug]": {} },
+    dynamicRoutes: { "/blog/[slug]": {}, "/photos/[id]": {} },
   };
 }
 
@@ -276,6 +289,26 @@ describe("EXPECTED_ROUTES", () => {
   it("lists no route twice", () => {
     const routes = EXPECTED_ROUTES.map((e) => e.route);
     expect(new Set(routes).size).toBe(routes.length);
+  });
+
+  it("covers both halves of the intercepting-routes pair", () => {
+    // The modal at `@modal/(.)photos/[id]` has no URL of its own, so it can
+    // never appear in the prerender manifest. What this gate can protect is
+    // the route it shadows: if `/photos/[id]` stops being prebuilt, a shared
+    // link becomes an on-demand render of static data.
+    const routes = EXPECTED_ROUTES.map((e) => e.route);
+    expect(routes).toContain("/photos");
+    expect(routes).toContain("/photos/[id]");
+  });
+
+  it("asks for no revalidation window on the photo routes", () => {
+    // The catalogue is a module. Asserting a window here would fail every
+    // build, and adding one to the source would be inventing a TTL for data
+    // that only changes when the code does.
+    for (const route of ["/photos", "/photos/[id]"]) {
+      const expectation = EXPECTED_ROUTES.find((e) => e.route === route);
+      expect(expectation?.revalidateSeconds).toBeUndefined();
+    }
   });
 });
 
