@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export const metadata: Metadata = {
   title: { default: "Photos", template: "%s | Photos" },
@@ -44,6 +45,7 @@ export default function PhotosLayout({
             >
               ← Home
             </Link>
+            <ThemeToggle className="ml-auto" />
           </nav>
         </div>
       </header>

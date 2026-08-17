@@ -1,8 +1,16 @@
 import Link from "next/link";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export default function HomePage() {
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-8">
+    <main className="relative flex min-h-screen flex-col items-center justify-center gap-6 p-8">
+      {/*
+        The landing page renders directly under the root layout — there is no
+        shell between them — so the toggle is mounted here rather than inherited.
+        This is the application's front door; a visitor who arrives in the wrong
+        theme should not have to navigate into `/blog` to fix it.
+      */}
+      <ThemeToggle className="absolute top-4 right-4" />
       <h1 className="text-4xl font-bold tracking-tight">Next.js Boilerplate</h1>
       <p className="max-w-md text-center text-muted-foreground">
         Next.js 16 · App Router · TypeScript 6 · TailwindCSS 4 · Prisma 7 ·
