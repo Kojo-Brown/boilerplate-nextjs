@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* `app/blog/[slug]` has applied `prose prose-neutral` since Phase 3 while the
+   plugin that defines those classes was not a dependency, so both compiled to
+   nothing and the post body rendered with the browser's default paragraph
+   spacing. This is the second half of the same mistake `postcss.config.mjs`
+   fixed: a class name that looks like it is doing something, with nothing
+   behind it. `.prose` is asserted in `scripts/assert-css-output.ts` so the
+   plugin cannot go missing again quietly. */
+@plugin "@tailwindcss/typography";
+
 @layer base {
   :root {
     --primary: oklch(55% 0.2 250);
@@ -53,4 +62,60 @@
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-border: var(--border);
+}
+
+/* The typography plugin's colour theme, bound to the design tokens above.
+
+   `prose-neutral` — which the blog post page named — could not have worked
+   here, and neither could the usual `dark:prose-invert` alongside it. Both
+   ship fixed palette values: `prose-neutral` paints the body `neutral-700`
+   and `prose-invert` paints it `slate-300`, neither of which is
+   `--foreground`, so the post body would have drifted from every other
+   surface in the application the first time a token moved. Worse, the `dark:`
+   variant in this project does not track the theme at all: `next-themes` is
+   configured with `attribute="class"` and toggles `.dark`, while Tailwind v4's
+   built-in `dark:` still resolves to `prefers-color-scheme`. A
+   `dark:prose-invert` would follow the operating system and ignore the theme
+   toggle — an unlit second copy of the bug this replaces. (That mismatch is
+   real for the `dark:bg-*` utilities scattered through the components too, and
+   is not this change's to fix; it is recorded in SPEC.md.)
+
+   Reading the tokens through `var()` sidesteps the variant question entirely.
+   `.dark` reassigns `--foreground` and friends, and because these are `var()`
+   references rather than resolved colours, prose re-reads them and follows the
+   toggle with no dark-mode rule of its own.
+
+   `.prose-app` and `.prose` are both single class selectors, and both come out
+   inside `@layer utilities` — the plugin registers `.prose` through
+   `addComponents`, but Tailwind v4 emits an empty `@layer components;` and
+   folds the rules in with the utilities. So neither specificity nor layer
+   order separates them: this wins only because it is emitted later, which is
+   a property of the build rather than of anything written here. Rather than
+   trust that, `scripts/assert-css-output.ts` reads the built stylesheet and
+   fails if `.prose-app` stops following `.prose` — see REQUIRED_OVERRIDES. */
+@utility prose-app {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--foreground);
+  --tw-prose-lead: var(--muted-foreground);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--muted-foreground);
+  --tw-prose-bullets: var(--muted-foreground);
+  --tw-prose-hr: var(--border);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--border);
+  --tw-prose-captions: var(--muted-foreground);
+  --tw-prose-kbd: var(--foreground);
+  /* Consumed as a bare colour in a `box-shadow`, not as an `rgb()` channel
+     triple, so a `color-mix` is a legal value here. */
+  --tw-prose-kbd-shadows: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-pre-bg: var(--muted);
+  --tw-prose-th-borders: var(--border);
+  --tw-prose-td-borders: var(--border);
 }

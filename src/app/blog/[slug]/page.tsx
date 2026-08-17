@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getPublishedPosts } from "@/lib/dal/posts";
 import { getCachedPost } from "@/lib/cache/blog";
+import { toParagraphs } from "@/lib/prose";
 import { IsrBadge } from "../_components/isr-badge";
 import { RevalidateButton } from "../_components/revalidate-button";
 
@@ -50,6 +51,8 @@ export default async function BlogPostPage({
   const { data: post, renderedAt } = await getCachedPost(slug);
 
   if (!post || !post.published) notFound();
+
+  const paragraphs = toParagraphs(post.content);
 
   return (
     <article className="flex flex-col gap-8">
@@ -124,9 +127,22 @@ export default async function BlogPostPage({
         .
       </div>
 
-      <div className="prose prose-neutral max-w-none">
-        {post.content ? (
-          <p className="leading-relaxed whitespace-pre-wrap">{post.content}</p>
+      {/* `prose-app` binds the plugin's colours to the design tokens — see the
+          block of the same name in `globals.css`. It replaces `prose-neutral`,
+          which named a fixed grey palette rather than this application's.
+          `max-w-none` is deliberate: prose's own 65ch measure would be a
+          second, narrower column inside the layout's `max-w-3xl`, which
+          already sets the reading width. */}
+      <div className="prose prose-app max-w-none">
+        {paragraphs.length > 0 ? (
+          paragraphs.map((paragraph, index) => (
+            // Index keys are safe here and nowhere near a form: the list is
+            // derived fresh from `post.content` on every render, never
+            // reordered, and holds no state to mis-associate.
+            <p key={index} className="whitespace-pre-wrap">
+              {paragraph}
+            </p>
+          ))
         ) : (
           <p className="italic" style={{ color: "var(--muted-foreground)" }}>
             No content yet.

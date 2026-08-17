@@ -46,10 +46,12 @@ export interface Violation {
  *
  * They are chosen to span the parts of the compiler that fail independently:
  * a core utility, the grid and positioning families the `/photos` gallery
- * needs, an arbitrary value, a responsive variant, a state variant, and the
- * `@theme inline` colours. Losing the `@theme` block, for instance, breaks
- * only the last group — `flex` would still compile and a size floor alone
- * would never notice.
+ * needs, an arbitrary value, a responsive variant, a state variant, the
+ * `@theme inline` colours, and the typography plugin. Losing the `@theme`
+ * block, for instance, breaks only that one group — `flex` would still compile
+ * and a size floor alone would never notice. The plugin is the same story one
+ * level up: `@plugin "@tailwindcss/typography"` is a single line that every
+ * other check in this file survives without.
  */
 export const REQUIRED_UTILITIES: readonly {
   utility: string;
@@ -92,6 +94,44 @@ export const REQUIRED_UTILITIES: readonly {
     utility: "ring-border",
     because:
       "the `@theme inline` colour namespace applied through a non-colour property",
+  },
+  {
+    utility: "prose",
+    because:
+      '`@plugin "@tailwindcss/typography"`; the blog post body is unstyled without it, ' +
+      "which is exactly the state it shipped in for the weeks the plugin was named but not installed",
+  },
+  {
+    utility: "prose-app",
+    because:
+      "the `@utility prose-app` block binding prose's colours to the design tokens; " +
+      "without it the post body keeps the plugin's fixed greys and stops following the theme toggle",
+  },
+];
+
+/**
+ * One utility that must be emitted after another, because it overrides it.
+ *
+ * The cascade normally settles these questions with specificity or layer
+ * order, and when it does there is nothing here to assert. This list is for
+ * the cases where it does not: two single-class selectors in the same layer,
+ * where the only thing deciding the winner is which one the compiler wrote
+ * second. That is a property of the build, not of the stylesheet, and it
+ * changes without anyone editing CSS.
+ */
+export const REQUIRED_OVERRIDES: readonly {
+  utility: string;
+  after: string;
+  because: string;
+}[] = [
+  {
+    utility: "prose-app",
+    after: "prose",
+    because:
+      "`@utility prose-app` re-points prose's `--tw-prose-*` variables at the design tokens, and " +
+      "both it and the plugin's `.prose` are single class selectors inside `@layer utilities` — " +
+      "emission order is the whole of its precedence. Emitted first instead, the post body silently " +
+      "reverts to the plugin's fixed greys and stops following the theme toggle, with no other gate affected",
   },
 ];
 
@@ -137,11 +177,23 @@ export const MINIMUM_BUNDLE_BYTES = 15_000;
  * pseudo-class, or the start of a compound selector.
  */
 export function hasRule(css: string, utility: string): boolean {
+  return ruleIndices(css, utility).length > 0;
+}
+
+/**
+ * Every offset at which `utility` heads a selector, in emission order.
+ *
+ * Offsets are into the *unescaped* copy of the stylesheet, so they are only
+ * ever meaningful against other offsets from the same call site — which is all
+ * the override check compares.
+ */
+export function ruleIndices(css: string, utility: string): number[] {
   const unescaped = css.replaceAll("\\", "");
   const pattern = new RegExp(
     escapeRegExp(`.${utility}`) + String.raw`(?=[,{:>~+\s.\[])`,
+    "g",
   );
-  return pattern.test(unescaped);
+  return [...unescaped.matchAll(pattern)].map((match) => match.index);
 }
 
 function escapeRegExp(value: string): string {
@@ -161,6 +213,11 @@ export function checkCssOutput(
     utility: string;
     because: string;
   }[] = REQUIRED_UTILITIES,
+  overrides: readonly {
+    utility: string;
+    after: string;
+    because: string;
+  }[] = REQUIRED_OVERRIDES,
 ): Violation[] {
   const violations: Violation[] = [];
 
@@ -210,7 +267,71 @@ export function checkCssOutput(
     }
   }
 
+  violations.push(...checkOverrideOrder(stylesheets, overrides));
+
   return violations;
+}
+
+/**
+ * Checks that each override is emitted after the rule it overrides.
+ *
+ * Both rules have to be in the same stylesheet for the question to have an
+ * answer: two files are applied in the order the document links them, which
+ * this script cannot see. In practice the build emits one stylesheet, so
+ * finding them apart means something about the output changed shape and the
+ * precedence is no longer being checked at all — reported rather than passed
+ * over, since a gate that quietly stops looking is how the CSS got here.
+ *
+ * Both offsets come from the last occurrence of each selector. A utility can
+ * head more than one rule — `.prose` also opens the descendant selectors that
+ * style its children — and it is the last of them that a later rule has to
+ * beat.
+ */
+export function checkOverrideOrder(
+  stylesheets: readonly Stylesheet[],
+  overrides: readonly {
+    utility: string;
+    after: string;
+    because: string;
+  }[] = REQUIRED_OVERRIDES,
+): Violation[] {
+  const violations: Violation[] = [];
+
+  for (const { utility, after, because } of overrides) {
+    const sheet = stylesheets.find(
+      (candidate) =>
+        hasRule(candidate.css, utility) && hasRule(candidate.css, after),
+    );
+
+    if (!sheet) {
+      violations.push({
+        problem:
+          `no single stylesheet carries both \`.${utility}\` and \`.${after}\`, ` +
+          "so which one wins cannot be determined from the output.",
+        because,
+      });
+      continue;
+    }
+
+    const overrideAt = lastIndexOfRule(sheet.css, utility);
+    const overriddenAt = lastIndexOfRule(sheet.css, after);
+
+    if (overrideAt < overriddenAt) {
+      violations.push({
+        problem:
+          `${sheet.file} emits \`.${utility}\` before \`.${after}\`, so \`.${after}\` wins. ` +
+          "Equal specificity, same cascade layer — the later rule is the one that applies.",
+        because,
+      });
+    }
+  }
+
+  return violations;
+}
+
+function lastIndexOfRule(css: string, utility: string): number {
+  const indices = ruleIndices(css, utility);
+  return indices[indices.length - 1] ?? -1;
 }
 
 /**
@@ -276,7 +397,8 @@ function main(argv: readonly string[]): number {
   );
   console.log(
     `CSS output OK — ${bytes} bytes across ${stylesheets.length} stylesheet(s), ` +
-      `${REQUIRED_UTILITIES.length} required utilities present.`,
+      `${REQUIRED_UTILITIES.length} required utilities present, ` +
+      `${REQUIRED_OVERRIDES.length} override(s) in the right order.`,
   );
   return 0;
 }

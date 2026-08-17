@@ -34,7 +34,8 @@ Adding [`postcss.config.mjs`](../postcss.config.mjs) takes the same bundle to
 
 ```
 postcss.config.mjs          registers @tailwindcss/postcss — the switch
-src/styles/globals.css      @import "tailwindcss", tokens, @theme inline
+src/styles/globals.css      @import "tailwindcss", tokens, @theme inline,
+                              @plugin typography, @utility prose-app
 scripts/assert-css-output.ts  CI gate: reads the built CSS, fails if empty
 ```
 
@@ -82,6 +83,51 @@ for `bg-muted`, the avatar for `ring-border`. All of them were requesting
 utilities that had never existed — invisible for as long as no utility compiled
 at all.
 
+### Long-form text: `prose prose-app`
+
+`@tailwindcss/typography` supplies `prose`, which styles a block of ordinary
+HTML — paragraph rhythm, measure, list markers, code and table treatment —
+without a class on every element. `app/blog/[slug]` is the one place that needs
+it.
+
+The plugin ships fixed palettes (`prose-neutral` paints the body `neutral-700`,
+`prose-invert` paints it `slate-300`). Neither is `--foreground`, so both would
+drift from the rest of the application the first time a token moved.
+`@utility prose-app` in `globals.css` re-points every `--tw-prose-*` variable
+at the design tokens instead:
+
+```css
+@utility prose-app {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-links: var(--primary);
+  /* … */
+}
+```
+
+Use it as `class="prose prose-app"`. Add `max-w-none` where a layout already
+sets the reading width, or prose's own 65ch becomes a second, narrower column
+inside it.
+
+**Do not reach for `dark:prose-invert`.** `next-themes` runs with
+`attribute="class"` and toggles `.dark`, while Tailwind v4's built-in `dark:`
+variant still resolves to `prefers-color-scheme` — so a `dark:` utility here
+follows the operating system and ignores the theme toggle. Reading tokens
+through `var()` avoids the question: `.dark` reassigns `--foreground`, and
+because `prose-app` holds `var()` references rather than resolved colours,
+prose re-reads them and follows the toggle with no dark-mode rule at all.
+
+That `dark:` mismatch is not confined to prose — `dark:bg-green-950` and
+similar appear in `toast-demo`, `image-upload`, `post-card` and
+`posts-manager`, and all of them track the OS rather than the toggle. Fixing it
+means declaring `@custom-variant dark (&:where(.dark, .dark *))`, which changes
+behaviour across those components; it is tracked in `SPEC.md` rather than
+folded in here.
+
+`prose-app` and the plugin's `.prose` are both single class selectors emitted
+into `@layer utilities`, so neither specificity nor layer order decides between
+them — `prose-app` wins only because the compiler emits it second. The CSS gate
+asserts that ordering (see below) rather than trusting it.
+
 ## Writing styles here
 
 - Reach for the semantic utility (`bg-muted`, `text-muted-foreground`) in
@@ -108,12 +154,17 @@ the build actually wrote under `.next/static` and fails if:
 - a `@tailwind`, `@utility`, `@theme`, `@apply`, `@source` or `@custom-variant`
   at-rule survived into the output — the precise fingerprint of the original
   bug;
-- any of eleven required utilities is missing. They span the families that fail
-  independently — a core utility, grid and positioning, an arbitrary value, a
-  responsive variant, a state variant, and the `@theme inline` colours. Deleting
-  the `@theme` block costs about 200 bytes and leaves `flex` intact, so a size
-  check alone would not see it; the three colour entries are there for that
-  case.
+- any of thirteen required utilities is missing. They span the families that
+  fail independently — a core utility, grid and positioning, an arbitrary value,
+  a responsive variant, a state variant, the `@theme inline` colours, and the
+  typography plugin. Deleting the `@theme` block costs about 200 bytes and
+  leaves `flex` intact, so a size check alone would not see it; the three colour
+  entries are there for that case, and `prose` / `prose-app` for the equivalent
+  one line up, where dropping `@plugin "@tailwindcss/typography"` leaves every
+  other check satisfied;
+- `.prose-app` stops being emitted after `.prose`. Same-layer, same-specificity
+  rules are decided by emission order alone, so the token bindings would lose
+  to the plugin's fixed greys with nothing else changing.
 
 Every required utility is one this application genuinely uses, because Tailwind
 generates on demand — requiring a class nothing references would fail a
@@ -121,13 +172,15 @@ perfectly healthy build.
 
 The gate was verified the only way that means anything: `postcss.config.mjs`
 was moved aside, the project rebuilt, and the build again exited 0 while the
-gate exited 1 with 13 violations.
+gate exited 1 with 13 violations. The typography entries were verified the same
+way — deleting the `@plugin` line and rebuilding leaves `next build` at exit 0
+and fails the gate on `.prose`.
 
-## Known gap
+## Known gaps
 
-`src/app/blog/[slug]/page.tsx` applies `prose prose-neutral` to the post body.
-Those classes come from `@tailwindcss/typography`, which is not a dependency,
-so they still compile to nothing and the post body renders with unstyled
-paragraph spacing. Adding the plugin is a dependency decision rather than part
-of getting Tailwind to run, so it is left as a follow-up rather than folded in
-here — it is the one place the application is still unstyled on purpose.
+- The `dark:` variant does not track the theme toggle; see the note under
+  `prose prose-app` above.
+- Nothing renders markdown. `Post.content` is plain text from a `<textarea>`,
+  and `toParagraphs` in `@/lib/prose` splits it on blank lines so `prose` has
+  real paragraphs to space. An author's `#` or `*` stays literal, which is the
+  honest reading of a plain-text column.
