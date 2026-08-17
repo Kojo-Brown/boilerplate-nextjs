@@ -2,13 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   FORBIDDEN_AT_RULES,
   MINIMUM_BUNDLE_BYTES,
+  REQUIRED_CLASS_KEYED_DARK,
   REQUIRED_OVERRIDES,
   REQUIRED_UTILITIES,
   checkCssOutput,
+  checkDarkVariant,
   checkOverrideOrder,
   formatViolations,
   hasRule,
+  headsSelector,
   ruleIndices,
+  scanRules,
+  splitSelectorList,
   type Stylesheet,
 } from "./assert-css-output";
 
@@ -40,7 +45,7 @@ const BROKEN_BUNDLE =
 function healthyStylesheet(): Stylesheet {
   return {
     file: "static/chunks/app.css",
-    css: rulesFor(REQUIRED_UTILITIES) + FILLER,
+    css: rulesFor(REQUIRED_UTILITIES) + classKeyedDarkRules() + FILLER,
   };
 }
 
@@ -49,6 +54,43 @@ function rulesFor(utilities: readonly { utility: string }[]): string {
   return utilities
     .map(({ utility }) => `.${escapeSelector(utility)}{color:red}`)
     .join("");
+}
+
+/**
+ * The `dark:` utilities as a healthy build writes them: keyed on the class,
+ * with the `:where()` condition Tailwind appends before the rest of the
+ * variant chain.
+ *
+ * Written with the compiler's minified spacing (`.dark,.dark *`) rather than
+ * the spacing of the `@custom-variant` declaration in `globals.css`
+ * (`.dark, .dark *`), because that is the form the gate actually reads — and
+ * a fixture that used the source spelling would not prove the gate tolerates
+ * the emitted one.
+ */
+function classKeyedDarkRules(
+  utilities: readonly { utility: string }[] = REQUIRED_CLASS_KEYED_DARK,
+): string {
+  return utilities
+    .map(({ utility }) => {
+      // `dark:hover:bg-*` compiles with the `:hover` after the condition, so
+      // the fixture puts it there too.
+      const trailing = utility.includes("hover:") ? ":hover" : "";
+      return `.${escapeSelector(utility)}:where(.dark,.dark *)${trailing}{color:red}`;
+    })
+    .join("");
+}
+
+/** The same utilities as Tailwind's built-in variant writes them: media-guarded. */
+function mediaGuardedDarkRules(
+  utilities: readonly { utility: string }[] = REQUIRED_CLASS_KEYED_DARK,
+): string {
+  const rules = utilities
+    .map(({ utility }) => {
+      const trailing = utility.includes("hover:") ? ":hover" : "";
+      return `.${escapeSelector(utility)}${trailing}{color:red}`;
+    })
+    .join("");
+  return `@media (prefers-color-scheme:dark){${rules}}`;
 }
 
 /**
@@ -146,7 +188,10 @@ describe("checkCssOutput", () => {
     );
 
     const violations = checkCssOutput([
-      { file: "static/chunks/app.css", css: themeless + FILLER },
+      {
+        file: "static/chunks/app.css",
+        css: themeless + classKeyedDarkRules() + FILLER,
+      },
     ]);
 
     // Exactly the three colour utilities, and nothing about the bundle size —
@@ -203,6 +248,7 @@ describe("checkCssOutput", () => {
         [{ file: "a.css", css: ".flex{display:flex}".padEnd(20_000, " ") }],
         [{ utility: "flex", because: "the only one under test" }],
         [],
+        [],
       ),
     ).toEqual([]);
   });
@@ -214,12 +260,304 @@ describe("checkCssOutput", () => {
     const violations = checkCssOutput(
       [{ file: "a.css", css: inverted.padEnd(20_000, " ") }],
       [],
+      REQUIRED_OVERRIDES,
+      [],
     );
 
     expect(violations).toHaveLength(1);
     expect(violations[0]?.problem).toContain(
       "emits `.prose-app` before `.prose`",
     );
+  });
+
+  it("checks the `dark:` variant as part of the whole-bundle pass", () => {
+    // Same argument as the override case above: reached through
+    // `checkCssOutput` or CI never runs it. The bundle here is otherwise
+    // healthy — every required utility present, comfortably over the floor,
+    // no forbidden at-rule — and differs from a good one only in the condition
+    // the `dark:` rules are emitted under. That is the whole regression.
+    const violations = checkCssOutput([
+      {
+        file: "static/chunks/app.css",
+        css: rulesFor(REQUIRED_UTILITIES) + mediaGuardedDarkRules() + FILLER,
+      },
+    ]);
+
+    expect(violations).toHaveLength(REQUIRED_CLASS_KEYED_DARK.length);
+    expect(
+      violations.every((v) => v.problem.includes("prefers-color-scheme")),
+    ).toBe(true);
+  });
+});
+
+describe("scanRules", () => {
+  it("records a rule with no enclosing at-rule", () => {
+    expect(scanRules(".flex{display:flex}")).toEqual([
+      { selector: ".flex", atRules: [] },
+    ]);
+  });
+
+  it("records the at-rules enclosing a rule, outermost first", () => {
+    const rules = scanRules(
+      "@layer utilities{@media (prefers-color-scheme:dark){.dark\\:bg-red-950{color:red}}}",
+    );
+
+    expect(rules).toEqual([
+      {
+        selector: ".dark\\:bg-red-950",
+        atRules: ["@layer utilities", "@media (prefers-color-scheme:dark)"],
+      },
+    ]);
+  });
+
+  it("pops an at-rule when its block closes, so siblings are not tainted", () => {
+    // The failure this guards: if the media query stayed on the stack, the
+    // rule after it would be reported as media-guarded and the gate would
+    // fail a perfectly good build.
+    const rules = scanRules(
+      "@media (prefers-color-scheme:dark){.a{color:red}}.b{color:blue}",
+    );
+
+    expect(rules).toEqual([
+      { selector: ".a", atRules: ["@media (prefers-color-scheme:dark)"] },
+      { selector: ".b", atRules: [] },
+    ]);
+  });
+
+  it("handles the nested `@supports` Tailwind emits for an opacity modifier", () => {
+    // `bg-red-950/20` compiles to a hex fallback plus a `color-mix` inside
+    // `@supports`, so the same selector legitimately appears twice — once at
+    // the layer's top level and once two at-rules deep.
+    const rules = scanRules(
+      "@layer utilities{.o{background-color:#4608}" +
+        "@supports (color:color-mix(in lab, red, red)){.o{background-color:color-mix(in oklab,red 20%,transparent)}}}",
+    );
+
+    expect(rules.map((r) => r.atRules.length)).toEqual([1, 2]);
+  });
+
+  it("does not treat a statement at-rule as an open block", () => {
+    // Tailwind emits a bare `@layer components;` before the utilities. Read as
+    // a block, it would swallow every rule after it into a phantom frame.
+    const rules = scanRules("@layer components;.flex{display:flex}");
+    expect(rules).toEqual([{ selector: ".flex", atRules: [] }]);
+  });
+
+  it("is not unbalanced by a brace inside a string", () => {
+    const rules = scanRules('.a:before{content:"{"}.b{color:red}');
+    expect(rules.map((r) => r.selector)).toEqual([".a:before", ".b"]);
+  });
+
+  it("ignores declarations, which end at a semicolon", () => {
+    const rules = scanRules(":root{--a:1;--b:2}.flex{display:flex}");
+    expect(rules.map((r) => r.selector)).toEqual([":root", ".flex"]);
+  });
+});
+
+describe("splitSelectorList", () => {
+  it("splits on top-level commas", () => {
+    expect(splitSelectorList(".a, .b")).toEqual([".a", ".b"]);
+  });
+
+  it("keeps a comma inside `:where()` with its selector", () => {
+    // The condition this file checks for contains a comma of its own; a naive
+    // split would cut `:where(.dark, .dark *)` in half and match neither side.
+    expect(splitSelectorList(".x:where(.dark, .dark *)")).toEqual([
+      ".x:where(.dark, .dark *)",
+    ]);
+  });
+
+  it("keeps a comma inside an attribute selector", () => {
+    expect(splitSelectorList('.x[data-a="1,2"], .y')).toEqual([
+      '.x[data-a="1,2"]',
+      ".y",
+    ]);
+  });
+});
+
+describe("headsSelector", () => {
+  it("matches the utility a rule is built on", () => {
+    expect(
+      headsSelector(
+        ".dark\\:bg-red-950:where(.dark,.dark *)",
+        "dark:bg-red-950",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match an opacity-modified sibling", () => {
+    // `dark:bg-red-950` and `dark:bg-red-950/20` are different utilities with
+    // different values, and both exist in this codebase. Conflating them would
+    // let a requirement for one be satisfied by the other's rule — including
+    // its conditions, which is the thing being checked.
+    expect(
+      headsSelector(
+        ".dark\\:bg-red-950\\/20:where(.dark,.dark *)",
+        "dark:bg-red-950",
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a longer utility that merely starts the same", () => {
+    expect(headsSelector(".bg-red-9500", "bg-red-950")).toBe(false);
+  });
+
+  it("matches a utility anywhere in a selector list, not just the first", () => {
+    expect(headsSelector(".other, .flex:where(.dark,.dark *)", "flex")).toBe(
+      true,
+    );
+  });
+
+  it("does not match a utility used only as an ancestor", () => {
+    // `hasRule` accepts this — it asks whether the utility appears at all.
+    // This asks whether *this* rule is the one generated for it, because the
+    // rule's conditions are about to be attributed to that utility.
+    expect(headsSelector(".dark .bg-muted", "bg-muted")).toBe(false);
+  });
+});
+
+describe("checkDarkVariant", () => {
+  const ONE = [
+    {
+      utility: "dark:bg-red-950/20",
+      because: "the only one under test",
+    },
+  ];
+
+  it("passes a class-keyed rule", () => {
+    expect(
+      checkDarkVariant([{ file: "a.css", css: classKeyedDarkRules(ONE) }], ONE),
+    ).toEqual([]);
+  });
+
+  it("rejects the media-guarded rule Tailwind's built-in variant emits", () => {
+    const violations = checkDarkVariant(
+      [{ file: "a.css", css: mediaGuardedDarkRules(ONE) }],
+      ONE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("a.css");
+    expect(violations[0]?.problem).toContain("prefers-color-scheme");
+    expect(violations[0]?.because).toContain("@custom-variant dark");
+  });
+
+  it("rejects a rule that is neither media-guarded nor class-keyed", () => {
+    // A variant redefined to key on something else — `[data-theme="dark"]`,
+    // an attribute, a third mechanism. Not the built-in variant, so it gets a
+    // different message: pointing the reader at `@custom-variant` here would
+    // send them to a line that is present and looks fine.
+    const violations = checkDarkVariant(
+      [
+        {
+          file: "a.css",
+          css: '.dark\\:bg-red-950\\/20[data-theme="dark"]{color:red}',
+        },
+      ],
+      ONE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("carries no");
+    expect(violations[0]?.problem).not.toContain("prefers-color-scheme");
+  });
+
+  it("tolerates the whitespace difference between source and minified output", () => {
+    // `globals.css` declares `:where(.dark, .dark *)`; the compiler emits
+    // `:where(.dark,.dark *)`. Both have to read as the same condition, or the
+    // gate fails on a build that is entirely correct.
+    for (const condition of [
+      ":where(.dark,.dark *)",
+      ":where(.dark, .dark *)",
+    ]) {
+      expect(
+        checkDarkVariant(
+          [
+            {
+              file: "a.css",
+              css: `.dark\\:bg-red-950\\/20${condition}{color:red}`,
+            },
+          ],
+          ONE,
+        ),
+      ).toEqual([]);
+    }
+  });
+
+  it("reports a utility that is missing entirely", () => {
+    const violations = checkDarkVariant([{ file: "a.css", css: "" }], ONE);
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain(
+      "no rule for `.dark:bg-red-950/20`",
+    );
+  });
+
+  it("checks every rule for a utility, not just the first", () => {
+    // An opacity modifier compiles to two rules — a hex fallback and a
+    // `color-mix` inside `@supports`. Checking only the first would pass a
+    // build where the second lost its condition.
+    const violations = checkDarkVariant(
+      [
+        {
+          file: "a.css",
+          css:
+            ".dark\\:bg-red-950\\/20:where(.dark,.dark *){background-color:#4608}" +
+            "@supports (color:color-mix(in lab, red, red)){.dark\\:bg-red-950\\/20{background-color:color-mix(in oklab,red 20%,transparent)}}",
+        },
+      ],
+      ONE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("carries no");
+  });
+
+  it("does not confuse a light utility's rule for the dark one", () => {
+    // `bg-red-50` sits right next to `dark:bg-red-950/20` in `image-upload`
+    // and is emitted unconditionally, as it should be. It must not be read as
+    // the dark rule and reported as unconditioned.
+    const violations = checkDarkVariant(
+      [
+        {
+          file: "a.css",
+          css:
+            ".bg-red-50{background-color:#fef2f2}" + classKeyedDarkRules(ONE),
+        },
+      ],
+      ONE,
+    );
+
+    expect(violations).toEqual([]);
+  });
+});
+
+describe("REQUIRED_CLASS_KEYED_DARK", () => {
+  it("names utilities the codebase actually uses", () => {
+    // Tailwind generates on demand, so requiring a `dark:` utility nothing
+    // references would fail a perfectly healthy build — the same trap the
+    // required-utility list documents.
+    expect(REQUIRED_CLASS_KEYED_DARK.length).toBeGreaterThan(0);
+    for (const { utility } of REQUIRED_CLASS_KEYED_DARK) {
+      expect(utility.startsWith("dark:")).toBe(true);
+    }
+  });
+
+  it("covers a bare utility, an opacity modifier, and stacked variants", () => {
+    // The compiler paths that can fail apart. Losing any one of these
+    // categories would leave the gate checking a case that already works.
+    const utilities = REQUIRED_CLASS_KEYED_DARK.map((d) => d.utility);
+    expect(
+      utilities.some((u) => !u.includes("/") && !u.includes("hover:")),
+    ).toBe(true);
+    expect(utilities.some((u) => u.includes("/"))).toBe(true);
+    expect(utilities.some((u) => u.includes("hover:"))).toBe(true);
+  });
+
+  it("explains every entry", () => {
+    for (const { utility, because } of REQUIRED_CLASS_KEYED_DARK) {
+      expect(because.length, `${utility} needs a reason`).toBeGreaterThan(40);
+    }
   });
 });
 

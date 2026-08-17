@@ -9,6 +9,43 @@
    plugin cannot go missing again quietly. */
 @plugin "@tailwindcss/typography";
 
+/* Points the `dark:` variant at the class `next-themes` actually toggles.
+   Without this line every `dark:` utility in the codebase tracks the operating
+   system and ignores the theme toggle — in both directions. Switching to dark
+   left `dark:bg-green-900/30` unlit; a dark-mode OS lit it up on a page the
+   user had explicitly set to light.
+
+   Tailwind v4's built-in `dark:` compiles to `@media (prefers-color-scheme:
+   dark)`, which is a reasonable default and the wrong one for any app with a
+   theme *control*: a media query cannot be overridden by a class, so the two
+   mechanisms sat side by side with no way to reconcile them. The `:root` and
+   `.dark` token blocks below were always class-driven, so `bg-background` and
+   friends followed the toggle correctly while the hand-picked `dark:` colours
+   beside them followed the OS. That split is what this closes.
+
+   `:where()` rather than the shorter `.dark &`, because specificity is
+   load-bearing. `.dark &` compiles to `.dark .dark\:bg-green-900\/30` —
+   specificity (0,2,0), which beats the `bg-green-100` it is meant to override
+   *and* beats unrelated single-class rules that should have won. `:where()`
+   contributes nothing, so the compiled rule stays at (0,1,0), level with the
+   light utility it pairs with, and the cascade settles it on emission order the
+   way every other Tailwind variant is settled. Tailwind emits variants after
+   the bare utilities, so the dark rule wins under `.dark` and loses outside it.
+
+   `.dark *` is the descendant half and `.dark` itself the self half: the class
+   lands on `<html>`, so nearly every match is a descendant, but a `dark:`
+   utility applied to `<html>` directly would silently not match without it.
+
+   System preference is not lost. `next-themes` runs with `enableSystem`, so in
+   `system` mode it reads `prefers-color-scheme` itself and toggles the same
+   `.dark` class — the OS still drives the theme, it just does so through the
+   one mechanism the whole stylesheet agrees on.
+
+   `scripts/assert-css-output.ts` asserts the compiled `dark:` rules key on the
+   class, because this is one line and losing it puts the application back in a
+   state that builds, tests and lints clean. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   :root {
     --primary: oklch(55% 0.2 250);
@@ -71,14 +108,15 @@
    ship fixed palette values: `prose-neutral` paints the body `neutral-700`
    and `prose-invert` paints it `slate-300`, neither of which is
    `--foreground`, so the post body would have drifted from every other
-   surface in the application the first time a token moved. Worse, the `dark:`
-   variant in this project does not track the theme at all: `next-themes` is
-   configured with `attribute="class"` and toggles `.dark`, while Tailwind v4's
-   built-in `dark:` still resolves to `prefers-color-scheme`. A
-   `dark:prose-invert` would follow the operating system and ignore the theme
-   toggle — an unlit second copy of the bug this replaces. (That mismatch is
-   real for the `dark:bg-*` utilities scattered through the components too, and
-   is not this change's to fix; it is recorded in SPEC.md.)
+   surface in the application the first time a token moved.
+
+   When this was written the `dark:` variant did not track the theme at all, so
+   a `dark:prose-invert` would have followed the operating system and ignored
+   the theme entirely — a second copy of the bug this replaces. The
+   `@custom-variant` above has since closed that, and `dark:prose-invert` would
+   now resolve correctly; it is still the wrong tool here, but for the first
+   reason rather than the second. Its palette is fixed, and a fixed palette is
+   what drifts from the tokens.
 
    Reading the tokens through `var()` sidesteps the variant question entirely.
    `.dark` reassigns `--foreground` and friends, and because these are `var()`
