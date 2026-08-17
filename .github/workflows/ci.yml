@@ -272,6 +272,19 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The same argument as the route-shape gate above, applied to the
+      # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
+      # silently falls back to Lightning CSS when it does not — and Lightning
+      # CSS drops every Tailwind directive it does not understand. That is not
+      # a build error, so this application shipped a 1,103-byte stylesheet and
+      # fourteen unstyled routes while every check on this workflow was green.
+      # This reads the CSS the build just wrote and fails if the utilities are
+      # not in it.
+      - name: Assert CSS output
+        run: pnpm exec tsx scripts/assert-css-output.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

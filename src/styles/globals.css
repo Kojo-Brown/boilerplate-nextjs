@@ -18,7 +18,9 @@
     --muted-foreground: oklch(65% 0 0);
     --border: oklch(22% 0 0);
   }
-  * { border-color: var(--border); }
+  * {
+    border-color: var(--border);
+  }
   body {
     background-color: var(--background);
     color: var(--foreground);
@@ -27,6 +29,28 @@
   }
 }
 
-@utility primary { background-color: var(--primary); }
-@utility primary-foreground { color: var(--primary-foreground); }
-@utility muted-foreground { color: var(--muted-foreground); }
+/* Publishes the palette above into Tailwind's `--color-*` namespace, which is
+   what generates `bg-primary`, `text-muted-foreground`, `ring-border` and the
+   rest of the semantic colour utilities the components already reference.
+
+   This replaces three `@utility` rules that were reaching for the same thing
+   and could not get there: `@utility primary { background-color: … }` defines
+   a bare `.primary` class, not `bg-primary`, so the landing page's call to
+   action, both auth forms and the avatar ring were asking for utilities that
+   have never existed. Nobody noticed, because until `postcss.config.mjs`
+   landed no utility compiled at all and every page was equally unstyled.
+
+   `inline` is what makes dark mode work. Without it Tailwind emits its own
+   `--color-*` custom properties and resolves the utilities against those,
+   freezing in whatever the variables held at `:root`; with it the `var()`
+   is substituted into the utility itself, so `bg-background` re-reads
+   `--background` and follows the `.dark` override. */
+@theme inline {
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+}
