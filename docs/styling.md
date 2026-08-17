@@ -217,15 +217,47 @@ gate exited 1 with 13 violations. The typography entries were verified the same
 way — deleting the `@plugin` line and rebuilding leaves `next build` at exit 0
 and fails the gate on `.prose`.
 
+## The theme control
+
+`ThemeToggle` (`src/components/ui/theme-toggle.tsx`) cycles
+system → light → dark → system and is mounted in every shell:
+
+| Shell                          | Covers                                                       |
+| ------------------------------ | ------------------------------------------------------------ |
+| `components/nav/app-shell.tsx` | `/dashboard`, `/posts`, `/upload`, `/images`, `/admin`       |
+| `app/blog/layout.tsx`          | `/blog`, `/blog/[slug]`                                      |
+| `app/photos/layout.tsx`        | `/photos`, `/photos/[id]`                                    |
+| `app/(auth)/layout.tsx`        | `/login`, `/register`                                        |
+| `app/page.tsx`                 | `/` — renders under the root layout, so it inherits no shell |
+
+`src/app/theme-control.test.tsx` asserts each of those mounts. That test exists
+because the component was written, correct, and rendered by _nothing_ for weeks
+while its own eight unit tests passed — a component's tests render it
+themselves, so they can never catch its absence from the application.
+
+### Why it renders a placeholder first
+
+`next-themes` seeds from `localStorage` in a lazy `useState` initialiser, so the
+first _client_ render already knows the theme. The server never can — that is
+what the provider's blocking inline script is for. Rendering `theme` directly
+therefore emits `System theme` on the server and `Dark theme` during hydration,
+and `suppressHydrationWarning` on `<html>` does not cover it: that attribute
+applies to the element's own attributes, which is what the script rewrites, not
+to descendants.
+
+So the button renders a neutral label and a half-disc icon until
+`useIsHydrated()` flips — `false` on the server _and_ on the hydrating render,
+`true` from the commit onwards, so the two agree by construction. It is
+deliberately not `disabled`: nothing in this application is interactive before
+hydration, and singling this control out would only flash `disabled:opacity-50`
+on every page load.
+
+`e2e/theme.spec.ts` covers what jsdom cannot — that the class lands on `<html>`,
+that the paint actually changes, that the choice survives a navigation, and that
+the placeholder resolves to the stored theme after a reload.
+
 ## Known gaps
 
-- **There is no theme control in the UI.** `ThemeToggle`
-  (`src/components/ui/theme-toggle.tsx`) is written and has eight passing tests,
-  and nothing renders it — `grep -r ThemeToggle src` finds only the component and
-  its own test. So the only reachable theme inputs today are the OS preference
-  and a `localStorage.theme` value `next-themes` persists. The `dark:` variant
-  above is correct either way, but mounting the toggle is what makes the dark
-  theme reachable by a user. Tracked in `SPEC.md`.
 - Nothing renders markdown. `Post.content` is plain text from a `<textarea>`,
   and `toParagraphs` in `@/lib/prose` splits it on blank lines so `prose` has
   real paragraphs to space. An author's `#` or `*` stays literal, which is the

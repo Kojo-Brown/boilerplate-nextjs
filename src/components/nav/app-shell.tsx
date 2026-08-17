@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { NavLinks } from "./nav-links";
 import { MobileDrawer } from "./mobile-drawer";
 
@@ -78,7 +79,17 @@ export function AppShell({
               {appName}
             </span>
 
-            <div className="ml-auto flex items-center gap-3">{headerSlot}</div>
+            {/*
+              The toggle sits ahead of `headerSlot` so it keeps a fixed
+              position: `headerSlot` is a streamed hole (`<UserChip>` behind a
+              Suspense boundary on the dashboard), and putting the toggle after
+              it would have the control shift sideways when the session
+              resolves.
+            */}
+            <div className="ml-auto flex items-center gap-3">
+              <ThemeToggle />
+              {headerSlot}
+            </div>
           </div>
         </header>
 
