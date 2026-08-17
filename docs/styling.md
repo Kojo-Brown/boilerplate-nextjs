@@ -108,20 +108,54 @@ Use it as `class="prose prose-app"`. Add `max-w-none` where a layout already
 sets the reading width, or prose's own 65ch becomes a second, narrower column
 inside it.
 
-**Do not reach for `dark:prose-invert`.** `next-themes` runs with
-`attribute="class"` and toggles `.dark`, while Tailwind v4's built-in `dark:`
-variant still resolves to `prefers-color-scheme` — so a `dark:` utility here
-follows the operating system and ignores the theme toggle. Reading tokens
-through `var()` avoids the question: `.dark` reassigns `--foreground`, and
-because `prose-app` holds `var()` references rather than resolved colours,
-prose re-reads them and follows the toggle with no dark-mode rule at all.
+**Do not reach for `dark:prose-invert`.** It would resolve correctly now — see
+the `dark:` variant below — but its palette is fixed at `slate-300`, and a fixed
+palette is the thing `prose-app` exists to avoid. Reading tokens through `var()`
+needs no dark-mode rule at all: `.dark` reassigns `--foreground`, and because
+`prose-app` holds `var()` references rather than resolved colours, prose
+re-reads them.
 
-That `dark:` mismatch is not confined to prose — `dark:bg-green-950` and
-similar appear in `toast-demo`, `image-upload`, `post-card` and
-`posts-manager`, and all of them track the OS rather than the toggle. Fixing it
-means declaring `@custom-variant dark (&:where(.dark, .dark *))`, which changes
-behaviour across those components; it is tracked in `SPEC.md` rather than
-folded in here.
+### The `dark:` variant keys on the class, not the OS
+
+```css
+@custom-variant dark (&:where(.dark, .dark *));
+```
+
+Tailwind v4's built-in `dark:` compiles to
+`@media (prefers-color-scheme: dark)`. This application themes by class —
+`next-themes` runs with `attribute="class"` and puts `.dark` on `<html>` — so
+until this line landed the stylesheet ran on two mechanisms at once. The tokens
+were class-driven, so `bg-background` and `text-muted-foreground` followed the
+resolved theme. The hand-picked `dark:` colours beside them were media-driven
+and followed the operating system. A media query cannot be overridden by a
+class, so there was no way to reconcile them.
+
+The two disagreed in both directions. With a dark-mode OS and an explicit light
+preference, the page painted white and the published badge painted
+`green-900/30` — a dark chip on a white card. With a light-mode OS and a dark
+preference, the page painted black and the same badge stayed `green-100`.
+
+Measured on the built application, dark-mode OS with `theme=light` persisted:
+
+|        | body background        | badge background                        |
+| ------ | ---------------------- | --------------------------------------- |
+| before | `lab(100 0 0)` (white) | `oklab(0.393 … / 0.3)` (`green-900/30`) |
+| after  | `lab(100 0 0)` (white) | `lab(96.19 …)` (`green-100`)            |
+
+**`:where()` is load-bearing, not stylistic.** The shorter `.dark &` compiles to
+`.dark .dark\:bg-green-900\/30` — specificity (0,2,0), which beats the
+`bg-green-100` it is meant to override _and_ beats unrelated single-class rules
+that should have won. `:where()` contributes no specificity, so the compiled
+rule stays at (0,1,0), level with the light utility it pairs with, and the
+cascade settles it on emission order like every other variant. Tailwind emits
+variants after the bare utilities, so the dark rule wins under `.dark` and loses
+outside it. Verified on the built stylesheet: every `dark:` rule is emitted
+after the utility it overrides.
+
+**System preference is not lost.** `enableSystem` is on, so in `system` mode
+`next-themes` reads `prefers-color-scheme` itself and toggles the same `.dark`
+class. The OS still drives the theme; it just does so through the one mechanism
+the whole stylesheet agrees on.
 
 `prose-app` and the plugin's `.prose` are both single class selectors emitted
 into `@layer utilities`, so neither specificity nor layer order decides between
@@ -164,7 +198,14 @@ the build actually wrote under `.next/static` and fails if:
   other check satisfied;
 - `.prose-app` stops being emitted after `.prose`. Same-layer, same-specificity
   rules are decided by emission order alone, so the token bindings would lose
-  to the plugin's fixed greys with nothing else changing.
+  to the plugin's fixed greys with nothing else changing;
+- a `dark:` utility is emitted under `@media (prefers-color-scheme: dark)`
+  instead of keyed on `.dark`. Losing the `@custom-variant` line is invisible to
+  every other check here — the utilities are all still emitted, at the same byte
+  count, and only the condition changes — so the five entries in
+  `REQUIRED_CLASS_KEYED_DARK` read the condition itself. They span a bare colour
+  utility, a fractional opacity modifier, a text colour, and two cases of
+  `dark:` stacked with `hover:`.
 
 Every required utility is one this application genuinely uses, because Tailwind
 generates on demand — requiring a class nothing references would fail a
@@ -178,8 +219,13 @@ and fails the gate on `.prose`.
 
 ## Known gaps
 
-- The `dark:` variant does not track the theme toggle; see the note under
-  `prose prose-app` above.
+- **There is no theme control in the UI.** `ThemeToggle`
+  (`src/components/ui/theme-toggle.tsx`) is written and has eight passing tests,
+  and nothing renders it — `grep -r ThemeToggle src` finds only the component and
+  its own test. So the only reachable theme inputs today are the OS preference
+  and a `localStorage.theme` value `next-themes` persists. The `dark:` variant
+  above is correct either way, but mounting the toggle is what makes the dark
+  theme reachable by a user. Tracked in `SPEC.md`.
 - Nothing renders markdown. `Post.content` is plain text from a `<textarea>`,
   and `toParagraphs` in `@/lib/prose` splits it on blank lines so `prose` has
   real paragraphs to space. An author's `#` or `*` stays literal, which is the

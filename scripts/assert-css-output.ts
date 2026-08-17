@@ -136,6 +136,75 @@ export const REQUIRED_OVERRIDES: readonly {
 ];
 
 /**
+ * `dark:` utilities whose compiled rule must key on the `.dark` class.
+ *
+ * Tailwind v4's built-in `dark:` variant compiles to
+ * `@media (prefers-color-scheme: dark)`. This application does not theme by
+ * media query — `next-themes` runs with `attribute="class"` and toggles `.dark`
+ * on `<html>` — so for as long as the built-in variant was left in place, every
+ * utility in this list tracked the operating system and ignored the theme
+ * control, in both directions: dark mode left them light, and a dark-mode OS
+ * lit them up on a page the user had set to light.
+ *
+ * `@custom-variant dark (&:where(.dark, .dark *))` in `globals.css` is the one
+ * line that redirects them, and losing it is invisible to every other check
+ * here: the utilities are all still *emitted*, at the same byte count, so the
+ * required-utility list and the size floor stay satisfied. Only the condition
+ * they are emitted under changes. That is what this asserts.
+ *
+ * Every entry is a `dark:` utility this application uses in a `className`.
+ * Deliberately not every one it uses: this is a sample chosen to span the
+ * compiler paths that can fail apart — a bare colour utility, a fractional
+ * opacity modifier, a text colour, and two stacked variants, where `dark:`
+ * has to compose with `hover:` rather than sit alone.
+ */
+export const REQUIRED_CLASS_KEYED_DARK: readonly {
+  utility: string;
+  because: string;
+}[] = [
+  {
+    utility: "dark:bg-green-900/30",
+    because:
+      "the published badge in `post-card` and `posts-manager`; on a dark page it renders " +
+      "`bg-green-100` — a near-white chip — until the variant keys on the class",
+  },
+  {
+    utility: "dark:text-yellow-400",
+    because:
+      "the draft badge's foreground, paired with the entry above; a text colour and a " +
+      "background colour are separate code paths in the compiler",
+  },
+  {
+    utility: "dark:bg-red-950/20",
+    because:
+      "the error state of the `image-upload` dropzone, and the one entry carrying an " +
+      "opacity modifier — the `/20` compiles through `color-mix`, in its own `@supports` block",
+  },
+  {
+    utility: "dark:hover:bg-green-950",
+    because:
+      "`toast-demo`'s success button: two stacked variants, where `dark:` has to compose " +
+      "with `hover:` instead of standing alone",
+  },
+  {
+    utility: "dark:hover:bg-red-950/20",
+    because:
+      "the delete button in `posts-manager` — stacked variants *and* an opacity modifier, " +
+      "the combination most likely to fall out of whatever handles the simpler cases",
+  },
+];
+
+/**
+ * The selector fragment a class-keyed `dark:` rule must carry.
+ *
+ * Matched as a substring of the selector rather than by equality, because the
+ * compiler appends the rest of the variant chain after it —
+ * `.dark\:hover\:bg-green-950:where(.dark,.dark *):hover` — and normalises the
+ * whitespace inside the `:where()` as it minifies.
+ */
+const DARK_CLASS_CONDITION = ":where(.dark,.dark *)";
+
+/**
  * At-rules that must never survive into the output.
  *
  * Their presence is the precise fingerprint of the original bug: Lightning CSS
@@ -200,6 +269,209 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
 }
 
+/** A style rule found in compiled CSS, with the at-rules enclosing it. */
+export interface CssRule {
+  /** The selector as written, escapes intact. */
+  selector: string;
+  /** Preludes of the enclosing at-rules, outermost first. */
+  atRules: string[];
+}
+
+/**
+ * Lists every style rule in a stylesheet alongside the at-rules wrapping it.
+ *
+ * The other checks in this file only ask whether a rule exists, which a
+ * substring search answers. The `dark:` check asks something a substring search
+ * cannot: *under what condition* a rule applies. `.dark\:bg-green-900\/30` is
+ * present either way — the difference between tracking the theme toggle and
+ * tracking the operating system is whether an
+ * `@media (prefers-color-scheme: dark)` sits above it, which means knowing
+ * where the block boundaries are.
+ *
+ * Deliberately not a CSS parser. It tracks brace depth, remembers which frames
+ * were opened by an at-rule, and skips over quoted strings so a `content: "{"`
+ * cannot unbalance it. Declarations end at a `;` and are discarded; a prelude
+ * ending at a `{` is either an at-rule to push or a selector to record.
+ * Anything more than that belongs to a real parser, and nothing here needs one.
+ */
+export function scanRules(css: string): CssRule[] {
+  const rules: CssRule[] = [];
+  /** Preludes of the enclosing at-rules, outermost first. */
+  const atRules: string[] = [];
+  /** One entry per open brace: whether an at-rule opened it. */
+  const frames: boolean[] = [];
+  let prelude = "";
+  let quote: string | null = null;
+  /** The character before the one being read, for the escape check below. */
+  let previous = "";
+
+  for (const char of css) {
+    const preceding = previous;
+    previous = char;
+
+    if (quote !== null) {
+      if (char === quote && preceding !== "\\") quote = null;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "{") {
+      if (prelude.startsWith("@")) {
+        atRules.push(prelude);
+        frames.push(true);
+      } else {
+        if (prelude !== "")
+          rules.push({ selector: prelude, atRules: [...atRules] });
+        frames.push(false);
+      }
+      prelude = "";
+      continue;
+    }
+    if (char === "}") {
+      if (frames.pop() === true) atRules.pop();
+      prelude = "";
+      continue;
+    }
+    // A declaration, or a statement at-rule like Tailwind's `@layer components;`.
+    if (char === ";") {
+      prelude = "";
+      continue;
+    }
+
+    // Leading whitespace is dropped so `prelude` starts at the first real
+    // character; `@media(…)` and `@media (…)` both have to read as at-rules.
+    if (prelude === "" && /\s/.test(char)) continue;
+    prelude += char;
+  }
+
+  return rules;
+}
+
+/**
+ * Splits a selector list on its top-level commas.
+ *
+ * Paren-aware, because the condition this file is checking for contains a comma
+ * of its own: `:where(.dark, .dark *)` is one selector, not two.
+ */
+export function splitSelectorList(selector: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+
+  for (const char of selector) {
+    if (char === "(" || char === "[") depth++;
+    else if (char === ")" || char === "]") depth--;
+
+    if (char === "," && depth === 0) {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current.trim());
+
+  return parts.filter((part) => part !== "");
+}
+
+/**
+ * Whether `utility` is the class a selector is built on.
+ *
+ * Stricter than `hasRule`: that asks whether a utility appears anywhere in the
+ * stylesheet, while this asks whether *this* rule is the one generated for it,
+ * so that the rule's conditions can be attributed to that utility and nothing
+ * else. `/` is pointedly absent from the terminator set — otherwise a
+ * requirement for `dark:bg-red-950` would be satisfied by the rule for
+ * `dark:bg-red-950/20`, which is a different utility with a different value.
+ */
+export function headsSelector(selector: string, utility: string): boolean {
+  return splitSelectorList(selector).some((part) => {
+    const unescaped = part.replaceAll("\\", "");
+    if (!unescaped.startsWith(`.${utility}`)) return false;
+    const next = unescaped[utility.length + 1];
+    return next === undefined || /[,{:>~+\s.[]/.test(next);
+  });
+}
+
+/** Whitespace carries no meaning in the fragment being compared, and minifiers move it. */
+function squashWhitespace(value: string): string {
+  return value.replace(/\s+/g, "");
+}
+
+/**
+ * Checks that each `dark:` utility applies under the `.dark` class.
+ *
+ * Two failures, reported apart because they read as different problems. A rule
+ * wrapped in `prefers-color-scheme` is the specific regression this exists for
+ * — the built-in variant, back in place because the `@custom-variant`
+ * declaration went missing — and gets named as such. A rule that is neither
+ * media-guarded nor class-keyed is something else entirely: a variant redefined
+ * to key on an attribute, a `data-theme` selector, some third mechanism. Both
+ * mean the utility no longer follows the toggle, which is what the gate is
+ * about, but conflating them would send the next reader looking for the wrong
+ * line.
+ */
+export function checkDarkVariant(
+  stylesheets: readonly Stylesheet[],
+  utilities: readonly {
+    utility: string;
+    because: string;
+  }[] = REQUIRED_CLASS_KEYED_DARK,
+): Violation[] {
+  const violations: Violation[] = [];
+  const condition = squashWhitespace(DARK_CLASS_CONDITION);
+
+  for (const { utility, because } of utilities) {
+    const matches = stylesheets.flatMap((sheet) =>
+      scanRules(sheet.css)
+        .filter((rule) => headsSelector(rule.selector, utility))
+        .map((rule) => ({ sheet, rule })),
+    );
+
+    if (matches.length === 0) {
+      violations.push({
+        problem: `no rule for \`.${utility}\` in any emitted stylesheet.`,
+        because,
+      });
+      continue;
+    }
+
+    for (const { sheet, rule } of matches) {
+      const mediaGuard = rule.atRules.find((at) =>
+        at.includes("prefers-color-scheme"),
+      );
+
+      if (mediaGuard !== undefined) {
+        violations.push({
+          problem:
+            `${sheet.file} emits \`.${utility}\` inside \`${mediaGuard}\`, so it follows the ` +
+            "operating system and ignores the theme toggle. A media query cannot be overridden " +
+            "by a class, so the toggle has no way to reach it.",
+          because:
+            `${because}. This is Tailwind's built-in \`dark:\` variant — ` +
+            "`@custom-variant dark (&:where(.dark, .dark *))` in `globals.css` is what redirects it " +
+            "at the class `next-themes` toggles",
+        });
+        continue;
+      }
+
+      if (!squashWhitespace(rule.selector).includes(condition)) {
+        violations.push({
+          problem:
+            `${sheet.file} emits \`.${utility}\` as \`${rule.selector}\`, which carries no ` +
+            `\`${DARK_CLASS_CONDITION}\` condition, so it does not key on the class \`next-themes\` toggles.`,
+          because: `${because}. The \`dark:\` variant is defined in \`globals.css\` and must resolve to that class`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 /**
  * Compares the emitted stylesheets against the expectations above.
  *
@@ -218,6 +490,10 @@ export function checkCssOutput(
     after: string;
     because: string;
   }[] = REQUIRED_OVERRIDES,
+  darkUtilities: readonly {
+    utility: string;
+    because: string;
+  }[] = REQUIRED_CLASS_KEYED_DARK,
 ): Violation[] {
   const violations: Violation[] = [];
 
@@ -268,6 +544,7 @@ export function checkCssOutput(
   }
 
   violations.push(...checkOverrideOrder(stylesheets, overrides));
+  violations.push(...checkDarkVariant(stylesheets, darkUtilities));
 
   return violations;
 }
@@ -398,7 +675,8 @@ function main(argv: readonly string[]): number {
   console.log(
     `CSS output OK — ${bytes} bytes across ${stylesheets.length} stylesheet(s), ` +
       `${REQUIRED_UTILITIES.length} required utilities present, ` +
-      `${REQUIRED_OVERRIDES.length} override(s) in the right order.`,
+      `${REQUIRED_OVERRIDES.length} override(s) in the right order, ` +
+      `${REQUIRED_CLASS_KEYED_DARK.length} \`dark:\` utilities keyed on the class.`,
   );
   return 0;
 }
