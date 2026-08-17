@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   FORBIDDEN_AT_RULES,
   MINIMUM_BUNDLE_BYTES,
+  REQUIRED_OVERRIDES,
   REQUIRED_UTILITIES,
   checkCssOutput,
+  checkOverrideOrder,
   formatViolations,
   hasRule,
+  ruleIndices,
   type Stylesheet,
 } from "./assert-css-output";
 
@@ -199,8 +202,139 @@ describe("checkCssOutput", () => {
       checkCssOutput(
         [{ file: "a.css", css: ".flex{display:flex}".padEnd(20_000, " ") }],
         [{ utility: "flex", because: "the only one under test" }],
+        [],
       ),
     ).toEqual([]);
+  });
+
+  it("checks override order as part of the whole-bundle pass", () => {
+    // The override list is reached through `checkCssOutput`, not only through
+    // `checkOverrideOrder` directly — otherwise CI would never run it.
+    const inverted = ".prose-app{--tw-prose-body:red}.prose{color:blue}";
+    const violations = checkCssOutput(
+      [{ file: "a.css", css: inverted.padEnd(20_000, " ") }],
+      [],
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain(
+      "emits `.prose-app` before `.prose`",
+    );
+  });
+});
+
+describe("checkOverrideOrder", () => {
+  const PROSE = [
+    {
+      utility: "prose-app",
+      after: "prose",
+      because: "the token bindings have to win",
+    },
+  ];
+
+  it("passes when the override is emitted last", () => {
+    expect(
+      checkOverrideOrder(
+        [{ file: "a.css", css: ".prose{color:blue}.prose-app{color:red}" }],
+        PROSE,
+      ),
+    ).toEqual([]);
+  });
+
+  it("fails when the compiler emits the override first", () => {
+    const violations = checkOverrideOrder(
+      [{ file: "a.css", css: ".prose-app{color:red}.prose{color:blue}" }],
+      PROSE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("a.css");
+    expect(violations[0]?.problem).toContain("`.prose` wins");
+  });
+
+  it("compares against the last `.prose` rule, not the first", () => {
+    // `.prose` heads a long run of descendant selectors — `.prose :where(p)`,
+    // `.prose :where(h2)` and so on. Beating only the first of them would
+    // leave the plugin's own root rule to be re-applied afterwards.
+    const css =
+      ".prose{color:blue}" +
+      ".prose-app{--tw-prose-body:red}" +
+      ".prose :where(p){margin:1em 0}" +
+      ".prose{color:green}";
+
+    const violations = checkOverrideOrder([{ file: "a.css", css }], PROSE);
+    expect(violations).toHaveLength(1);
+  });
+
+  it("does not let descendant selectors alone satisfy the ordering", () => {
+    // `.prose :where(p)` sets no `--tw-prose-*` variable, but it is still a
+    // `.prose` rule; an override sitting between the root rule and it is
+    // fine, which is what this asserts is *not* reported.
+    const css =
+      ".prose{color:blue}.prose-app{color:red}.prose:hover{color:blue}";
+    expect(checkOverrideOrder([{ file: "a.css", css }], PROSE)).toHaveLength(1);
+  });
+
+  it("reports when the two rules are not in the same stylesheet", () => {
+    const violations = checkOverrideOrder(
+      [
+        { file: "a.css", css: ".prose{color:blue}" },
+        { file: "b.css", css: ".prose-app{color:red}" },
+      ],
+      PROSE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("no single stylesheet");
+  });
+
+  it("reports a missing override rather than passing it over", () => {
+    const violations = checkOverrideOrder(
+      [{ file: "a.css", css: ".prose{color:blue}" }],
+      PROSE,
+    );
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.problem).toContain("no single stylesheet");
+  });
+
+  it("checks nothing when the list is empty", () => {
+    expect(checkOverrideOrder([{ file: "a.css", css: "" }], [])).toEqual([]);
+  });
+});
+
+describe("REQUIRED_OVERRIDES", () => {
+  it("names both sides of every pair in REQUIRED_UTILITIES", () => {
+    // An override whose two rules are not independently required would go
+    // unnoticed the moment one of them stopped being emitted: the order check
+    // reports "not in the same stylesheet", which reads like a build quirk
+    // rather than "the typography plugin is gone".
+    const required = REQUIRED_UTILITIES.map((r) => r.utility);
+    for (const { utility, after } of REQUIRED_OVERRIDES) {
+      expect(required, `${utility} must be required`).toContain(utility);
+      expect(required, `${after} must be required`).toContain(after);
+    }
+  });
+
+  it("gives every entry a reason, since that reason is the failure message", () => {
+    for (const { utility, after, because } of REQUIRED_OVERRIDES) {
+      expect(utility).not.toBe(after);
+      expect(because.length, `${utility} needs a reason`).toBeGreaterThan(10);
+    }
+  });
+});
+
+describe("ruleIndices", () => {
+  it("returns every occurrence in order", () => {
+    expect(ruleIndices(".flex{a}.b{c}.flex{d}", "flex")).toEqual([0, 13]);
+  });
+
+  it("returns nothing for a utility that is absent", () => {
+    expect(ruleIndices(".flex{a}", "grid")).toEqual([]);
+  });
+
+  it("does not count a prefix match", () => {
+    expect(ruleIndices(".flex-col{a}", "flex")).toEqual([]);
   });
 });
 
