@@ -6,6 +6,7 @@ import {
   getPhotoById,
   getPhotoIds,
   photoSrc,
+  searchPhotos,
 } from "./photos";
 
 describe("PHOTOS", () => {
@@ -84,5 +85,56 @@ describe("getPhotoIds", () => {
 describe("catalogue dimensions", () => {
   it("declares a 3:2 box, which both views crop to", () => {
     expect(PHOTO_WIDTH / PHOTO_HEIGHT).toBeCloseTo(1.5, 2);
+  });
+});
+
+describe("searchPhotos", () => {
+  it("returns the whole catalogue for an absent or blank query", () => {
+    // `/api/photos` with no parameters is a listing, not a search for the empty
+    // string, so this must not come back empty.
+    expect(searchPhotos()).toHaveLength(PHOTOS.length);
+    expect(searchPhotos("")).toHaveLength(PHOTOS.length);
+    expect(searchPhotos("   ")).toHaveLength(PHOTOS.length);
+  });
+
+  it("returns a copy, so a caller cannot mutate the catalogue", () => {
+    const results = searchPhotos();
+    expect(results).not.toBe(PHOTOS);
+    results.pop();
+    expect(PHOTOS).toHaveLength(results.length + 1);
+  });
+
+  it("matches the title case-insensitively", () => {
+    expect(searchPhotos("MOUNTAIN").map((photo) => photo.id)).toContain(
+      "mountain-golden-hour",
+    );
+  });
+
+  it("matches the caption", () => {
+    expect(searchPhotos("night exposure").map((photo) => photo.id)).toEqual([
+      "stars-over-the-range",
+    ]);
+  });
+
+  it("matches the alt text", () => {
+    expect(searchPhotos("waves").map((photo) => photo.id)).toEqual([
+      "ocean-at-sunset",
+    ]);
+  });
+
+  it("does not match on the id, which is an identifier rather than prose", () => {
+    // The slug is derived from the title, so anything it would match the title
+    // already matches; searching it would only double a title hit's weight.
+    expect(searchPhotos("golden-hour")).toEqual([]);
+  });
+
+  it("returns nothing for a term the catalogue does not contain", () => {
+    expect(searchPhotos("submarine")).toEqual([]);
+  });
+
+  it("ignores surrounding whitespace", () => {
+    expect(searchPhotos("  ocean  ").map((photo) => photo.id)).toEqual([
+      "ocean-at-sunset",
+    ]);
   });
 });

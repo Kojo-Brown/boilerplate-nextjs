@@ -93,3 +93,27 @@ export function getPhotoById(id: string): Photo | undefined {
 export function getPhotoIds(): string[] {
   return PHOTOS.map((photo) => photo.id);
 }
+
+/**
+ * Case-insensitive substring match over the text a reader can actually see —
+ * title, caption and alt text — for `/api/photos`.
+ *
+ * `id` is excluded on purpose even though it is a readable slug. It is derived
+ * from the title, so including it would double the weight of a title match
+ * without ever matching something the title does not, while making the results
+ * depend on a value the catalogue treats as an identifier rather than as prose.
+ *
+ * An absent or blank query returns the whole catalogue rather than nothing:
+ * `/api/photos` with no parameters is a listing, not a search for the empty
+ * string.
+ */
+export function searchPhotos(query?: string): Photo[] {
+  const needle = query?.trim().toLowerCase();
+  if (!needle) return [...PHOTOS];
+
+  return PHOTOS.filter((photo) =>
+    [photo.title, photo.caption, photo.alt].some((field) =>
+      field.toLowerCase().includes(needle),
+    ),
+  );
+}
