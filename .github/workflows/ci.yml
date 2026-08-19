@@ -272,6 +272,18 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The same argument again, applied to the API surface. A route handler's
+      # runtime and its portability are properties of its *module graph*, so one
+      # added import changes both, changes no line that mentions either, and
+      # builds green. This reads the app-path manifest, the edge-function
+      # manifest and the per-route dependency traces and fails if a route is
+      # undeclared, missing, on the wrong runtime, or claims portability while
+      # tracing Node-only packages.
+      - name: Assert API runtimes
+        run: pnpm exec tsx scripts/assert-api-runtimes.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning

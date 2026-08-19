@@ -130,6 +130,38 @@ wiring for that reason.
 [docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
 walkthrough.
 
+## API routes
+
+Every handler under `src/app/api/` is built on `defineRoute` (or
+`defineAuthedRoute`) from `src/lib/api/`. The handler returns **data, not a
+`Response`** — which is what makes the success payload a type a client can
+import — and the wrapper owns Zod validation, a single error envelope
+(`{ error: { code, message, fieldErrors? } }`), and the rule that `redirect()`,
+`notFound()` and React's prerender interrupt are rethrown rather than caught.
+
+```ts
+export const GET = defineRoute<PhotoListPayload, Query>({
+  query: z.object({ q: z.string().optional() }),
+  handler: ({ query }) => searchPhotos(query.q),
+});
+```
+
+**Per-route `export const runtime` does not build here.** Cache Components
+rejects the segment config outright — for `"nodejs"` as well as `"edge"` — so
+every route handler runs on Node and edge behaviour belongs in `src/proxy.ts`.
+What the repository holds itself to instead is `src/lib/api/runtimes.ts`, which
+declares each route's runtime _and_ whether its module graph is free of
+Node-only dependencies. That second property is why `defineAuthedRoute` is a
+separate module rather than an `auth: true` flag: `/api/health` and
+`/api/photos` trace 100 files and no non-framework package, `/api/posts` traces
+200 and pulls in Prisma and `pg`.
+
+`pnpm exec tsx scripts/assert-api-runtimes.ts` runs in CI after the build and
+fails if a route is undeclared, missing, on a runtime it did not declare, or
+claiming portability while tracing Node-only packages.
+[docs/route-handlers.md](./docs/route-handlers.md) has the reproduction, the
+citation, and the two defects the build caught in the wrapper itself.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`
