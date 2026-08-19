@@ -121,7 +121,7 @@ Next's cold-cache notice, which describes the runner rather than the code.
 
 - [x] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide — enabled via `cacheComponents` (there is no `experimental.ppr` in Next 16 and no incremental mode); found and fixed two invisible defects on the way, the root layout's `auth()` making every route dynamic and the dashboard layout's session read reducing its "static shell" to a `<title>` (PR #21)
 - [x] Intercepting routes for a modal photo/detail view with a shareable URL — `@modal/(.)photos/[id]` renders a dialog on a soft navigation, `photos/[id]` renders a full page on a hard one; closing the modal is `router.back()`, not local state. Verified in a real browser (7/7 in `e2e/photos.spec.ts`), which is where the missing Tailwind build was found (PR #22)
-- [ ] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route
+- [x] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route — **the typed API is delivered; the per-route runtime selection is not possible.** Cache Components rejects the `runtime` segment config outright, for `"nodejs"` as well as `"edge"`, so no route handler can run on the edge while PPR is on. Delivered instead: `src/lib/api/` (handlers return data, not a `Response`), an `API_ROUTES` declaration carrying each route's runtime _and_ whether its module graph is portable, and `scripts/assert-api-runtimes.ts` checking both against the build output. Two invisible defects in the wrapper came out of the build: it swallowed React's prerender interrupt, and read `searchParams` unconditionally (PR #27)
 - [ ] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations
 - [ ] Draft mode for CMS preview with signed preview tokens
 - [ ] Streaming with granular Suspense boundaries and per-segment `loading.tsx` skeletons
@@ -152,6 +152,35 @@ Two defects were found and fixed on the way, both of which had been invisible:
 
 `scripts/assert-route-shape.ts` asserts the route table and the shell contents
 after every CI build, so neither defect can return quietly.
+
+### The first of those three items, and what it cost
+
+The route-handler item above is the first of the three, and it is the one the
+move did not merely redefine but partly **forbade**. `export const runtime` does
+not compile at all under `cacheComponents`:
+
+```
+Route segment config "runtime" is not compatible with
+`nextConfig.cacheComponents`. Please remove it.
+```
+
+The check is on the export existing, not on its value — `"nodejs"` fails
+identically to `"edge"`. This is Next's documented position: Cache Components
+requires the Node.js runtime, `runtime = "edge"` is deprecated, and per-route
+edge behaviour is directed at Proxy, which this repository already has in
+`src/proxy.ts`.
+
+So **"runtime selection per route" is unavailable for as long as PPR is on**,
+and the two are mutually exclusive by construction. Nothing in this repository
+can work around it; the only lever is `cacheComponents` itself, which would
+un-do the PPR item above. What stands in its place is a written-down
+declaration (`src/lib/api/runtimes.ts`) and a gate that checks it against build
+output — including whether a route claiming portability still traces only
+framework packages, which is the half of the decision the framework does _not_
+force. `docs/route-handlers.md` carries the reproduction and the tradeoff guide.
+
+The two remaining affected items are draft mode and the ISR revalidation
+webhook; neither has been attempted yet.
 
 ## Phase 9 — Server Actions & Data Integrity
 
