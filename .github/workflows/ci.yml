@@ -284,6 +284,23 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The same argument again, applied to cache invalidation. A mutation that
+      # forgets to drop a tag writes the right row, returns the right value and
+      # passes every unit test — the only evidence is a page serving stale
+      # content until its TTL expires, which nothing observes. The three post
+      # mutations called `revalidatePath("/posts")`, a route whose reads are
+      # uncached, and never invalidated the blog at all. This reads the sources
+      # and fails if a Server Action writes to the database without reporting
+      # the mutation, or if any module outside the invalidation layer reaches
+      # for Next's invalidation APIs directly.
+      #
+      # Static analysis, so it needs no build output — it is in this job rather
+      # than `lint` only to keep the gates together.
+      - name: Assert cache invalidation
+        run: pnpm exec tsx scripts/assert-cache-invalidation.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning

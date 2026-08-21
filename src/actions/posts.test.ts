@@ -16,17 +16,27 @@ vi.mock("@/auth", () => ({
 }));
 
 vi.mock("next/cache", () => ({
-  revalidatePath: vi.fn(),
+  updateTag: vi.fn(),
+  refresh: vi.fn(),
 }));
 
 import type { Session } from "next-auth";
 import { auth } from "@/auth";
+import { updateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
 import {
   createPostAction,
   deletePostAction,
   togglePublishAction,
 } from "./posts";
+
+const mockUpdateTag = vi.mocked(updateTag);
+
+/** The tags dropped by this action call, in order. */
+function droppedTags(): string[] {
+  return mockUpdateTag.mock.calls.map(([tag]) => tag);
+}
 
 // NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
 // `vi.mocked` binds to the middleware overload, so narrow it to the no-argument
@@ -230,5 +240,134 @@ describe("togglePublishAction", () => {
 
     expect(result.success).toBe(false);
     expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What each mutation invalidates.
+ *
+ * These assertions did not exist before, and their absence is why the bug they
+ * now cover survived: the suite checked that every action wrote the right row
+ * and never that it told the cache. `revalidatePath("/posts")` was mocked, so
+ * it was called, and it named a page whose reads are uncached — the public blog
+ * kept serving a list without the post that had just been published.
+ *
+ * The policy itself is tested in `src/lib/cache/invalidation.test.ts`. These
+ * cover the part only the action can get wrong: reporting the post's published
+ * state accurately, and reporting it at all.
+ */
+describe("cache invalidation", () => {
+  it("does not touch the blog cache when a draft is created", async () => {
+    vi.mocked(prisma.post.create).mockResolvedValue(mockPost as never);
+
+    await createPostAction({ title: "Hello World" });
+
+    expect(droppedTags()).toEqual([]);
+  });
+
+  it("drops the blog cache when a post is created published", async () => {
+    // Posts default to `published: false` today, so this exercises the flag
+    // being read from the created row rather than assumed.
+    vi.mocked(prisma.post.create).mockResolvedValue({
+      ...mockPost,
+      published: true,
+    } as never);
+
+    await createPostAction({ title: "Hello World" });
+
+    expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
+  });
+
+  it("drops the blog cache when a post is published", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: false,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      published: true,
+    } as never);
+
+    await togglePublishAction("post-1");
+
+    expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
+  });
+
+  it("drops the blog cache when a post is unpublished", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: true,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      published: false,
+    } as never);
+
+    await togglePublishAction("post-1");
+
+    expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
+  });
+
+  it("drops the blog cache when a published post is deleted", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: true,
+    } as never);
+    vi.mocked(prisma.post.delete).mockResolvedValue(mockPost as never);
+
+    await deletePostAction("post-1");
+
+    // The page outlived the row before this: `/blog/[slug]` kept serving a
+    // deleted post until its 300-second window expired.
+    expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
+  });
+
+  it("reads the published flag before deleting, not after", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: true,
+    } as never);
+    vi.mocked(prisma.post.delete).mockResolvedValue(mockPost as never);
+
+    await deletePostAction("post-1");
+
+    // The row is gone once `delete` returns, so the ownership lookup is the
+    // only chance to learn whether the post was public. If that select ever
+    // loses `published`, the delete silently stops invalidating anything.
+    expect(prisma.post.findUnique).toHaveBeenCalledWith({
+      where: { id: "post-1" },
+      select: { authorId: true, published: true },
+    });
+  });
+
+  it("does not touch the blog cache when a draft is deleted", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: false,
+    } as never);
+    vi.mocked(prisma.post.delete).mockResolvedValue(mockPost as never);
+
+    await deletePostAction("post-1");
+
+    expect(droppedTags()).toEqual([]);
+  });
+
+  it("invalidates nothing when a mutation is rejected", async () => {
+    // A rejected write must not purge a warm cache entry — otherwise an
+    // unauthenticated caller can empty the blog cache on demand by looping a
+    // delete they have no permission to perform.
+    mockAuth.mockResolvedValue(null);
+
+    await createPostAction({ title: "Hello" });
+    await deletePostAction("post-1");
+    await togglePublishAction("post-1");
+
+    mockAuth.mockResolvedValue(mockSession);
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(null);
+
+    await deletePostAction("missing");
+    await togglePublishAction("missing");
+
+    expect(mockUpdateTag).not.toHaveBeenCalled();
   });
 });

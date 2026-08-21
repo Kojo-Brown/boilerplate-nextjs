@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getCachedPublishedPosts } from "@/lib/cache/blog";
+import { BLOG_POSTS_TAG } from "@/lib/cache/tags";
 import { IsrBadge } from "./_components/isr-badge";
 import { RevalidateButton } from "./_components/revalidate-button";
 
@@ -66,17 +67,18 @@ export default async function BlogPage() {
             className="rounded px-1 font-mono text-xs"
             style={{ backgroundColor: "var(--border)" }}
           >
-            export const revalidate = 60
-          </code>
-          . The &quot;Rendered at&quot; badge updates on each regeneration. Use
-          the button below to trigger on-demand revalidation via{" "}
+            cacheLife
+          </code>{" "}
+          on the cached read. The &quot;Rendered at&quot; badge updates on each
+          regeneration. Publishing a post invalidates this page immediately, and
+          so does the button below — both drop the{" "}
           <code
             className="rounded px-1 font-mono text-xs"
             style={{ backgroundColor: "var(--border)" }}
           >
-            revalidatePath
-          </code>
-          .
+            {BLOG_POSTS_TAG}
+          </code>{" "}
+          cache tag.
         </div>
 
         <RevalidateButton path="/blog" label="Revalidate /blog now" />
