@@ -122,7 +122,7 @@ Next's cold-cache notice, which describes the runner rather than the code.
 - [x] Partial Prerendering: static shell + streamed dynamic holes, with a documented tradeoff guide — enabled via `cacheComponents` (there is no `experimental.ppr` in Next 16 and no incremental mode); found and fixed two invisible defects on the way, the root layout's `auth()` making every route dynamic and the dashboard layout's session read reducing its "static shell" to a `<title>` (PR #21)
 - [x] Intercepting routes for a modal photo/detail view with a shareable URL — `@modal/(.)photos/[id]` renders a dialog on a soft navigation, `photos/[id]` renders a full page on a hard one; closing the modal is `router.back()`, not local state. Verified in a real browser (7/7 in `e2e/photos.spec.ts`), which is where the missing Tailwind build was found (PR #22)
 - [x] Route handlers as a typed edge API with runtime selection (`edge` vs `nodejs`) per route — **the typed API is delivered; the per-route runtime selection is not possible.** Cache Components rejects the `runtime` segment config outright, for `"nodejs"` as well as `"edge"`, so no route handler can run on the edge while PPR is on. Delivered instead: `src/lib/api/` (handlers return data, not a `Response`), an `API_ROUTES` declaration carrying each route's runtime _and_ whether its module graph is portable, and `scripts/assert-api-runtimes.ts` checking both against the build output. Two invisible defects in the wrapper came out of the build: it swallowed React's prerender interrupt, and read `searchParams` unconditionally (PR #27)
-- [ ] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations
+- [x] `unstable_cache` / `revalidateTag` tag-based invalidation strategy across mutations — the strategy is delivered and it closed a live staleness bug: all three post mutations ended in `revalidatePath("/posts")`, a route whose reads are uncached, so the public blog was never invalidated by anything. Tags now live in `src/lib/cache/tags.ts`, the mutation→tags policy in `src/lib/cache/invalidation.ts`, and `scripts/assert-cache-invalidation.ts` fails CI if a writing action skips it. `unstable_cache` was tried rather than assumed and is **not** forbidden under Cache Components — it built and prerendered static with a 1m window — so `"use cache"` is preferred on its merits, not by necessity (PR #28)
 - [ ] Draft mode for CMS preview with signed preview tokens
 - [ ] Streaming with granular Suspense boundaries and per-segment `loading.tsx` skeletons
 - [ ] `generateStaticParams` + on-demand ISR revalidation webhook
@@ -181,6 +181,41 @@ force. `docs/route-handlers.md` carries the reproduction and the tradeoff guide.
 
 The two remaining affected items are draft mode and the ISR revalidation
 webhook; neither has been attempted yet.
+
+### The invalidation item, and the bug under it
+
+The tag-based invalidation item above turned out to be a bug report. PR #21
+moved the blog onto `"use cache"` + `cacheTag` and moved `/blog`'s invalidation
+onto `updateTag`, but the three **post mutations** were never part of that move:
+each still ended in `revalidatePath("/posts")`, which names the dashboard, whose
+reads are uncached and so have no entry to drop. Nothing invalidated the blog.
+Publishing a post did not put it on `/blog` for up to 60s, and deleting a
+published one left its page serving a deleted post for up to 300s.
+
+`revalidatePost(id)` — written for exactly this, with two passing tests — was
+imported by nobody, and as an export of a `"use server"` module was also a
+network-reachable endpoint accepting an arbitrary post id, under a comment
+asserting it was not callable from the browser.
+
+What stands now is a taxonomy (`src/lib/cache/tags.ts`), a mutation→tags policy
+(`src/lib/cache/invalidation.ts`, a plain module, which is what closes the
+endpoint hole), and a gate. The policy's substance is the published-state edges:
+draft mutations correctly invalidate nothing, and unpublishing invalidates as
+much as publishing — `wasPublished || isPublished`, which a "is it published
+now?" check gets backwards while looking right.
+
+`unstable_cache` was **tried, not assumed**, and the expected answer was wrong:
+it is not forbidden under Cache Components. An experiment route using it built
+and prerendered as fully static with a 1-minute window. So `"use cache"` is
+preferred on its merits — no manual key parts, three windows instead of one, and
+not being `unstable_` — rather than by necessity, and tags are the same
+namespace for both either way. `docs/cache-invalidation.md` carries the
+reproduction, the policy table, and the `pathWasRevalidated` downgrade that
+makes `updateTag` and `refresh()` mutually exclusive.
+
+Not done: no E2E coverage of invalidation. Asserting it end to end needs a
+running server plus control over cache timing, which is a larger piece of
+harness than this item.
 
 ## Phase 9 — Server Actions & Data Integrity
 
