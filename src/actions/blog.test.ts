@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
+  refresh: vi.fn(),
 }));
 
 import { updateTag } from "next/cache";
-import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/blog";
-import { revalidateBlogAction, revalidatePost } from "./blog";
+import { BLOG_POSTS_TAG } from "@/lib/cache/tags";
+import { revalidateBlogAction } from "./blog";
 
 const mockUpdateTag = vi.mocked(updateTag);
 
@@ -55,24 +56,23 @@ describe("revalidateBlogAction", () => {
   });
 });
 
-describe("revalidatePost", () => {
-  it("invalidates the post and the list it appears in", async () => {
-    await revalidatePost("post-1");
+/**
+ * `revalidatePost` used to be exported from this module and is covered here no
+ * longer. It has not been dropped — the behaviour it had (both tags, scoped per
+ * id) is asserted against `tagsFor`/`invalidate` in
+ * `src/lib/cache/invalidation.test.ts`, where it now lives. What it stopped
+ * being is a Server Action: as an export of a `"use server"` module it was an
+ * endpoint anyone could call with an arbitrary post id.
+ */
+describe("the module's action surface", () => {
+  it("exports exactly one action", async () => {
+    // Not a style assertion. Every export here is a network-reachable endpoint,
+    // so a helper added to this file for convenience is a public API whether or
+    // not that was intended, and this is the only place that fact is visible.
+    const actions = await import("./blog");
 
-    // Both, deliberately: the list caches a post's title, so dropping only the
-    // post page would leave /blog showing the old one.
-    expect(mockUpdateTag.mock.calls.map(([tag]) => tag)).toEqual([
-      blogPostTag("post-1"),
-      BLOG_POSTS_TAG,
+    expect(Object.keys(actions).filter((key) => key !== "default")).toEqual([
+      "revalidateBlogAction",
     ]);
-  });
-
-  it("scopes the per-post tag to the id", async () => {
-    await revalidatePost("post-1");
-    await revalidatePost("post-2");
-
-    expect(mockUpdateTag).toHaveBeenCalledWith(blogPostTag("post-1"));
-    expect(mockUpdateTag).toHaveBeenCalledWith(blogPostTag("post-2"));
-    expect(blogPostTag("post-1")).not.toBe(blogPostTag("post-2"));
   });
 });

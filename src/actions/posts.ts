@@ -1,12 +1,29 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { ok, err } from "@/lib/actions";
+import { invalidate } from "@/lib/cache/invalidation";
 import type { ActionResult } from "@/lib/actions";
 import type { PostSummary } from "@/lib/dal/posts";
+
+/**
+ * The post mutations, and the cache entries they are responsible for.
+ *
+ * Each of these used to end in `revalidatePath("/posts")`, which was the wrong
+ * target twice over: `/posts` is the dashboard, whose reads are uncached and
+ * therefore have no entry to drop, while the public blog — which caches the
+ * published list for 60s and each post page for 300s — was never invalidated at
+ * all. Publishing a post did not put it on `/blog`, and deleting one did not
+ * take it off.
+ *
+ * What each write invalidates is now decided by `@/lib/cache/invalidation` from
+ * the post's published state before and after; see that module for why the
+ * decision lives there and not here. `scripts/assert-cache-invalidation.ts`
+ * fails CI if a Server Action in this directory writes to the database without
+ * going through it.
+ */
 
 const createPostSchema = z.object({
   title: z
@@ -48,7 +65,11 @@ export async function createPostAction(input: {
     },
   });
 
-  revalidatePath("/posts");
+  invalidate({
+    kind: "post.created",
+    postId: post.id,
+    published: post.published,
+  });
   return ok(post);
 }
 
@@ -60,9 +81,13 @@ export async function deletePostAction(
     return err("You must be signed in to delete a post.");
   }
 
+  // `published` is selected alongside the ownership check because it is not
+  // recoverable afterwards: once the row is deleted there is no way to ask
+  // whether the page being dropped was ever public, and a delete that guesses
+  // would either leave a 404'd post cached or purge the blog on every draft.
   const post = await prisma.post.findUnique({
     where: { id: postId },
-    select: { authorId: true },
+    select: { authorId: true, published: true },
   });
 
   if (!post) {
@@ -75,7 +100,11 @@ export async function deletePostAction(
 
   await prisma.post.delete({ where: { id: postId } });
 
-  revalidatePath("/posts");
+  invalidate({
+    kind: "post.deleted",
+    postId,
+    wasPublished: post.published,
+  });
   return ok(undefined);
 }
 
@@ -113,6 +142,11 @@ export async function togglePublishAction(
     },
   });
 
-  revalidatePath("/posts");
+  invalidate({
+    kind: "post.updated",
+    postId,
+    wasPublished: post.published,
+    isPublished: updated.published,
+  });
   return ok(updated);
 }

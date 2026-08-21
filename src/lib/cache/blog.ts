@@ -1,5 +1,6 @@
 import { cacheLife, cacheTag } from "next/cache";
 import { getPostById, getPublishedPosts } from "@/lib/dal/posts";
+import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
 import type { PostSummary, PostWithAuthor } from "@/lib/dal/posts";
 
 /**
@@ -17,10 +18,12 @@ import type { PostSummary, PostWithAuthor } from "@/lib/dal/posts";
  * dashboard reads the same table scoped to the signed-in user, and caching a
  * per-user query behind a shared key would serve one user's posts to another.
  * Only the two genuinely public reads are cached, and only here.
+ *
+ * The tags these entries carry are defined in `@/lib/cache/tags` and dropped by
+ * `@/lib/cache/invalidation`. This module is the read half of that contract and
+ * imports the strings rather than spelling them, so a rename cannot leave the
+ * two halves silently disagreeing.
  */
-
-/** Invalidates the published-post list. */
-export const BLOG_POSTS_TAG = "blog:posts";
 
 /**
  * Both reads carry the moment their cache entry was filled.
@@ -36,11 +39,6 @@ export const BLOG_POSTS_TAG = "blog:posts";
 export interface Stamped<T> {
   data: T;
   renderedAt: Date;
-}
-
-/** Invalidates one post, without dropping the list. */
-export function blogPostTag(id: string): string {
-  return `blog:post:${id}`;
 }
 
 /**

@@ -12,12 +12,8 @@ vi.mock("@/lib/dal/posts", () => ({
 
 import { cacheLife, cacheTag } from "next/cache";
 import { getPostById, getPublishedPosts } from "@/lib/dal/posts";
-import {
-  BLOG_POSTS_TAG,
-  blogPostTag,
-  getCachedPost,
-  getCachedPublishedPosts,
-} from "./blog";
+import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
+import { getCachedPost, getCachedPublishedPosts } from "./blog";
 
 /**
  * `"use cache"` is a directive Next's compiler acts on; under Vitest it is an
@@ -118,14 +114,5 @@ describe("getCachedPost", () => {
   });
 });
 
-describe("blogPostTag", () => {
-  it("namespaces the tag so it cannot collide with the list tag", () => {
-    expect(blogPostTag("post-1")).not.toBe(BLOG_POSTS_TAG);
-    expect(blogPostTag("post-1")).toContain("post-1");
-  });
-
-  it("is a pure function of the id", () => {
-    expect(blogPostTag("post-1")).toBe(blogPostTag("post-1"));
-    expect(blogPostTag("a")).not.toBe(blogPostTag("b"));
-  });
-});
+// The `blogPostTag` cases that used to close this file moved with the tag
+// definitions themselves, to `src/lib/cache/tags.test.ts`.
