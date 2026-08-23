@@ -2,13 +2,21 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getPublishedPosts } from "@/lib/dal/posts";
-import { getCachedPost } from "@/lib/cache/blog";
+import { getBlogPost } from "@/lib/cache/blog";
+import { PreviewBanner } from "@/components/preview/preview-banner";
+import { DraftBadge } from "@/components/preview/draft-badge";
 import { toParagraphs } from "@/lib/prose";
 import { IsrBadge } from "../_components/isr-badge";
 import { RevalidateButton } from "../_components/revalidate-button";
 
 /**
- * ISR under Cache Components.
+ * ISR under Cache Components, plus the draft-mode read.
+ *
+ * `getBlogPost` returns the cached published post for a public request and an
+ * uncached one — which may be unpublished — for a preview. `generateStaticParams`
+ * below still enumerates published posts only: a draft has no business being
+ * prerendered, and a preview reaches it through the dynamic path that any
+ * unknown slug takes.
  *
  * `export const revalidate = 300` and `export const dynamicParams = true` used
  * to live here. Cache Components rejects both as route segment config: the
@@ -32,7 +40,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const { data: post } = await getCachedPost(slug);
+  const { data: post } = await getBlogPost(slug);
   if (!post) return { title: "Post not found" };
   return {
     title: post.title,
@@ -48,14 +56,23 @@ export default async function BlogPostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const { data: post, renderedAt } = await getCachedPost(slug);
+  const { data: post, renderedAt } = await getBlogPost(slug);
 
-  if (!post || !post.published) notFound();
+  // This was `if (!post || !post.published)`. Dropping the second clause is
+  // only safe because the *read* now applies it: `getBlogPost` resolves to
+  // `getPublishedPostById` for a public request and to the unfiltered read for
+  // a preview, so by the time a post is in hand the entitlement question has
+  // been answered. Relaxing the guard here before moving the filter there is
+  // exactly the mistake that served an unpublished post to the public with a
+  // 200 — see the note on `getPublishedPostById`.
+  if (!post) notFound();
 
   const paragraphs = toParagraphs(post.content);
 
   return (
     <article className="flex flex-col gap-8">
+      <PreviewBanner returnTo={`/blog/${post.id}`} />
+
       <div className="flex flex-col gap-4">
         <Link
           href="/blog"
@@ -66,8 +83,9 @@ export default async function BlogPostPage({
         </Link>
 
         <div className="flex items-start justify-between gap-4 flex-wrap">
-          <h1 className="text-3xl font-bold tracking-tight leading-tight max-w-2xl">
+          <h1 className="flex flex-wrap items-center gap-3 text-3xl font-bold tracking-tight leading-tight max-w-2xl">
             {post.title}
+            {!post.published && <DraftBadge className="align-middle" />}
           </h1>
           <IsrBadge renderedAt={renderedAt} revalidateSeconds={300} />
         </div>

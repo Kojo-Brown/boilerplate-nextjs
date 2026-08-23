@@ -36,6 +36,16 @@ vi.mock("next/headers", () => ({
     getAll: vi.fn(() => []),
   })),
   headers: vi.fn(async () => new Headers()),
+  // Off by default, which matches what `draftMode()` returns everywhere a
+  // preview cookie is absent — including at build time. A test that wants a
+  // preview says so explicitly (`vi.mocked(draftMode).mockResolvedValue(…)`),
+  // so no suite can start previewing by accident and no assertion about the
+  // published path is quietly running against the draft one.
+  draftMode: vi.fn(async () => ({
+    isEnabled: false,
+    enable: vi.fn(),
+    disable: vi.fn(),
+  })),
 }));
 
 vi.mock("next/cache", () => ({

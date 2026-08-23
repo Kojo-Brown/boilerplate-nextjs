@@ -5,6 +5,7 @@ vi.mock("@/lib/prisma", () => ({
     post: {
       findMany: vi.fn(),
       findUnique: vi.fn(),
+      findFirst: vi.fn(),
       count: vi.fn(),
     },
   },
@@ -13,8 +14,10 @@ vi.mock("@/lib/prisma", () => ({
 import { prisma } from "@/lib/prisma";
 import {
   getPublishedPosts,
+  getPostsForPreview,
   getPostsByUser,
   getPostById,
+  getPublishedPostById,
   getPostCountByUser,
   getPaginatedPostsByUser,
   getPaginatedPublishedPosts,
@@ -69,6 +72,45 @@ describe("getPublishedPosts", () => {
   });
 });
 
+describe("getPostsForPreview", () => {
+  it("applies no published filter, which is the whole reason it is separate", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    await getPostsForPreview();
+
+    const [args] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
+    // Not `where: { published: true }`, and not a `where` at all — an omitted
+    // filter is the only shape that cannot be half-right.
+    expect(args).not.toHaveProperty("where");
+    expect(args).toMatchObject({ orderBy: { createdAt: "desc" } });
+  });
+
+  it("orders newest first, like the published list it stands in for", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+
+    await getPostsForPreview();
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ orderBy: { createdAt: "desc" } }),
+    );
+  });
+
+  it("selects the same fields as the published list", async () => {
+    // The two feed one component. A field present in one and not the other is
+    // a preview that renders differently from the page it is previewing.
+    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+
+    await getPublishedPosts();
+    await getPostsForPreview();
+
+    const [published] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
+    const [preview] = vi.mocked(prisma.post.findMany).mock.calls[1] ?? [];
+    expect((preview as { select: unknown }).select).toEqual(
+      (published as { select: unknown }).select,
+    );
+  });
+});
+
 describe("getPostsByUser", () => {
   it("filters posts by authorId", async () => {
     vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
@@ -108,6 +150,45 @@ describe("getPostById", () => {
 
     const result = await getPostById("missing");
     expect(result).toBeNull();
+  });
+});
+
+describe("getPublishedPostById", () => {
+  it("puts the published filter in the query, not in the caller", async () => {
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+
+    await getPublishedPostById("post-1");
+
+    // The regression this function exists for: while the check lived in the
+    // page component, `getCachedPost` could write an unpublished post into a
+    // cache entry the whole public shares.
+    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "post-1", published: true } }),
+    );
+  });
+
+  it("returns null for an unpublished post", async () => {
+    // The database applies the filter, so an unpublished row simply does not
+    // come back. This pins the contract callers rely on.
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(null as never);
+
+    expect(await getPublishedPostById("draft-1")).toBeNull();
+  });
+
+  it("includes the same author fields as getPostById", async () => {
+    // The two feed one page. A narrower author here would render a byline that
+    // differs between the preview and the published view.
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(mockFullPost as never);
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+
+    await getPostById("post-1");
+    await getPublishedPostById("post-1");
+
+    const [unfiltered] = vi.mocked(prisma.post.findUnique).mock.calls[0] ?? [];
+    const [filtered] = vi.mocked(prisma.post.findFirst).mock.calls[0] ?? [];
+    expect((filtered as { include: unknown }).include).toEqual(
+      (unfiltered as { include: unknown }).include,
+    );
   });
 });
 
