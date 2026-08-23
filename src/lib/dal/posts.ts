@@ -7,7 +7,10 @@ export type PostWithAuthor = Post & {
   author: Pick<User, "id" | "name" | "email" | "image">;
 };
 
-export type PostSummary = Pick<Post, "id" | "title" | "published" | "createdAt" | "updatedAt"> & {
+export type PostSummary = Pick<
+  Post,
+  "id" | "title" | "published" | "createdAt" | "updatedAt"
+> & {
   author: Pick<User, "id" | "name" | "email">;
 };
 
@@ -24,6 +27,27 @@ export async function getPublishedPosts(): Promise<PostSummary[]> {
         select: { id: true, name: true, email: true },
       },
     },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+/**
+ * Every post, published or not, newest first — the blog index as an author
+ * previewing the site should see it.
+ *
+ * Separate from `getPublishedPosts` rather than a `{ includeDrafts }` flag on
+ * it. The flag version has one call site that must never pass `true`
+ * (`getCachedPublishedPosts`, whose result is written to a shared cache entry)
+ * and one that must always pass it, and nothing but attention keeps them
+ * apart. Two functions make "the cached read cannot return a draft" something
+ * you can see at the import.
+ *
+ * Deliberately not scoped to an author. Draft mode is a whole-site preview —
+ * see `docs/draft-mode.md` for who can open one and what that grants.
+ */
+export async function getPostsForPreview(): Promise<PostSummary[]> {
+  return prisma.post.findMany({
+    select: POST_SUMMARY_SELECT,
     orderBy: { createdAt: "desc" },
   });
 }
@@ -48,6 +72,39 @@ export async function getPostsByUser(userId: string): Promise<PostSummary[]> {
 export async function getPostById(id: string): Promise<PostWithAuthor | null> {
   return prisma.post.findUnique({
     where: { id },
+    include: {
+      author: {
+        select: { id: true, name: true, email: true, image: true },
+      },
+    },
+  });
+}
+
+/**
+ * One post, but only if the public may read it.
+ *
+ * The filter is in the `where` rather than in the caller, and that placement is
+ * the whole point of the function existing. `getCachedPost` writes its result
+ * into a cache entry tagged for the public blog; while the published check
+ * lived in `app/blog/[slug]/page.tsx`, that entry could hold an unpublished
+ * post and the only thing keeping it off the screen was one `||` in a component
+ * three modules away.
+ *
+ * That is not hypothetical. Adding draft mode meant relaxing the page's guard
+ * from `if (!post || !post.published)` to `if (!post)` — correct only if the
+ * read had already applied the filter, which it had not. The result was a
+ * public request to an unpublished post's URL answering 200 with its full
+ * contents. Nothing in the unit suite noticed; `e2e/preview.spec.ts` did, on
+ * the assertion that a second browser context with no cookies gets a 404.
+ *
+ * `findFirst` rather than `findUnique`: `findUnique` accepts only unique fields
+ * in its `where`, and `published` is not one.
+ */
+export async function getPublishedPostById(
+  id: string,
+): Promise<PostWithAuthor | null> {
+  return prisma.post.findFirst({
+    where: { id, published: true },
     include: {
       author: {
         select: { id: true, name: true, email: true, image: true },

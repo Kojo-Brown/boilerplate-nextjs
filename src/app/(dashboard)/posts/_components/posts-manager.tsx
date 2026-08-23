@@ -1,7 +1,12 @@
 "use client";
 
 import { cn } from "@/lib/cn";
-import { usePostsQuery, useDeletePost, useTogglePublish } from "@/hooks/use-posts";
+import {
+  usePostsQuery,
+  useDeletePost,
+  useTogglePublish,
+} from "@/hooks/use-posts";
+import { PreviewButton } from "@/components/preview/preview-button";
 import { CreatePostDialog } from "./create-post-dialog";
 import type { PostSummary } from "@/lib/dal/posts";
 import type { SerializedPostSummary } from "@/hooks/use-posts";
@@ -59,17 +64,29 @@ function PostRow({
             {post.published ? "Published" : "Draft"}
           </span>
         </div>
-        <p className="mt-0.5 text-xs" style={{ color: "var(--muted-foreground)" }}>
+        <p
+          className="mt-0.5 text-xs"
+          style={{ color: "var(--muted-foreground)" }}
+        >
           {post.author.name ?? post.author.email} · {formatted}
         </p>
       </div>
 
       {isOwn && !isOptimistic && (
         <div className="flex shrink-0 items-center gap-2">
+          {/* Available for published posts too, not just drafts: previewing an
+              edit to something already live is the other half of what draft
+              mode is for, and the token grants the same session either way. */}
+          <PreviewButton
+            postId={post.id}
+            className="rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-[var(--muted)] disabled:opacity-50"
+          />
           <button
             type="button"
             onClick={() => togglePublish.mutate(post.id)}
-            disabled={togglePublish.isPending && togglePublish.variables === post.id}
+            disabled={
+              togglePublish.isPending && togglePublish.variables === post.id
+            }
             className="rounded-md px-2.5 py-1 text-xs font-medium border transition-colors hover:bg-[var(--muted)] disabled:opacity-50"
           >
             {post.published ? "Unpublish" : "Publish"}
@@ -91,8 +108,14 @@ function PostRow({
 export function PostsManager({ userId, initialPosts }: PostsManagerProps) {
   const { data: posts, isLoading, isError } = usePostsQuery(initialPosts);
 
-  const myPosts = posts?.filter((p) => p.author.id === userId || p.id.startsWith("optimistic-")) ?? [];
-  const otherPosts = posts?.filter((p) => p.author.id !== userId && !p.id.startsWith("optimistic-")) ?? [];
+  const myPosts =
+    posts?.filter(
+      (p) => p.author.id === userId || p.id.startsWith("optimistic-"),
+    ) ?? [];
+  const otherPosts =
+    posts?.filter(
+      (p) => p.author.id !== userId && !p.id.startsWith("optimistic-"),
+    ) ?? [];
 
   if (isError) {
     return (
@@ -125,7 +148,8 @@ export function PostsManager({ userId, initialPosts }: PostsManagerProps) {
             className="rounded-xl border border-dashed p-8 text-center text-sm"
             style={{ color: "var(--muted-foreground)" }}
           >
-            You haven&apos;t created any posts yet. Click <strong>New Post</strong> to get started.
+            You haven&apos;t created any posts yet. Click{" "}
+            <strong>New Post</strong> to get started.
           </p>
         ) : (
           <ul className="flex flex-col gap-3">

@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getCachedPublishedPosts } from "@/lib/cache/blog";
+import { getBlogIndex } from "@/lib/cache/blog";
 import { BLOG_POSTS_TAG } from "@/lib/cache/tags";
+import { PreviewBanner } from "@/components/preview/preview-banner";
+import { DraftBadge } from "@/components/preview/draft-badge";
 import { IsrBadge } from "./_components/isr-badge";
 import { RevalidateButton } from "./_components/revalidate-button";
 
@@ -16,25 +18,39 @@ export const metadata: Metadata = {
  * `export const revalidate = 60` — a route segment config Cache Components
  * rejects outright — now lives on `getCachedPublishedPosts`, which also stamps
  * the render time so the badge reflects the cache entry rather than the request.
+ *
+ * `getBlogIndex` picks between that cached read and an uncached one that also
+ * returns drafts, according to whether this request is a preview. The route
+ * stays statically prerendered either way; `@/lib/preview/draft` has the reason
+ * that is possible.
  */
 export default async function BlogPage() {
-  const { data: posts, renderedAt } = await getCachedPublishedPosts();
+  const { data: posts, renderedAt } = await getBlogIndex();
+  const draftCount = posts.filter((post) => !post.published).length;
 
   return (
     <div className="flex flex-col gap-8">
+      <PreviewBanner returnTo="/blog" />
+
       <div className="flex flex-col gap-3">
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">
-              Published Posts
+              {draftCount > 0 ? "All Posts" : "Published Posts"}
             </h1>
             <p
               className="mt-1 text-sm"
               style={{ color: "var(--muted-foreground)" }}
             >
+              {/* The heading and this line are derived from the posts actually
+                  in hand rather than from `isPreviewEnabled()` a second time.
+                  Reading the flag once, in the data layer, is what keeps "what
+                  is on this page" and "what this page says about itself" from
+                  being able to disagree. */}
               {posts.length === 0
                 ? "No published posts yet."
-                : `${posts.length} post${posts.length === 1 ? "" : "s"} available`}
+                : `${posts.length} post${posts.length === 1 ? "" : "s"} available` +
+                  (draftCount > 0 ? ` · ${draftCount} unpublished` : "")}
             </p>
           </div>
           <IsrBadge renderedAt={renderedAt} revalidateSeconds={60} />
@@ -100,8 +116,11 @@ export default async function BlogPage() {
                 className="group flex flex-col gap-1 rounded-xl border p-5 transition-shadow hover:shadow-md"
                 style={{ borderColor: "var(--border)" }}
               >
-                <span className="text-lg font-semibold leading-snug group-hover:underline">
-                  {post.title}
+                <span className="flex items-center gap-2">
+                  <span className="text-lg font-semibold leading-snug group-hover:underline">
+                    {post.title}
+                  </span>
+                  {!post.published && <DraftBadge />}
                 </span>
                 <span
                   className="text-sm"

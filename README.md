@@ -162,6 +162,38 @@ claiming portability while tracing Node-only packages.
 [docs/route-handlers.md](./docs/route-handlers.md) has the reproduction, the
 citation, and the two defects the build caught in the wrapper itself.
 
+## Draft mode
+
+`/blog` serves published posts from a 60-second cache. A **signed preview
+token** opens a draft session in which the same routes serve unpublished content
+uncached, with a banner across the top and a `Draft` label on anything not live.
+Authors mint links from the **Preview** button on `/posts`; the token is what an
+external CMS's preview button would carry.
+
+```
+createPreviewLinkAction  →  /api/preview?token=…  →  307 to the signed path
+   session + ownership        verify + enable()        drafts, uncached
+```
+
+Two decisions carry the design. The **destination is inside the signature**, so
+a preview link is not an open redirect and cannot be repointed at another post —
+Next's own guide reads it from the query string, which is both. And the read
+layer branches **outside** `"use cache"`, so a draft response can never become a
+cache entry the public shares.
+
+Reading `draftMode().isEnabled` is not a tracked dynamic access — unlike
+`cookies()`, `headers()` or `searchParams` — which is the whole reason this
+works without costing `/blog` its static prerender. `cookies()` in a page body
+would have.
+
+The unit suite cannot prove the parts that matter (that the cookie survives the
+redirect, that it actually changes what the server sends, that a reader without
+one sees nothing), so `e2e/preview.spec.ts` drives the flow in a real browser
+against a production build. It earned its keep on the first run: it caught an
+unpublished post being served to an anonymous request with a 200.
+[docs/draft-mode.md](./docs/draft-mode.md) has the flow, the leak, and what the
+token's expiry does and does not bound.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`
