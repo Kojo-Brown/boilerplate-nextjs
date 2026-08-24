@@ -272,6 +272,20 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The same argument again, one level below the route-shape gate. That one
+      # asks whether a route prerendered a shell; a shell exists as soon as the
+      # layout has one static byte in it, so five routes satisfied it while
+      # shipping a document that contained the sidebar and nothing the page
+      # itself renders — every heading, and on /images twelve kilobytes of
+      # literals, sat behind an `await` at the top of the page component. This
+      # reads the HTML the build wrote and fails if a page's own markup is
+      # missing from it, if the request-scoped reads have stopped being holes,
+      # or if a boundary prerendered an empty fallback.
+      - name: Assert streaming boundaries
+        run: pnpm exec tsx scripts/assert-streaming-boundaries.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument again, applied to the API surface. A route handler's
       # runtime and its portability are properties of its *module graph*, so one
       # added import changes both, changes no line that mentions either, and

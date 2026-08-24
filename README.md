@@ -107,6 +107,27 @@ prerendering its navigation.
 [docs/partial-prerendering.md](./docs/partial-prerendering.md) has the full
 tradeoff guide and the measurements.
 
+## Streaming
+
+Prerendering a route is not the same as prerendering a _page_. Every dashboard
+route here satisfied the route-shape gate while shipping a document made of the
+sidebar and grey boxes, because each page opened with `await
+getRequiredSession()` and everything below it — headings, card chrome, field
+labels, and 12 KB of literals on `/images` — was therefore absent from the built
+HTML.
+
+The rule is that a `<Suspense>` boundary belongs directly around the read, not
+around the page: a page component that is `async` has its whole body behind the
+await no matter how many boundaries are inside it. `loading.tsx` and the page
+now share one frame component and one fallback each, so a client navigation
+paints what the shell contains.
+
+`pnpm exec tsx scripts/assert-streaming-boundaries.ts` runs in CI after the
+build and fails if a page's own markup is missing from its prerendered document,
+if the request-scoped reads have stopped being holes, or if a boundary rendered
+an empty fallback. [docs/streaming.md](./docs/streaming.md) has the
+before-and-after measurements and where access checks go once a page prerenders.
+
 ## Routing
 
 `/photos` demonstrates **intercepting routes**: clicking a photo opens it in a
