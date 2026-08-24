@@ -78,14 +78,40 @@ describe("GET /api/preview", () => {
     expect(enable).not.toHaveBeenCalled();
   });
 
-  it("answers 401 for a forged token, and does not enable draft mode", async () => {
+  it("answers 401 for a corrupted signature, and does not enable draft mode", async () => {
     const token = await signPreviewToken("/blog/post-1");
     const [payload, signature] = token.split(".") as [string, string];
-    const forged = `${payload}.${signature.slice(0, -1)}${
-      signature.endsWith("A") ? "B" : "A"
-    }`;
 
-    const response = await GET(request(`?token=${forged}`));
+    // The *first* character, not the last. A 32-byte HMAC is 43 base64url
+    // characters — 258 bits — so the final character carries four significant
+    // bits and two of padding, and canonical encoding always leaves those two
+    // at zero. Flipping it between "A" (000000) and "B" (000001) changes only a
+    // padding bit, so the "forgery" decodes to the identical 32 bytes and
+    // verifies. This test used to do exactly that, and failed with 307 instead
+    // of 401 whenever a signature happened to end in "A" — 18 times in 300
+    // when measured. Every bit of the first character is signature.
+    const corrupted = `${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+
+    const response = await GET(request(`?token=${payload}.${corrupted}`));
+
+    expect(response.status).toBe(401);
+    expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("answers 401 for a real signature over a different payload", async () => {
+    // The property a corrupted-byte test cannot state: the signature is bound
+    // to *this* payload. Here both halves are authentic and only the pairing is
+    // not, which is the shape a forgery actually takes — an attacker holding
+    // one valid preview link and wanting it to authorise a different path.
+    const [payload] = (await signPreviewToken("/blog/post-1")).split(".") as [
+      string,
+      string,
+    ];
+    const [, signature] = (await signPreviewToken("/blog/post-2")).split(
+      ".",
+    ) as [string, string];
+
+    const response = await GET(request(`?token=${payload}.${signature}`));
 
     expect(response.status).toBe(401);
     expect(enable).not.toHaveBeenCalled();

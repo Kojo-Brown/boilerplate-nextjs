@@ -6,10 +6,15 @@ import fs from "fs";
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe("Protected routes (unauthenticated)", () => {
+  // `/posts`, `/images` and `/upload` are the real route paths — there is no
+  // `/dashboard/posts`. They used to be reachable, redirecting only once the
+  // page component read the session; they are in `PROTECTED_PREFIXES` now, so
+  // the proxy turns the request away before a response begins.
   const protectedPaths = [
     "/dashboard",
-    "/dashboard/posts",
-    "/dashboard/images",
+    "/posts",
+    "/images",
+    "/upload",
     "/settings",
     "/profile",
   ];

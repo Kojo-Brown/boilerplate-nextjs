@@ -5,6 +5,10 @@ vi.mock("@/lib/session", () => ({
   getSession: vi.fn(),
 }));
 
+vi.mock("@/lib/dal/posts", () => ({
+  getPostsByUser: vi.fn(),
+}));
+
 // The Server Actions these pages reach transitively import `@/auth`, and
 // next-auth's `lib/env.js` does a bare `next/server` import that Vitest's node
 // resolver rejects. Neither action is what is under test here.
@@ -19,10 +23,20 @@ vi.mock("@/actions/upload", () => ({
   getPresignedUploadUrlAction: vi.fn(),
 }));
 
+// A Client Component with TanStack Query hooks. `<PostsSection>` only has to
+// hand it the data it fetched; rendering the real one would need a DOM and a
+// QueryClient, neither of which says anything about the session check.
+vi.mock("./posts/_components/posts-manager", () => ({
+  PostsManager: () => null,
+}));
+
+import { authConfig, PROTECTED_PREFIXES } from "@/auth.config";
 import { getRequiredSession } from "@/lib/session";
+import { getPostsByUser } from "@/lib/dal/posts";
 import type { AuthSession } from "@/lib/session";
 
 const mockGetRequiredSession = vi.mocked(getRequiredSession);
+const mockGetPostsByUser = vi.mocked(getPostsByUser);
 
 const session = {
   user: { id: "user-1", role: "USER", email: "grace@example.com" },
@@ -32,53 +46,111 @@ const session = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetRequiredSession.mockResolvedValue(session);
+  mockGetPostsByUser.mockResolvedValue([]);
+});
+
+type AuthorizedParams = Parameters<
+  NonNullable<NonNullable<typeof authConfig.callbacks>["authorized"]>
+>[0];
+
+const authorized = authConfig.callbacks!.authorized!;
+
+function anonymousRequestFor(path: string) {
+  return {
+    auth: null,
+    request: {
+      nextUrl: new URL(path, "http://localhost:3000"),
+    } as AuthorizedParams["request"],
+  };
+}
+
+/**
+ * `/posts`, `/images` and `/upload` used to be protected by an
+ * `await getRequiredSession()` at the top of their page components, because the
+ * proxy did not list them and `(dashboard)/layout.tsx` had stopped reading the
+ * session.
+ *
+ * That worked and cost all three of them their prerender: under Cache
+ * Components a page cannot gate on a cookie and still put anything in the
+ * static shell, so their headings — and, on `/images`, twelve kilobytes of
+ * literals — were streamed to every visitor on every request.
+ *
+ * The gate moved to `PROTECTED_PREFIXES`, which is both earlier (no response
+ * has begun) and unconditional (it does not depend on a page component
+ * remembering to call something). These tests are that gate, named route by
+ * route rather than folded into a loop over the constant, so deleting an entry
+ * fails a test that says which route just became public.
+ */
+describe("dashboard routes that render no per-request data", () => {
+  it.for(["/posts", "/images", "/upload"] as const)(
+    "%s is gated by the proxy, not by rendering",
+    (route) => {
+      expect(PROTECTED_PREFIXES).toContain(route);
+
+      const result = authorized(anonymousRequestFor(route));
+
+      expect(result).toBeInstanceOf(Response);
+      expect((result as Response).headers.get("location")).toContain("/login");
+    },
+  );
+
+  it.for([
+    ["/images", () => import("./images/page")],
+    ["/upload", () => import("./upload/page")],
+  ] as const)("%s prerenders: no session read, no await", async ([, load]) => {
+    const { default: Page } = await load();
+
+    // Synchronous. An async page is an awaited page, and everything it renders
+    // would be behind that await again — which is the failure
+    // scripts/assert-streaming-boundaries.ts checks for in the built output and
+    // this checks for in the source.
+    expect(Page.constructor.name).toBe("Function");
+
+    Page();
+
+    expect(mockGetRequiredSession).not.toHaveBeenCalled();
+  });
 });
 
 /**
- * `(dashboard)/layout.tsx` used to `await getRequiredSession()`, which gated
- * every route beneath it as a side effect. Making that layout synchronous — so
- * the dashboard chrome could prerender into the PPR shell — removed that gate,
- * and two routes had nothing else protecting them: `/images` and `/upload` are
- * absent from `PROTECTED_PREFIXES` in `auth.config.ts`, so the proxy lets them
- * through.
- *
- * These tests exist so that regression cannot happen quietly. A page here that
- * stops asserting a session is a page anyone on the internet can read.
- *
- * They are also the reason the check belongs on the page rather than the
- * layout: Next does not re-render a shared layout when the user navigates
- * between sibling routes inside it, so a layout-level check is skipped on
- * exactly the navigations an attacker would use.
+ * `/posts` is the other half of the same rule: it *does* render per-request
+ * data, so the read stays — it just moved down into the boundary with the
+ * markup that needs it.
  */
-describe("dashboard routes not covered by the proxy", () => {
-  it.for([
-    ["/images", () => import("./images/page")],
-    ["/upload", () => import("./upload/page")],
-  ] as const)("%s requires a session before rendering", async ([, load]) => {
-    const { default: Page } = await load();
+describe("/posts", () => {
+  it("prerenders its heading: the page component is synchronous", async () => {
+    const { default: Page } = await import("./posts/page");
 
-    await Page();
+    expect(Page.constructor.name).toBe("Function");
 
-    expect(mockGetRequiredSession).toHaveBeenCalled();
+    Page();
+
+    expect(mockGetRequiredSession).not.toHaveBeenCalled();
   });
 
-  it.for([
-    ["/images", () => import("./images/page")],
-    ["/upload", () => import("./upload/page")],
-  ] as const)(
-    "%s propagates the redirect when there is no session",
-    async ([, load]) => {
-      // getRequiredSession calls redirect(), which throws. The page must not
-      // swallow it — catching it here would render protected markup to an
-      // anonymous visitor.
-      const redirect = new Error("NEXT_REDIRECT");
-      mockGetRequiredSession.mockRejectedValue(redirect);
+  it("reads the session inside the boundary and scopes the query to it", async () => {
+    const { PostsSection } = await import("./posts/_components/posts-section");
 
-      const { default: Page } = await load();
+    await PostsSection();
 
-      await expect(Page()).rejects.toThrow("NEXT_REDIRECT");
-    },
-  );
+    expect(mockGetRequiredSession).toHaveBeenCalled();
+    // The check that matters is not that a session was read but that the query
+    // was fenced by it. A `getPostsByUser` call with anything else here is one
+    // user's dashboard showing another user's drafts.
+    expect(mockGetPostsByUser).toHaveBeenCalledWith(session.user.id);
+  });
+
+  it("propagates the redirect when there is no session", async () => {
+    // getRequiredSession calls redirect(), which throws. The section must not
+    // swallow it — catching it here would render one user's posts to whoever
+    // reached the route with a stale cookie.
+    mockGetRequiredSession.mockRejectedValue(new Error("NEXT_REDIRECT"));
+
+    const { PostsSection } = await import("./posts/_components/posts-section");
+
+    await expect(PostsSection()).rejects.toThrow("NEXT_REDIRECT");
+    expect(mockGetPostsByUser).not.toHaveBeenCalled();
+  });
 });
 
 describe("(dashboard)/layout", () => {

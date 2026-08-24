@@ -1,30 +1,33 @@
 import type { Metadata } from "next";
-import { getRequiredSession } from "@/lib/session";
-import { getPostsByUser } from "@/lib/dal/posts";
-import { PostsManager } from "./_components/posts-manager";
+import { Suspense } from "react";
+import { PostsFrame } from "./_components/posts-frame";
+import {
+  PostsSection,
+  PostsSectionFallback,
+} from "./_components/posts-section";
 
 export const metadata: Metadata = {
   title: "Posts",
   description: "Browse and manage posts",
 };
 
-export default async function PostsPage() {
-  const session = await getRequiredSession();
-  const initialPosts = await getPostsByUser(session.user.id);
-
+/**
+ * Synchronous on purpose — see `docs/streaming.md`.
+ *
+ * The session read and the query it feeds now live in `<PostsSection>`, behind
+ * a boundary. `/posts` is the route whose shell this repository has measured
+ * twice: 2.6 KB when the dashboard layout read the session, and 7.8 KB of pure
+ * chrome once that moved into `<UserChip>` — chrome, because the page's own
+ * heading was still behind `await getRequiredSession()` here.
+ */
+export default function PostsPage() {
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Posts</h1>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
-          {initialPosts.length === 0
-            ? "No posts yet"
-            : `${initialPosts.length} post${initialPosts.length === 1 ? "" : "s"} in your account`}
-        </p>
-      </div>
-
-      {/* PostsManager is a Client Component backed by TanStack Query for optimistic mutations */}
-      <PostsManager userId={session.user.id} initialPosts={initialPosts} />
-    </div>
+    <PostsFrame
+      section={
+        <Suspense fallback={<PostsSectionFallback />}>
+          <PostsSection />
+        </Suspense>
+      }
+    />
   );
 }

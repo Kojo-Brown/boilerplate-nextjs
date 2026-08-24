@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { getRequiredSession } from "@/lib/session";
 import { BlurImage } from "@/components/ui/blur-image";
 import { shimmerDataUrl } from "@/lib/lqip";
 
@@ -27,14 +26,22 @@ const FIXED_SIZE_DEMOS = [
 ];
 
 /**
- * `/images` is not in `PROTECTED_PREFIXES`, so the proxy does not gate it. It
- * was protected only by the session read in `(dashboard)/layout.tsx`; now that
- * the layout is synchronous, the check lives here where it applies on every
- * navigation rather than only on a full page load.
+ * Synchronous, and therefore fully static — see `docs/streaming.md`.
+ *
+ * Every byte on this page comes from `FIXED_SIZE_DEMOS` and the literals below.
+ * It rendered nothing about the visitor even when it opened with
+ * `await getRequiredSession()`, and that one call was enough to keep all of it
+ * out of the static shell: the route built as `◐` with a 6.3 KB shell that
+ * contained the sidebar and none of the showcase.
+ *
+ * The gate did not disappear with the call. `/images` is now in
+ * `PROTECTED_PREFIXES`, so the proxy turns an anonymous request away before any
+ * of this is rendered — earlier than the redirect this page used to perform,
+ * and without costing the route its prerender. There is no user data here for a
+ * second check to stand next to; where there is (`/posts`, the upload action),
+ * the check is still there.
  */
-export default async function ImagesPage() {
-  await getRequiredSession();
-
+export default function ImagesPage() {
   return (
     <div className="flex flex-col gap-8">
       <div>

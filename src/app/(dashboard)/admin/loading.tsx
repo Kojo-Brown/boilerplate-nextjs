@@ -1,14 +1,11 @@
-import { Skeleton, SkeletonCard } from "@/components/ui/skeleton";
+import { AdminFrame } from "./_components/admin-frame";
+import { AdminSessionFieldsFallback } from "./_components/admin-session-fields";
 
+/**
+ * Renders the same frame as the prerendered shell and the same fallback as the
+ * page's own boundary, so a soft navigation into `/admin` and a fresh request
+ * for it show the same thing.
+ */
 export default function AdminLoading() {
-  return (
-    <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-4 w-56" />
-      </div>
-
-      <SkeletonCard />
-    </div>
-  );
+  return <AdminFrame fields={<AdminSessionFieldsFallback />} />;
 }
