@@ -216,3 +216,18 @@ than no gate.
 4. If the mutation that changes it does not exist yet, add the variant to
    `CacheMutation` — the switch is exhaustive, so the compiler will point at the
    decision that has to be made.
+
+## Invalidating from outside a Server Action
+
+`invalidate()` is the Server Action entry point and is not usable anywhere else:
+`updateTag` throws E872 outside one, and `refresh()` throws E870. A Route
+Handler — the revalidation webhook — goes through `revalidateFromWebhook()`
+instead, which applies the same `tagsFor` policy through
+`revalidateTag(tag, { expire: 0 })`.
+
+Both failures are runtime-only and a mocked `next/cache` hides them, so the
+distinction is asserted against a real server in `e2e/revalidate-webhook.spec.ts`
+rather than in the unit suite.
+[docs/on-demand-revalidation.md](./on-demand-revalidation.md) covers the
+endpoint, its signature scheme, and why the wire vocabulary is not
+`CacheMutation`.
