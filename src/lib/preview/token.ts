@@ -45,6 +45,7 @@
  * claim `scripts/assert-api-runtimes.ts` checks against the build's dependency
  * trace on every CI run.
  */
+import { deriveHmacKey } from "@/lib/crypto/hmac";
 import { env } from "@/lib/env";
 
 /**
@@ -305,7 +306,7 @@ function previewKey(): Promise<CryptoKey> {
   return cachedKey;
 }
 
-async function deriveKey(): Promise<CryptoKey> {
+function deriveKey(): Promise<CryptoKey> {
   // `PREVIEW_SECRET` is optional on purpose. Requiring it would add a second
   // mandatory secret to every deployment of this boilerplate to enable a
   // feature most of them will not use, and the usual result of that is a
@@ -315,28 +316,15 @@ async function deriveKey(): Promise<CryptoKey> {
   // preview links. Setting `PREVIEW_SECRET` decouples the two for teams that
   // want preview links to survive an auth-secret rotation, or want the preview
   // signer handed to a CMS without handing over the session signer.
-  const secret = env.PREVIEW_SECRET ?? env.NEXTAUTH_SECRET;
-
-  const material = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    "HKDF",
-    false,
-    ["deriveKey"],
-  );
-
-  return crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: encoder.encode(HKDF_SALT),
-      info: encoder.encode(HKDF_INFO),
-    },
-    material,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
+  //
+  // The derivation itself lives in `@/lib/crypto/hmac`, shared with the
+  // revalidation webhook's signer. `HKDF_INFO` is what keeps the two keys
+  // unrelated despite the shared fallback secret — see the note there.
+  return deriveHmacKey({
+    secret: env.PREVIEW_SECRET ?? env.NEXTAUTH_SECRET,
+    salt: HKDF_SALT,
+    info: HKDF_INFO,
+  });
 }
 
 function randomNonce(): string {

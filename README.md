@@ -183,6 +183,35 @@ claiming portability while tracing Node-only packages.
 [docs/route-handlers.md](./docs/route-handlers.md) has the reproduction, the
 citation, and the two defects the build caught in the wrapper itself.
 
+## On-demand revalidation
+
+`/blog/[slug]` prerenders one page per published post via `generateStaticParams`
+and refills on a `cacheLife` window. `POST /api/revalidate` is how a change made
+**outside** the application — a CMS, a migration, a restored backup — clears
+those entries before the window expires.
+
+```
+x-revalidate-signature: t=1774483200,v1=<hex>   HMAC-SHA256 over "<t>.<raw body>"
+{ "event": "post.published", "postId": "…" }  →  { "revalidated": true, "tags": [...] }
+```
+
+Three decisions carry it. The signature covers the **raw bytes**, which is why
+this is the one handler not built on `defineRoute` — a wrapper that parses the
+body leaves nothing to verify against, and re-serialising the parsed value is
+not the same bytes. The **timestamp is inside the signed material**, so it
+cannot be rewritten to refresh a captured delivery. And the handler calls
+`revalidateTag(tag, { expire: 0 })` rather than the `updateTag` every Server
+Action here uses, because `updateTag` throws E872 outside a Server Action and
+`refresh()` throws E870 — both invisible to a unit suite, since mocking
+`next/cache` is exactly what stops them throwing.
+
+That last one is why `e2e/revalidate-webhook.spec.ts` writes a published post
+straight through Prisma, confirms `/blog` does not show it, posts a signed
+event, and confirms it appears — the only place the claim is actually tested.
+[docs/on-demand-revalidation.md](./docs/on-demand-revalidation.md) has the event
+table, what the replay window does and does not bound, and why the wire
+vocabulary is not `CacheMutation`.
+
 ## Draft mode
 
 `/blog` serves published posts from a 60-second cache. A **signed preview

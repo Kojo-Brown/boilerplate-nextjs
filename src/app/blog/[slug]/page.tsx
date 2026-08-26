@@ -135,12 +135,22 @@ export default async function BlogPostPage({
         >
           300s
         </code>
-        . Unknown post IDs are generated on-demand because{" "}
+        . A post published after the build has no prebuilt page and is rendered
+        on the first request instead — the default for a dynamic segment, and
+        the reason no{" "}
         <code
           className="rounded px-1 font-mono text-xs"
           style={{ backgroundColor: "var(--border)" }}
         >
-          dynamicParams = true
+          dynamicParams
+        </code>{" "}
+        export is needed (Cache Components rejects it as segment config). A CMS
+        clears this page ahead of the window by posting a signed event to{" "}
+        <code
+          className="rounded px-1 font-mono text-xs"
+          style={{ backgroundColor: "var(--border)" }}
+        >
+          /api/revalidate
         </code>
         .
       </div>

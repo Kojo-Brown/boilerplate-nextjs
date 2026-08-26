@@ -86,6 +86,13 @@ export const API_ROUTES: readonly ApiRouteDeclaration[] = [
       "redeems a signed preview token and flips a cookie — the signature is Web Crypto and the cookie is a framework primitive, so nothing here needs a database. It is the route that would most benefit from running at the edge (it sits in front of every CMS preview click), and the portability check is what keeps an import of Prisma 'just to confirm the post exists' from quietly taking that away",
   },
   {
+    path: "/api/revalidate",
+    runtime: "nodejs",
+    portable: true,
+    because:
+      "verifies an HMAC over the raw request body and drops cache tags — Web Crypto and a framework primitive, with no database read anywhere in it. The portability check is what keeps an existence check on the post ('does this id exist before we revalidate it?') from being added, which would pull Prisma in and make the endpoint's answer depend on replication lag",
+  },
+  {
     path: "/api/posts",
     runtime: "nodejs",
     portable: false,

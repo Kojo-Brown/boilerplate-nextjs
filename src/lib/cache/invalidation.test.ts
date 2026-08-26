@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("next/cache", () => ({
   updateTag: vi.fn(),
+  revalidateTag: vi.fn(),
   refresh: vi.fn(),
 }));
 
-import { refresh, updateTag } from "next/cache";
+import { refresh, revalidateTag, updateTag } from "next/cache";
 import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
-import { invalidate, tagsFor } from "./invalidation";
+import { invalidate, revalidateFromWebhook, tagsFor } from "./invalidation";
 import type { CacheMutation } from "./invalidation";
 
 const mockUpdateTag = vi.mocked(updateTag);
+const mockRevalidateTag = vi.mocked(revalidateTag);
 const mockRefresh = vi.mocked(refresh);
 
 beforeEach(() => {
@@ -225,5 +227,76 @@ describe("invalidate", () => {
         `${mutation.kind} signalled ${taggedCount} tag(s) and ${refreshedCount} refresh(es)`,
       ).toBe(true);
     }
+  });
+});
+
+/**
+ * The Route Handler entry point.
+ *
+ * Every assertion here is about a *runtime* constraint that a mocked
+ * `next/cache` makes invisible: `updateTag` and `refresh` throw outside a
+ * Server Action, and this suite's mock is precisely what stops them throwing.
+ * So the tests check which function was called, not just which tags came back —
+ * a webhook that reached for `updateTag` would return the right tags and 500 on
+ * every real delivery.
+ */
+describe("revalidateFromWebhook", () => {
+  it("drops the same tags the Server Action path would", () => {
+    const mutation: CacheMutation = {
+      kind: "post.updated",
+      postId: "post-1",
+      wasPublished: false,
+      isPublished: true,
+    };
+
+    expect(revalidateFromWebhook(mutation)).toEqual(tagsFor(mutation));
+  });
+
+  it("uses revalidateTag, never updateTag", () => {
+    revalidateFromWebhook({ kind: "blog.manual-refresh" });
+
+    expect(mockRevalidateTag).toHaveBeenCalledOnce();
+    expect(mockUpdateTag).not.toHaveBeenCalled();
+  });
+
+  it("expires the entry immediately rather than serving it stale", () => {
+    // The profile argument is the whole difference between this and a
+    // stale-while-revalidate drop. `"max"` would leave the old copy servable,
+    // which would mean a publish through the CMS and a publish through the
+    // dashboard reach readers at different times.
+    revalidateFromWebhook({ kind: "blog.manual-refresh" });
+
+    expect(mockRevalidateTag).toHaveBeenCalledWith(BLOG_POSTS_TAG, {
+      expire: 0,
+    });
+  });
+
+  it("never calls refresh, which throws outside a Server Action", () => {
+    // The mutation that drops no tags is the one `invalidate` answers with
+    // `refresh()`. There is no client holding uncached data here, and calling
+    // it would be an E870 on every delivery.
+    const tags = revalidateFromWebhook({
+      kind: "post.created",
+      postId: "post-1",
+      published: false,
+    });
+
+    expect(tags).toEqual([]);
+    expect(mockRefresh).not.toHaveBeenCalled();
+    expect(mockRevalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("drops every tag the policy names, in order", () => {
+    const tags = revalidateFromWebhook({
+      kind: "post.deleted",
+      postId: "post-9",
+      wasPublished: true,
+    });
+
+    expect(tags).toEqual([blogPostTag("post-9"), BLOG_POSTS_TAG]);
+    expect(mockRevalidateTag.mock.calls.map(([tag]) => tag)).toEqual([
+      blogPostTag("post-9"),
+      BLOG_POSTS_TAG,
+    ]);
   });
 });

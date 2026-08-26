@@ -1,4 +1,4 @@
-import { refresh, updateTag } from "next/cache";
+import { refresh, revalidateTag, updateTag } from "next/cache";
 import { BLOG_POSTS_TAG, blogPostTag } from "./tags";
 
 /**
@@ -156,5 +156,62 @@ export function invalidate(mutation: CacheMutation): readonly string[] {
     refresh();
   }
 
+  return tags;
+}
+
+/**
+ * The same policy, applied from a Route Handler.
+ *
+ * ## Why this is a second function rather than a flag on `invalidate`
+ *
+ * Because neither of the two calls `invalidate` makes is legal here, and both
+ * fail at *runtime* rather than at typecheck:
+ *
+ *   - `updateTag` throws `updateTag can only be called from within a Server
+ *     Action` (E872). Next tests `workStore.page.endsWith('/route')`, so the
+ *     check fires for every route handler, whatever it is doing.
+ *   - `refresh()` throws the same way (E870). It signals *the client that
+ *     submitted the action* to re-read its uncached data, and a webhook has no
+ *     such client — the caller is a CMS worker that is not rendering anything.
+ *
+ * So a webhook calling `invalidate()` would answer 500 to every delivery, and
+ * a unit test with `next/cache` mocked would pass, because the mock is what
+ * makes the throw go away. That is a sharp enough edge to be worth a separate
+ * entry point with the constraint written on it, rather than a boolean whose
+ * wrong value is a production-only failure.
+ *
+ * ## `{ expire: 0 }`
+ *
+ * `revalidateTag`'s second argument is the profile the dropped entry takes on.
+ * Passing `"max"` — the shape Next's deprecation notice suggests — marks the
+ * entry stale but keeps it servable while it refills in the background, which
+ * would give this application two different meanings for "invalidated": a
+ * Server Action's `updateTag` expires immediately, a webhook's would not. A CMS
+ * publishing an embargoed post and a person clicking Publish should not get
+ * different answers about when readers see it, so both expire immediately.
+ *
+ * The argument is also mandatory in practice: the one-argument form is
+ * deprecated and warns on stdout, and `pnpm run strict` (`scripts/fail-on-warnings.ts`)
+ * turns a warning during the build into a failure.
+ *
+ * Returns the tags dropped, which is what the route puts in its response body —
+ * a webhook delivery log that says which tags a call cleared is the difference
+ * between "the CMS is firing" and "the CMS is firing and it is doing something".
+ */
+export function revalidateFromWebhook(
+  mutation: CacheMutation,
+): readonly string[] {
+  const tags = tagsFor(mutation);
+
+  for (const tag of tags) {
+    // `{ expire: 0 }` rather than a named profile: the profile table is
+    // configurable per application, and this must mean "gone now" regardless of
+    // what a deployment has configured `"max"` to be.
+    revalidateTag(tag, { expire: 0 });
+  }
+
+  // No `refresh()` fallback. Beyond being illegal here, there is nothing to
+  // refresh: the dashboard's uncached reads belong to a browser session, and
+  // this request does not have one.
   return tags;
 }
