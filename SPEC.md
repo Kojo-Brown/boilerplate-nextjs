@@ -219,13 +219,53 @@ harness than this item.
 
 ## Phase 9 — Server Actions & Data Integrity
 
-- [ ] Server Action hardening: origin checks, auth assertion, and Zod input parsing on every action
+- [x] Server Action hardening: origin checks, auth assertion, and Zod input parsing on every action — five factories in `src/lib/actions/`, a CI gate with an empty EXEMPT list, and two live defects the schemas exposed (PR #32)
 - [ ] `useOptimistic` + `useActionState` end-to-end on a real mutation with rollback
 - [ ] Idempotency keys for Server Actions to survive double-submit and retry
 - [ ] Optimistic concurrency with a `version` column and a conflict-resolution UI
 - [ ] Rate limiting Server Actions and route handlers at the edge
 - [ ] Transactional writes with Prisma interactive transactions + an outbox row
 - [ ] N+1 elimination in server components with batched Prisma queries
+
+The hardening item was, like the invalidation one above, partly a bug report.
+The three legs were remembered by hand in six actions and forgotten in two, and
+that is invisible by construction: an action that checks the session and skips
+the schema looks entirely normal. `getPresignedUploadUrlAction` interpolated an
+unvalidated `filename` into an S3 key via `filename.split(".").pop()`, so
+`"a.png/../../other-user/evil"` produced an "extension" containing slashes and
+`..` and the object left `uploads/<user id>/` — the only access control in that
+template. `deletePostAction` handed its argument to Prisma untouched.
+
+What stands now is five factories in `src/lib/actions/`, applying origin →
+session → schema in that fixed order, and `scripts/assert-action-hardening.ts`,
+whose EXEMPT list is empty. Two rules rather than one: A1 requires a factory,
+A2 requires that factory to have been _imported_ from the hardening modules,
+because otherwise a local function named `defineAction` makes A1 green and
+meaningless.
+
+Next's own origin check was **read, not assumed**, and it is real — this does
+not replace it. It closes one gap the framework documents in a comment: a
+request with no `Origin` header is allowed through with a `warn()`. Absent means
+refused here; every other rule matches Next's precedence exactly. So
+`serverActions.allowedOrigins` stays unset in `next.config.ts` and
+`ALLOWED_ACTION_ORIGINS` is the single allowlist.
+
+The upload key is now built from the _content type_ — which is allowlisted and
+signed into the presigned URL — rather than from a sanitised filename, so no
+caller-supplied string reaches the key at all. Sanitising the filename would
+have been the smaller change and a weaker property.
+
+One rejected design is worth recording, because it passed every test but one:
+resolving the session into a variable the handler closes over. The factory runs
+once at module scope, so that variable is shared, and the `await` between
+writing and reading it is one microtask wide — two concurrent callers swap
+users. `define-authed-action.test.ts` has the regression test, verified against
+the rejected implementation.
+
+Not done, both their own items below: rate limiting and idempotency. No E2E
+coverage of the origin check either — forging an action POST needs a real
+encrypted action id against a running server. `docs/server-actions.md` carries
+the factory table, the Next comparison, and these gaps.
 
 ## Phase 10 — Performance
 
