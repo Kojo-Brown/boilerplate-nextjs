@@ -9,8 +9,9 @@
  * Here, and only here. A preview token is a bearer capability — `/api/preview`
  * checks the signature and nothing about who is holding it, which is what makes
  * a link forwardable to a CMS, a staging bot or a reviewer with no account.
- * That only works if minting is guarded, so this action requires a session and
- * requires the caller to own the post (or be an ADMIN).
+ * That only works if minting is guarded, so this action requires a session
+ * (`defineAuthedAction` supplies that leg) and requires the caller to own the
+ * post, or be an ADMIN, which is the part only this handler can decide.
  *
  * The guard is a real one rather than a gesture, because every export of a
  * `"use server"` module is a network-reachable endpoint that anyone can POST
@@ -25,12 +26,13 @@
 
 import { redirect } from "next/navigation";
 import { draftMode } from "next/headers";
-import { ok, err } from "@/lib/actions";
-import { getSession } from "@/lib/session";
+import { z } from "zod";
+import { defineNavigationAction } from "@/lib/actions/define-action";
+import { defineAuthedAction } from "@/lib/actions/define-authed-action";
+import { ActionError } from "@/lib/actions/result";
 import { getPostById } from "@/lib/dal/posts";
 import { createPreviewLink, isSafePreviewPath } from "@/lib/preview/token";
 import type { Route } from "next";
-import type { ActionResult } from "@/lib/actions";
 
 /** Where the banner's "Exit preview" lands when it is given nowhere to go. */
 const EXIT_FALLBACK_PATH = "/blog";
@@ -51,34 +53,29 @@ export interface PreviewLink {
  * ids are guessable enough (cuid, but exposed in every public URL) that it is
  * worth avoiding.
  */
-export async function createPreviewLinkAction(
-  postId: string,
-): Promise<ActionResult<PreviewLink>> {
-  const session = await getSession();
-  if (!session) {
-    return err("You must be signed in to create a preview link.");
-  }
+export const createPreviewLinkAction = defineAuthedAction({
+  name: "createPreviewLink",
+  input: z.string().min(1, "A post id is required.").max(64, "Not a post id."),
+  unauthenticatedMessage: "You must be signed in to create a preview link.",
+  handler: async ({ input: postId, user }): Promise<PreviewLink> => {
+    const post = await getPostById(postId);
+    const mayPreview =
+      post !== null && (post.authorId === user.id || user.role === "ADMIN");
 
-  if (typeof postId !== "string" || postId.length === 0) {
-    return err("A post id is required.");
-  }
+    if (!mayPreview) {
+      throw new ActionError(
+        "That post does not exist, or you cannot preview it.",
+      );
+    }
 
-  const post = await getPostById(postId);
-  const mayPreview =
-    post !== null &&
-    (post.authorId === session.user.id || session.user.role === "ADMIN");
+    // The path is built here from the id we just authorised, not accepted from
+    // the caller. `signPreviewToken` would reject an unsafe one anyway; the
+    // point is that no caller-supplied string reaches it in the first place.
+    const link = await createPreviewLink(`/blog/${post.id}`);
 
-  if (!mayPreview) {
-    return err("That post does not exist, or you cannot preview it.");
-  }
-
-  // The path is built here from the id we just authorised, not accepted from
-  // the caller. `signPreviewToken` would reject an unsafe one anyway; the point
-  // is that no caller-supplied string reaches it in the first place.
-  const link = await createPreviewLink(`/blog/${post.id}`);
-
-  return ok({ url: link.url, expiresAt: link.expiresAt.toISOString() });
-}
+    return { url: link.url, expiresAt: link.expiresAt.toISOString() };
+  },
+});
 
 /**
  * Ends the draft session and returns to the page the reader was on.
@@ -94,29 +91,35 @@ export async function createPreviewLinkAction(
  * rejects the protocol-relative and absolute forms that would make it someone
  * else's origin.
  *
- * Returns `void` and redirects. There is no `ActionResult` here because there
- * is no failure a caller could act on: an unusable `returnTo` still leaves
- * draft mode, it just lands on `/blog`.
+ * The validation is now the schema, and the `.catch()` is the part worth
+ * reading: a navigation action has no result channel, so a rejected input
+ * would otherwise throw into the segment's `error.tsx` — which for the control
+ * that exits draft mode is the worst possible answer. `.catch()` states the
+ * fallback as part of the contract instead. An unusable `returnTo` still leaves
+ * draft mode; it just lands on `/blog`.
  */
-export async function exitPreviewAction(formData: FormData): Promise<void> {
-  const draft = await draftMode();
-  draft.disable();
+export const exitPreviewAction = defineNavigationAction({
+  name: "exitPreview",
+  input: z.object({
+    returnTo: z
+      .string()
+      .refine(isSafePreviewPath, "Not a safe in-app path")
+      .catch(EXIT_FALLBACK_PATH),
+  }),
+  handler: async ({ input }): Promise<void> => {
+    const draft = await draftMode();
+    draft.disable();
 
-  const requested = formData.get("returnTo");
-  const returnTo =
-    typeof requested === "string" && isSafePreviewPath(requested)
-      ? requested
-      : EXIT_FALLBACK_PATH;
-
-  // `redirect` throws — nothing below it runs, and the cookie cleared above
-  // still rides out on the redirect response.
-  //
-  // The assertion is unavoidable and deliberately sits on the line after the
-  // validation. `typedRoutes` types `redirect` against a union the compiler
-  // builds from the app directory, and `returnTo` arrived in a form post — a
-  // runtime string the compiler cannot place in that union no matter how it is
-  // checked. What the check above buys is the property that actually matters
-  // here, which is that the value cannot name another origin; a safe path that
-  // happens to match no route renders the 404 page like any other.
-  redirect(returnTo as Route);
-}
+    // `redirect` throws — nothing below it runs, and the cookie cleared above
+    // still rides out on the redirect response.
+    //
+    // The assertion is unavoidable and deliberately sits next to the schema
+    // that earns it. `typedRoutes` types `redirect` against a union the
+    // compiler builds from the app directory, and `returnTo` arrived in a form
+    // post — a runtime string the compiler cannot place in that union no matter
+    // how it is checked. What the schema buys is the property that actually
+    // matters here, which is that the value cannot name another origin; a safe
+    // path that happens to match no route renders the 404 page like any other.
+    redirect(input.returnTo as Route);
+  },
+});

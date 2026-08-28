@@ -94,14 +94,27 @@ interface Finding {
 }
 
 /**
- * The exported function declarations in a source file, with their bodies.
+ * The exported values in a source file, each paired with the subtree that holds
+ * its code.
  *
- * Only `export async function name()` and `export function name()` are
- * recognised, which is every Server Action in this repository. Next also
- * accepts `export const name = async () => {}`, and an action written that way
- * would have no body here to check — so rather than pass it silently,
- * `checkSources` cross-checks this list against `exportedValueNames` and fails
- * on any exported value this walker could not read.
+ * Two forms are recognised:
+ *
+ *   export function name() { … }          body = the function body
+ *   export const name = <initializer>     body = the whole initializer
+ *
+ * The second arrived with the hardening factories: every Server Action is now
+ * `export const name = defineAuthedAction({ handler: … })`, and its writes and
+ * its `invalidate()` call sit inside that object literal. Taking the entire
+ * initializer as the body is deliberately blunt — both checks below walk a
+ * subtree looking for a call, and the handler is somewhere in that subtree
+ * whether it was written as a method, an arrow, or wrapped in another helper.
+ * A narrower walker that went looking for a property named `handler` would stop
+ * seeing the code the moment an action was composed differently, and failing to
+ * *see* a mutation is precisely the silent pass this gate exists to prevent.
+ *
+ * Anything else a module exports has no body to read; `checkSources`
+ * cross-checks this list against `exportedValueNames` and fails on it rather
+ * than passing it silently.
  */
 function exportedFunctions(
   source: ts.SourceFile,
@@ -109,18 +122,35 @@ function exportedFunctions(
   const found: Array<{ name: string; body: ts.Node; node: ts.Node }> = [];
 
   for (const statement of source.statements) {
-    if (!ts.isFunctionDeclaration(statement) || !statement.body) continue;
+    const isExported = ts.canHaveModifiers(statement)
+      ? ts
+          .getModifiers(statement)
+          ?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      : false;
+    if (!isExported) continue;
 
-    const isExported = statement.modifiers?.some(
-      (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-    );
-    if (!isExported || !statement.name) continue;
+    if (ts.isFunctionDeclaration(statement)) {
+      if (!statement.body || !statement.name) continue;
+      found.push({
+        name: statement.name.text,
+        body: statement.body,
+        node: statement,
+      });
+      continue;
+    }
 
-    found.push({
-      name: statement.name.text,
-      body: statement.body,
-      node: statement,
-    });
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+          continue;
+        }
+        found.push({
+          name: declaration.name.text,
+          body: declaration.initializer,
+          node: declaration,
+        });
+      }
+    }
   }
 
   return found;

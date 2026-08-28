@@ -1,13 +1,32 @@
 import "@testing-library/jest-dom";
 import { cleanup } from "@testing-library/react";
+import { headers } from "next/headers";
 import { createElement } from "react";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
 import { server } from "./server";
+
+/**
+ * The headers a browser sends when posting a Server Action to this app.
+ *
+ * Exported so `@/test/request-headers` can restore it, and so a test asserting
+ * a rejection can say which of these two values it is changing.
+ */
+export const SAME_ORIGIN_HEADERS: Record<string, string> = {
+  origin: "http://localhost:3000",
+  host: "localhost:3000",
+};
 
 beforeAll(() => server.listen({ onUnhandledRequest: "warn" }));
 afterEach(() => {
   cleanup();
   server.resetHandlers();
+  // A test that posted from another origin must not leave the next one
+  // asserting against a rejection it never asked for.
+  vi.mocked(headers).mockResolvedValue(
+    new Headers(SAME_ORIGIN_HEADERS) as unknown as Awaited<
+      ReturnType<typeof headers>
+    >,
+  );
 });
 afterAll(() => server.close());
 
@@ -35,7 +54,18 @@ vi.mock("next/headers", () => ({
     has: vi.fn(() => false),
     getAll: vi.fn(() => []),
   })),
-  headers: vi.fn(async () => new Headers()),
+  // A same-origin request, not an empty `Headers`.
+  //
+  // Every Server Action now begins with an origin check (see
+  // `@/lib/actions/origin`), and an empty header set fails it — correctly, since
+  // a request with no `Origin` is exactly what that check refuses. Defaulting to
+  // no headers would therefore have made every action test assert the rejection
+  // path while appearing to test the feature, which is the failure mode the
+  // check exists to prevent, reproduced inside the suite.
+  //
+  // So the default is what a browser actually sends, and a test that wants the
+  // rejection says so with `setRequestHeaders` from `@/test/request-headers`.
+  headers: vi.fn(async () => new Headers(SAME_ORIGIN_HEADERS)),
   // Off by default, which matches what `draftMode()` returns everywhere a
   // preview cookie is absent — including at build time. A test that wants a
   // preview says so explicitly (`vi.mocked(draftMode).mockResolvedValue(…)`),

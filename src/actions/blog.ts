@@ -1,8 +1,8 @@
 "use server";
 
-import { ok, err } from "@/lib/actions";
+import { z } from "zod";
+import { defineAction } from "@/lib/actions/define-action";
 import { invalidate } from "@/lib/cache/invalidation";
-import type { ActionResult } from "@/lib/actions";
 
 /**
  * On-demand invalidation for the public blog — the ISR demo's "Revalidate now"
@@ -21,33 +21,40 @@ import type { ActionResult } from "@/lib/actions";
  *
  * `updateTag` rather than `revalidateTag` — and why `refresh()` is not simply
  * called alongside it — is documented on `invalidate()`.
+ *
+ * The allowlist that survived that episode is now the schema. `z.enum` over the
+ * keys of `TARGETS` is the same guarantee the hand-written `isTarget` guard
+ * gave — this action is reachable by anyone who can reach the page, so its
+ * argument must not be able to name an arbitrary cache tag — expressed in the
+ * one place `defineAction` enforces, and it reports the rejection as a field
+ * error instead of a hand-built message.
  */
 
-/**
- * Targets callers may invalidate, and the mutation each maps to.
- *
- * Still an allowlist, for the same reason the path version was one: this action
- * is reachable by anyone who can reach the page, so the argument must not be
- * able to name an arbitrary cache tag.
- */
+/** Targets callers may invalidate, and the mutation each maps to. */
 const TARGETS = {
   "/blog": { kind: "blog.manual-refresh" },
 } as const;
 
 export type RevalidateTarget = keyof typeof TARGETS;
 
-export async function revalidateBlogAction(
-  target: string,
-): Promise<ActionResult<{ path: string; tags: string[] }>> {
-  if (!isTarget(target)) {
-    return err(`"${target}" is not a revalidation target.`);
-  }
+/**
+ * `z.string().pipe(z.enum(...))` rather than the bare enum: the caller is
+ * `RevalidateButton`, which takes its `path` as a `string` prop. A bare enum's
+ * *input* type is the union, which would push the check up to whoever renders
+ * the button — i.e. back out of the one place that enforces it. The pipe
+ * accepts a string and hands the handler a `RevalidateTarget`.
+ */
+const targetSchema = z.string().pipe(
+  z.enum(Object.keys(TARGETS) as [RevalidateTarget, ...RevalidateTarget[]], {
+    message: "Not a revalidation target.",
+  }),
+);
 
-  const tags = invalidate(TARGETS[target]);
-
-  return ok({ path: target, tags: [...tags] });
-}
-
-function isTarget(value: string): value is RevalidateTarget {
-  return Object.hasOwn(TARGETS, value);
-}
+export const revalidateBlogAction = defineAction({
+  name: "revalidateBlog",
+  input: targetSchema,
+  handler: ({ input }): { path: string; tags: string[] } => {
+    const tags = invalidate(TARGETS[input]);
+    return { path: input, tags: [...tags] };
+  },
+});

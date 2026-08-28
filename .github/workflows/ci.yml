@@ -315,6 +315,23 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for Server Actions. Every export of a `"use server"` module
+      # is an unauthenticated POST endpoint — not just the ones wired to a form
+      # — and the three things that make that safe (origin check, session
+      # assertion, input schema) are per-action and invisible by their absence.
+      # An action that checks the session and forgets the schema looks entirely
+      # normal; two of them did, and one interpolated an unvalidated filename
+      # into an S3 key. This reads the sources and fails if an export of a
+      # `"use server"` module is not built by a hardening factory, or is built
+      # by something merely named like one.
+      #
+      # Static analysis, so it needs no build output — it is in this job for the
+      # same reason as the gate above, to keep them together.
+      - name: Assert Server Action hardening
+        run: pnpm exec tsx scripts/assert-action-hardening.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning

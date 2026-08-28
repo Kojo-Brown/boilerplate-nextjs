@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/session", () => ({ getSession: vi.fn() }));
+vi.mock("@/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/dal/posts", () => ({ getPostById: vi.fn() }));
 
 import { redirect } from "next/navigation";
 import { draftMode } from "next/headers";
-import { getSession } from "@/lib/session";
+import type { Session } from "next-auth";
+import { auth } from "@/auth";
 import { getPostById } from "@/lib/dal/posts";
 import { verifyPreviewToken } from "@/lib/preview/token";
+import { setRequestHeaders } from "@/test/request-headers";
+import { ORIGIN_REJECTED_MESSAGE } from "@/lib/actions/origin";
 import { createPreviewLinkAction, exitPreviewAction } from "./preview";
 
 /**
@@ -22,7 +25,9 @@ import { createPreviewLinkAction, exitPreviewAction } from "./preview";
  * The token is verified for real rather than mocked, so a link that comes back
  * from a passing test is a link that would actually be redeemed.
  */
-const mockGetSession = vi.mocked(getSession);
+// NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
+// Narrowing to the no-argument form is what makes the stub types work.
+const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
 const mockGetPostById = vi.mocked(getPostById);
 const mockRedirect = vi.mocked(redirect);
 const mockDraftMode = vi.mocked(draftMode);
@@ -30,10 +35,10 @@ const mockDraftMode = vi.mocked(draftMode);
 const AUTHOR = "user-author";
 
 function session(userId: string, role: "USER" | "ADMIN" = "USER") {
-  mockGetSession.mockResolvedValue({
+  mockAuth.mockResolvedValue({
     user: { id: userId, role },
     expires: "2099-01-01T00:00:00.000Z",
-  } as unknown as Awaited<ReturnType<typeof getSession>>);
+  } as unknown as Session);
 }
 
 function post(authorId: string, id = "post-1") {
@@ -47,7 +52,7 @@ function post(authorId: string, id = "post-1") {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetSession.mockResolvedValue(null);
+  mockAuth.mockResolvedValue(null);
   mockGetPostById.mockResolvedValue(null);
 });
 
@@ -140,7 +145,29 @@ describe("createPreviewLinkAction", () => {
 
     const result = await createPreviewLinkAction("");
 
-    expect(result).toEqual({ success: false, error: "A post id is required." });
+    expect(result.success).toBe(false);
+    if (result.success) return;
+    expect(result.error).toBe("A post id is required.");
+    expect(mockGetPostById).not.toHaveBeenCalled();
+  });
+
+  it("refuses a request posted from another origin", async () => {
+    // The one leg that runs before everything else: a signed-in session and a
+    // perfectly good post id do not save a request the browser sent from
+    // somewhere else.
+    session(AUTHOR);
+    post(AUTHOR);
+    setRequestHeaders({
+      origin: "https://evil.example",
+      host: "localhost:3000",
+    });
+
+    const result = await createPreviewLinkAction("post-1");
+
+    expect(result).toEqual({
+      success: false,
+      error: ORIGIN_REJECTED_MESSAGE,
+    });
     expect(mockGetPostById).not.toHaveBeenCalled();
   });
 
@@ -219,5 +246,26 @@ describe("exitPreviewAction", () => {
     // Getting out of draft mode is the point of the control; a bad `returnTo`
     // must not be able to keep someone in it.
     expect(disable).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a cross-origin post, and stays in draft mode", async () => {
+    const disable = vi.fn();
+    mockDraftMode.mockResolvedValue({
+      isEnabled: true,
+      enable: vi.fn(),
+      disable,
+    } as unknown as Awaited<ReturnType<typeof draftMode>>);
+    setRequestHeaders({
+      origin: "https://evil.example",
+      host: "localhost:3000",
+    });
+
+    // A navigation action has no result channel, so the refusal is a throw —
+    // which reaches the segment's `error.tsx`.
+    await expect(exitPreviewAction(form("/blog"))).rejects.toThrow(
+      ORIGIN_REJECTED_MESSAGE,
+    );
+    expect(disable).not.toHaveBeenCalled();
+    expect(mockRedirect).not.toHaveBeenCalled();
   });
 });

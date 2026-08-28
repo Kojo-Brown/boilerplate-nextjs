@@ -3,7 +3,7 @@
 import { useActionState, useEffect } from "react";
 import Link from "next/link";
 import { loginAction, signInWithGoogleAction } from "@/actions/auth";
-import type { ActionResult } from "@/lib/actions";
+import type { ActionResult } from "@/lib/actions/result";
 import { toast } from "@/lib/toast";
 
 function fieldError(
@@ -72,11 +72,17 @@ export function LoginForm() {
       </form>
 
       <div className="relative flex items-center gap-3">
-        <div className="h-px flex-1" style={{ backgroundColor: "var(--border)" }} />
+        <div
+          className="h-px flex-1"
+          style={{ backgroundColor: "var(--border)" }}
+        />
         <span className="text-xs" style={{ color: "var(--muted-foreground)" }}>
           or
         </span>
-        <div className="h-px flex-1" style={{ backgroundColor: "var(--border)" }} />
+        <div
+          className="h-px flex-1"
+          style={{ backgroundColor: "var(--border)" }}
+        />
       </div>
 
       <form action={signInWithGoogleAction}>
