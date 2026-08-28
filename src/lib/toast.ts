@@ -1,6 +1,6 @@
 import { toast as sonnerToast } from "sonner";
 import type { ExternalToast } from "sonner";
-import type { ActionResult } from "@/lib/actions";
+import type { ActionResult } from "@/lib/actions/result";
 
 export { sonnerToast as toast };
 export type { ExternalToast };

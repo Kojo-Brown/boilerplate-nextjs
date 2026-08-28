@@ -45,6 +45,22 @@ const server = z.object({
   REVALIDATE_SECRET: optionalSecret,
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  // Extra origins allowed to post Server Actions, comma-separated. Empty in
+  // every ordinary deployment: the check in src/lib/actions/origin.ts accepts
+  // the request's own host, which is what a browser sends. This is the escape
+  // hatch for a proxy that rewrites neither `host` nor `x-forwarded-host`, and
+  // it is the reason `serverActions.allowedOrigins` stays unset in
+  // next.config.ts — one list rather than two that drift.
+  //
+  // Not `optionalSecret`: this is a configuration list, not key material, so
+  // there is no minimum length to enforce. Entries may be full origins
+  // (`https://app.example.com`) or bare hosts (`app.example.com:8443`);
+  // `parseAllowedOrigins` normalises both and drops anything malformed rather
+  // than refusing to boot over a typo in an escape hatch.
+  ALLOWED_ACTION_ORIGINS: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().optional(),
+  ),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),

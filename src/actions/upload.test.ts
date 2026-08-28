@@ -20,6 +20,8 @@ vi.mock("@/lib/s3", async (importOriginal) => {
   };
 });
 
+const { setRequestHeaders } = await import("@/test/request-headers");
+const { ORIGIN_REJECTED_MESSAGE } = await import("@/lib/actions/origin");
 const { getPresignedUploadUrlAction } = await import("@/actions/upload");
 const { auth } = await import("@/auth");
 const { createPresignedUploadUrl } = await import("@/lib/s3");
@@ -40,6 +42,9 @@ const FAKE_PRESIGNED: S3Module.PresignedUploadResult = {
 };
 
 beforeEach(() => {
+  // Call history, not implementations — the assertions below include
+  // "the signer was never reached", which a previous test's call would satisfy.
+  vi.clearAllMocks();
   mockAuth.mockResolvedValue({
     user: { id: "user_1", email: "test@example.com", role: "USER" },
     expires: "2099-01-01T00:00:00.000Z",
@@ -112,6 +117,81 @@ describe("getPresignedUploadUrlAction", () => {
       expect(result.data.publicUrl).toContain("my-bucket.s3");
       expect(result.data.key).toMatch(/^uploads\/user_1\//);
     }
+  });
+
+  it("never lets the filename escape the caller's prefix", async () => {
+    // The regression this schema exists for. `filename` used to reach
+    // `filename.split(".").pop()` and be interpolated straight into the key, so
+    // an extension containing slashes and `..` walked out of `uploads/<id>/` —
+    // the only thing in that template doing any access control.
+    for (const filename of [
+      "a.png/../../other-user/evil",
+      "../../../etc/passwd.png",
+      "x.png/../../../../root",
+      "shell.png/..%2f..%2fescape",
+    ]) {
+      const result = await getPresignedUploadUrlAction({
+        filename,
+        contentType: "image/png",
+        sizeBytes: 1024,
+      });
+
+      expect(result.success, filename).toBe(true);
+
+      // Asserted against the key handed to the signer, not `result.data.key` —
+      // that comes back from the mock and would look right no matter what the
+      // action built.
+      const key = mockCreatePresignedUrl.mock.lastCall?.[0].key;
+
+      // The key is now built from the content type, so nothing from the
+      // filename reaches it at all.
+      expect(key, filename).toMatch(
+        /^uploads\/user_1\/\d+-[0-9a-f-]{36}\.png$/,
+      );
+    }
+  });
+
+  it("rejects a filename that is not a string", async () => {
+    // Previously a `TypeError` out of the action rather than a failure the UI
+    // could show: `filename.split` on an object.
+    const result = await getPresignedUploadUrlAction({
+      filename: {} as unknown as string,
+      contentType: "image/png",
+      sizeBytes: 1024,
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects sizes that slipped past a bare `>` comparison", async () => {
+    // `undefined > MAX`, `null > MAX` and `NaN > MAX` are all `false`, so every
+    // one of these passed the old limit check.
+    for (const sizeBytes of [undefined, null, Number.NaN, -1, 1.5, "1024"]) {
+      const result = await getPresignedUploadUrlAction({
+        filename: "photo.png",
+        contentType: "image/png",
+        sizeBytes: sizeBytes as unknown as number,
+      });
+
+      expect(result.success, String(sizeBytes)).toBe(false);
+    }
+  });
+
+  it("refuses a request posted from another origin", async () => {
+    setRequestHeaders({
+      origin: "https://evil.example",
+      host: "localhost:3000",
+    });
+
+    const result = await getPresignedUploadUrlAction({
+      filename: "photo.png",
+      contentType: "image/png",
+      sizeBytes: 1024,
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) expect(result.error).toBe(ORIGIN_REJECTED_MESSAGE);
+    expect(mockCreatePresignedUrl).not.toHaveBeenCalled();
   });
 
   it("delegates to createPresignedUploadUrl with correct config", async () => {

@@ -29,9 +29,14 @@ describe("revalidateBlogAction", () => {
   it("rejects a target that is not on the allowlist", async () => {
     const result = await revalidateBlogAction("/admin");
 
+    // The allowlist is the schema now (`z.string().pipe(z.enum(…))`), so the
+    // rejection arrives as a validation failure rather than a hand-built
+    // message. What matters is unchanged: the argument named a tag and got
+    // nowhere.
     expect(result).toEqual({
       success: false,
-      error: '"/admin" is not a revalidation target.',
+      error: "Not a revalidation target.",
+      fieldErrors: { _: ["Not a revalidation target."] },
     });
     expect(mockUpdateTag).not.toHaveBeenCalled();
   });
