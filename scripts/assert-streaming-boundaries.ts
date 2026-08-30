@@ -79,6 +79,25 @@ export const EXPECTED_STREAMING: readonly StreamingExpectation[] = [
       "the page heading must not wait on `getPostsByUser`; the count line and the list are the only parts that depend on who is asking",
   },
   {
+    route: "/posts/[id]",
+    // The page's own chrome, and nothing from the sidebar — which is absent
+    // from this shell where it is present in every other one above. `NavLinks`
+    // calls `usePathname`, and a *fallback* shell (the document a dynamic
+    // segment prerenders for params it has not seen) cannot know the path, so
+    // that subtree streams instead. A property of the route being dynamic
+    // rather than a regression, and asserting the nav here would demand markup
+    // Next cannot write.
+    //
+    // The breadcrumb is asserted by its landmark label rather than by
+    // `">Posts</a>"`, which is also what a sidebar link renders and would
+    // therefore be a needle that cannot fail once the nav does prerender.
+    mustPrerender: [">Edit Post</h1>", 'aria-label="Breadcrumb"'],
+    // <UserChip>, <EditorSection>, and the nav subtree described above.
+    minStreamedHoles: 2,
+    because:
+      "the breadcrumb and the heading are the same for every post; the session and the row are the only parts that are not",
+  },
+  {
     route: "/admin",
     mustPrerender: [
       ">Admin Panel</h1>",

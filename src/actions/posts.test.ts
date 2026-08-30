@@ -22,13 +22,14 @@ vi.mock("next/cache", () => ({
 
 import type { Session } from "next-auth";
 import { auth } from "@/auth";
-import { updateTag } from "next/cache";
+import { refresh, updateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
 import {
   createPostAction,
   deletePostAction,
   togglePublishAction,
+  updatePostAction,
 } from "./posts";
 
 const mockUpdateTag = vi.mocked(updateTag);
@@ -244,6 +245,170 @@ describe("togglePublishAction", () => {
 });
 
 /**
+ * The editor's save.
+ *
+ * A `useActionState` action, so every call here goes through the
+ * `(previous, formData)` signature React uses — `formData(...)` below builds
+ * the submission rather than an object, because the object form is not a shape
+ * this action can ever be called with and testing it would test nothing that
+ * ships.
+ */
+describe("updatePostAction", () => {
+  function formData(fields: Record<string, string>): FormData {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(fields)) data.append(key, value);
+    return data;
+  }
+
+  const existing = { authorId: "user-1", published: false };
+
+  it("saves a post owned by the user", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      title: "Edited",
+      content: "New body",
+    } as never);
+
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited", content: "New body" }),
+    );
+
+    expect(result.success).toBe(true);
+    expect(prisma.post.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "post-1" },
+        data: { title: "Edited", content: "New body" },
+      }),
+    );
+  });
+
+  it("never writes `published`, so saving a draft cannot publish it", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+
+    await updatePostAction(
+      null,
+      // A caller posting the field anyway is the case that matters: the schema
+      // has no `published` key, so it is dropped rather than trusted.
+      formData({ postId: "post-1", title: "Edited", published: "true" }),
+    );
+
+    const [call] = vi.mocked(prisma.post.update).mock.calls;
+    expect(call?.[0].data).not.toHaveProperty("published");
+  });
+
+  it("stores an emptied textarea as null rather than an empty string", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+
+    await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited", content: "" }),
+    );
+
+    expect(prisma.post.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { title: "Edited", content: null } }),
+    );
+  });
+
+  it("trims the title, so the saved value matches the optimistic one", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+
+    await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "  Edited  " }),
+    );
+
+    expect(prisma.post.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ title: "Edited" }),
+      }),
+    );
+  });
+
+  it("returns a field error for an empty title", async () => {
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "   " }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.fieldErrors?.title?.[0]).toContain("required");
+    }
+    expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses to save a post owned by somebody else", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-2",
+      published: false,
+    } as never);
+
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("your own posts");
+      // A whole-form rejection, not a field one: the editor renders these two
+      // in different places, and an ownership failure has no field to blame.
+      expect(result.fieldErrors).toBeUndefined();
+    }
+    expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+
+  it("returns a failure when the post no longer exists", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(null);
+
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("not found");
+    }
+    expect(prisma.post.update).not.toHaveBeenCalled();
+  });
+
+  it("returns a failure when not authenticated", async () => {
+    mockAuth.mockResolvedValue(null);
+
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("signed in");
+    }
+    expect(prisma.post.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("ignores the previous result it is handed", async () => {
+    vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+
+    // `previous` is whatever React sent back from the client. An action that
+    // branched on it would be branching on client-supplied state.
+    const result = await updatePostAction(
+      { success: false, error: "anything at all" },
+      formData({ postId: "post-1", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(true);
+  });
+});
+
+/**
  * What each mutation invalidates.
  *
  * These assertions did not exist before, and their absence is why the bug they
@@ -350,6 +515,52 @@ describe("cache invalidation", () => {
     await deletePostAction("post-1");
 
     expect(droppedTags()).toEqual([]);
+  });
+
+  it("drops the blog cache when a published post is edited", async () => {
+    const data = new FormData();
+    data.append("postId", "post-1");
+    data.append("title", "Edited");
+
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: true,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      published: true,
+      title: "Edited",
+    } as never);
+
+    await updatePostAction(null, data);
+
+    // The title is what `/blog` lists and `/blog/[slug]` renders, so an edit to
+    // a live post is as stale-making as publishing one.
+    expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
+  });
+
+  it("does not touch the blog cache when a draft is edited", async () => {
+    const data = new FormData();
+    data.append("postId", "post-1");
+    data.append("title", "Edited");
+
+    vi.mocked(prisma.post.findUnique).mockResolvedValue({
+      authorId: "user-1",
+      published: false,
+    } as never);
+    vi.mocked(prisma.post.update).mockResolvedValue({
+      ...mockPost,
+      title: "Edited",
+    } as never);
+
+    await updatePostAction(null, data);
+
+    // Nothing public depends on a draft — but the editor is still holding the
+    // old row, so `invalidate` must fall through to `refresh()` rather than
+    // doing nothing at all. Without that the optimistic title is discarded
+    // back onto stale data the moment the save resolves.
+    expect(droppedTags()).toEqual([]);
+    expect(refresh).toHaveBeenCalled();
   });
 
   it("invalidates nothing when a mutation is rejected", async () => {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { cn } from "@/lib/cn";
 import {
   usePostsQuery,
@@ -81,6 +82,15 @@ function PostRow({
             postId={post.id}
             className="rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-[var(--muted)] disabled:opacity-50"
           />
+          {/* The editor is the `useOptimistic` + `useActionState` half of this
+              repository's mutation story; this list is the TanStack Query half.
+              Both are deliberate — see `docs/optimistic-ui.md`. */}
+          <Link
+            href={`/posts/${post.id}`}
+            className="rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-[var(--muted)]"
+          >
+            Edit
+          </Link>
           <button
             type="button"
             onClick={() => togglePublish.mutate(post.id)}
