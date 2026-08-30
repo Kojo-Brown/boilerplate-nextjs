@@ -19,6 +19,7 @@ import {
   getPostById,
   getPublishedPostById,
   getPostCountByUser,
+  getEditablePost,
   getPaginatedPostsByUser,
   getPaginatedPublishedPosts,
 } from "./posts";
@@ -272,5 +273,46 @@ describe("getPaginatedPublishedPosts", () => {
 
     expect(page.items).toHaveLength(4);
     expect(page.hasMore).toBe(false);
+  });
+});
+
+describe("getEditablePost", () => {
+  it("filters on the author in the query, not in the caller", async () => {
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+
+    await getEditablePost("post-1", "user-1");
+
+    // The ownership rule is the `where`. A read that returned the row and left
+    // the check to the page is one `||` away from serving another author's
+    // draft — the same failure `getPublishedPostById` was written to close.
+    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "post-1", authorId: "user-1" },
+      }),
+    );
+  });
+
+  it("selects the editable fields and nothing else", async () => {
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+
+    await getEditablePost("post-1", "user-1");
+
+    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          title: true,
+          content: true,
+          published: true,
+          updatedAt: true,
+        },
+      }),
+    );
+  });
+
+  it("returns null when the post is not this user's", async () => {
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+
+    await expect(getEditablePost("post-1", "user-2")).resolves.toBeNull();
   });
 });

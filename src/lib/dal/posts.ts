@@ -113,6 +113,52 @@ export async function getPublishedPostById(
   });
 }
 
+/**
+ * The fields the editor at `/posts/[id]` reads and writes.
+ *
+ * Deliberately not `PostWithAuthor`: the editor renders none of the author's
+ * details — it is only ever the caller's own post — and a type that carries
+ * them invites a component to display data the page did not need to load.
+ */
+export type EditablePost = Pick<
+  Post,
+  "id" | "title" | "content" | "published" | "updatedAt"
+>;
+
+/**
+ * One post, but only if this user owns it.
+ *
+ * The ownership filter is in the `where` rather than left to the caller, for
+ * the reason `getPublishedPostById` gives about its `published` filter: a read
+ * whose access rule lives in the component that renders it is one `||` away
+ * from serving somebody else's draft, and that `||` is three modules from the
+ * query. Here the query cannot return a row the caller may not see, so the page
+ * has one case to handle (`null` → `notFound()`) rather than two.
+ *
+ * A non-owner therefore gets a 404 rather than a 403. That is the intended
+ * answer: "this post exists but is not yours" tells an unauthenticated prober
+ * which ids are real, and the editor is not a resource whose existence is
+ * public.
+ *
+ * `findFirst` rather than `findUnique`: `findUnique` accepts only unique fields
+ * in its `where`, and `authorId` is not one.
+ */
+export async function getEditablePost(
+  id: string,
+  userId: string,
+): Promise<EditablePost | null> {
+  return prisma.post.findFirst({
+    where: { id, authorId: userId },
+    select: {
+      id: true,
+      title: true,
+      content: true,
+      published: true,
+      updatedAt: true,
+    },
+  });
+}
+
 export async function getPostCountByUser(userId: string): Promise<number> {
   return prisma.post.count({ where: { authorId: userId } });
 }

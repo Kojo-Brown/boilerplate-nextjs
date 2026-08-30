@@ -180,6 +180,7 @@ describe("EXPECTED_STREAMING", () => {
     expect(EXPECTED_STREAMING.map((e) => e.route)).toEqual([
       "/dashboard",
       "/posts",
+      "/posts/[id]",
       "/admin",
       "/images",
       "/upload",

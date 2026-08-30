@@ -244,6 +244,35 @@ unpublished post being served to an anonymous request with a 200.
 [docs/draft-mode.md](./docs/draft-mode.md) has the flow, the leak, and what the
 token's expiry does and does not bound.
 
+## Optimistic UI
+
+`/posts/[id]` is the editor, and the reference implementation of `useOptimistic`
+
+- `useActionState` over two real mutations: a form save (`updatePostAction`) and
+  a publish toggle (`togglePublishAction`).
+
+The two hooks split the work. `useActionState` owns the **result** — pending
+flag, Zod field errors, the message. `useOptimistic` owns the **displayed server
+state** — the heading and the Published/Draft pill.
+
+Rollback is not a branch anyone writes. React discards the optimistic patch when
+the transition ends and re-reads the server value, so a rejected save puts the
+stored title back on its own. Which makes the _success_ path the one with a
+prerequisite: the Server Component has to have been refreshed by then, or the
+discard shows stale data for a frame. A mutation that skips its cache
+invalidation therefore produces a flicker that looks like an optimistic-update
+bug and is a cache bug.
+
+Two smaller traps are load-bearing. An optimistic update applied **after the
+first `await`** of an async transition has left that transition's scope and
+never rolls back. And React resets an uncontrolled `<form action={…}>` when the
+action resolves — _including on failure_ — so the inputs here are controlled,
+because a rejected save must not clear the draft that caused it.
+
+[docs/optimistic-ui.md](./docs/optimistic-ui.md) has the full account, plus when
+to reach for this over the TanStack Query mutations on `/posts` — this
+repository ships both on purpose.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

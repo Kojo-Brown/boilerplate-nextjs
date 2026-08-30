@@ -3,9 +3,12 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { ActionError } from "@/lib/actions/result";
-import { defineAuthedAction } from "@/lib/actions/define-authed-action";
+import {
+  defineAuthedAction,
+  defineAuthedFormAction,
+} from "@/lib/actions/define-authed-action";
 import { invalidate } from "@/lib/cache/invalidation";
-import type { PostSummary } from "@/lib/dal/posts";
+import type { EditablePost, PostSummary } from "@/lib/dal/posts";
 
 /**
  * The post mutations, and the cache entries they are responsible for.
@@ -43,6 +46,35 @@ const postIdSchema = z
   .string()
   .min(1, "A post id is required")
   .max(64, "That is not a post id");
+
+/**
+ * The editor's payload, parsed out of a `FormData`.
+ *
+ * `content` arrives as `""` from an emptied textarea, never as `undefined` —
+ * a textarea always submits — so the empty case is normalised here rather than
+ * being left for the handler to remember. `null` and not `""`: the column is
+ * nullable, `getPublishedPostById` feeds `post.content?.slice(0, 155)` into the
+ * blog's meta description, and an empty string is a value that passes `?.` and
+ * produces an empty description where `null` correctly falls through to the
+ * author line.
+ *
+ * `.optional()` before the transform anyway, so a caller posting no `content`
+ * field at all — which a hand-rolled request may — lands on the same `null`
+ * instead of failing a required-field check that says nothing useful.
+ */
+const updatePostSchema = z.object({
+  postId: postIdSchema,
+  title: z
+    .string()
+    .trim()
+    .min(1, "Title is required")
+    .max(255, "Title must be under 255 characters"),
+  content: z
+    .string()
+    .max(100_000, "Content is too long")
+    .optional()
+    .transform((value) => (value === undefined || value === "" ? null : value)),
+});
 
 const createPostSchema = z.object({
   title: z
@@ -82,6 +114,66 @@ export const createPostAction = defineAuthedAction({
       published: post.published,
     });
     return post;
+  },
+});
+
+/** The fields `/posts/[id]` reads, so the editor's read and write agree. */
+const editablePostSelect = {
+  id: true,
+  title: true,
+  content: true,
+  published: true,
+  updatedAt: true,
+} as const;
+
+/**
+ * The editor's save, bound to its form through `useActionState`.
+ *
+ * A form action rather than a value action, and that is the whole reason this
+ * one is built by `defineAuthedFormAction`: `useActionState` calls its action
+ * as `(previous, formData)`, so an action shaped like `createPostAction` cannot
+ * be passed to it at all. See `docs/optimistic-ui.md` for what the client does
+ * with the result.
+ *
+ * It deliberately does **not** touch `published`. Saving a draft must not
+ * publish it, and `togglePublishAction` already owns that transition together
+ * with the before/after pair the cache policy needs; a save that also flipped
+ * the flag would be two mutations reporting as one, and `wasPublished` below
+ * would be a guess. So the flags handed to `invalidate` are equal here on
+ * purpose — an edit to a published post drops its blog entries because the
+ * *content* changed, and an edit to a draft drops nothing.
+ */
+export const updatePostAction = defineAuthedFormAction({
+  name: "updatePost",
+  input: updatePostSchema,
+  unauthenticatedMessage: "You must be signed in to edit a post.",
+  handler: async ({ input, user }): Promise<EditablePost> => {
+    const existing = await prisma.post.findUnique({
+      where: { id: input.postId },
+      select: { authorId: true, published: true },
+    });
+
+    if (!existing) {
+      throw new ActionError("Post not found.");
+    }
+
+    if (existing.authorId !== user.id) {
+      throw new ActionError("You can only edit your own posts.");
+    }
+
+    const updated = await prisma.post.update({
+      where: { id: input.postId },
+      data: { title: input.title, content: input.content },
+      select: editablePostSelect,
+    });
+
+    invalidate({
+      kind: "post.updated",
+      postId: updated.id,
+      wasPublished: existing.published,
+      isPublished: updated.published,
+    });
+    return updated;
   },
 });
 
