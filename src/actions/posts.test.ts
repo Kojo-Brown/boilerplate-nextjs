@@ -8,6 +8,15 @@ vi.mock("@/lib/prisma", () => ({
       delete: vi.fn(),
       update: vi.fn(),
     },
+    // `createPostAction` is idempotent, so every call to it claims a key
+    // before the handler runs. `beforeEach` stubs these to "the key was free",
+    // which is the state every test here except the idempotency ones is about.
+    idempotencyKey: {
+      create: vi.fn(),
+      updateMany: vi.fn(),
+      findUnique: vi.fn(),
+      deleteMany: vi.fn(),
+    },
   },
 }));
 
@@ -21,6 +30,7 @@ vi.mock("next/cache", () => ({
 }));
 
 import type { Session } from "next-auth";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { refresh, updateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
@@ -64,16 +74,42 @@ const mockPost = {
   author: { id: "user-1", name: "Alice", email: "alice@example.com" },
 };
 
+/**
+ * A distinct, schema-valid idempotency key per call.
+ *
+ * Distinct because two tests sharing a key would, against a real database, be
+ * the second one replaying the first — and a fixture that hides that is a
+ * fixture that would let the real thing break unnoticed.
+ */
+let keyCounter = 0;
+function newKey(): string {
+  keyCounter += 1;
+  return `test-idempotency-key-${String(keyCounter).padStart(4, "0")}`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuth.mockResolvedValue(mockSession);
+
+  // The key is free: the claiming insert succeeds, so the handler runs.
+  vi.mocked(prisma.idempotencyKey.create).mockResolvedValue({} as never);
+  vi.mocked(prisma.idempotencyKey.updateMany).mockResolvedValue({
+    count: 1,
+  } as never);
+  vi.mocked(prisma.idempotencyKey.deleteMany).mockResolvedValue({
+    count: 1,
+  } as never);
+  vi.mocked(prisma.idempotencyKey.findUnique).mockResolvedValue(null as never);
 });
 
 describe("createPostAction", () => {
   it("creates a post for the authenticated user", async () => {
     vi.mocked(prisma.post.create).mockResolvedValue(mockPost as never);
 
-    const result = await createPostAction({ title: "Hello World" });
+    const result = await createPostAction({
+      idempotencyKey: newKey(),
+      title: "Hello World",
+    });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -92,7 +128,10 @@ describe("createPostAction", () => {
   it("returns error when not authenticated", async () => {
     mockAuth.mockResolvedValue(null);
 
-    const result = await createPostAction({ title: "Test" });
+    const result = await createPostAction({
+      idempotencyKey: newKey(),
+      title: "Test",
+    });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -102,7 +141,10 @@ describe("createPostAction", () => {
   });
 
   it("returns field errors for empty title", async () => {
-    const result = await createPostAction({ title: "" });
+    const result = await createPostAction({
+      idempotencyKey: newKey(),
+      title: "",
+    });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -118,6 +160,7 @@ describe("createPostAction", () => {
     } as never);
 
     const result = await createPostAction({
+      idempotencyKey: newKey(),
       title: "Post",
       content: "Some body",
     });
@@ -425,7 +468,10 @@ describe("cache invalidation", () => {
   it("does not touch the blog cache when a draft is created", async () => {
     vi.mocked(prisma.post.create).mockResolvedValue(mockPost as never);
 
-    await createPostAction({ title: "Hello World" });
+    await createPostAction({
+      idempotencyKey: newKey(),
+      title: "Hello World",
+    });
 
     expect(droppedTags()).toEqual([]);
   });
@@ -438,7 +484,10 @@ describe("cache invalidation", () => {
       published: true,
     } as never);
 
-    await createPostAction({ title: "Hello World" });
+    await createPostAction({
+      idempotencyKey: newKey(),
+      title: "Hello World",
+    });
 
     expect(droppedTags()).toEqual([blogPostTag("post-1"), BLOG_POSTS_TAG]);
   });
@@ -569,7 +618,10 @@ describe("cache invalidation", () => {
     // delete they have no permission to perform.
     mockAuth.mockResolvedValue(null);
 
-    await createPostAction({ title: "Hello" });
+    await createPostAction({
+      idempotencyKey: newKey(),
+      title: "Hello",
+    });
     await deletePostAction("post-1");
     await togglePublishAction("post-1");
 
@@ -580,5 +632,300 @@ describe("cache invalidation", () => {
     await togglePublishAction("missing");
 
     expect(mockUpdateTag).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `createPostAction`'s idempotency, end to end through `defineAuthedAction`.
+ *
+ * The unit tests in `src/lib/actions/idempotency.test.ts` cover the protocol
+ * and `idempotency-store.test.ts` covers the statements it issues. What is left
+ * — and what those two cannot see — is the wiring: that this action declares a
+ * plan at all, that the fingerprint is taken of its parsed input, and that its
+ * `output` schema puts back the `Date`s a `Json` column loses. That last one is
+ * asserted by comparing a replay against the fresh result rather than by
+ * describing it, because the failure mode is a value that looks right in a
+ * console and throws in a component.
+ *
+ * These run against a stand-in for the key table rather than the flat mocks
+ * above: a replay is by definition the *second* call, so a stub that answers
+ * every call identically cannot express one.
+ */
+describe("createPostAction idempotency", () => {
+  interface KeyRow {
+    scope: string;
+    action: string;
+    key: string;
+    fingerprint: string;
+    claimToken: string;
+    status: "IN_PROGRESS" | "COMPLETED";
+    result: unknown;
+    expiresAt: Date;
+  }
+
+  interface RowSelector {
+    scope: string;
+    action: string;
+    key: string;
+    claimToken?: string;
+    status?: KeyRow["status"];
+    expiresAt?: { lt: Date };
+  }
+
+  const rows = new Map<string, KeyRow>();
+  const rowId = (where: {
+    scope: string;
+    action: string;
+    key: string;
+  }): string => `${where.scope}|${where.action}|${where.key}`;
+
+  /** Whether a row satisfies every condition a `where` actually named. */
+  function matches(row: KeyRow, where: RowSelector): boolean {
+    if (where.claimToken !== undefined && row.claimToken !== where.claimToken) {
+      return false;
+    }
+    if (where.status !== undefined && row.status !== where.status) return false;
+    if (
+      where.expiresAt !== undefined &&
+      row.expiresAt.getTime() >= where.expiresAt.lt.getTime()
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * What `postSummarySelect` actually returns — no `authorId`.
+   *
+   * `mockPost` above carries one, and using it here failed this suite's first
+   * run for a reason worth keeping: a replayed result is parsed through the
+   * action's `output` schema, and Zod drops what that schema does not declare.
+   * So a fixture with a field the real `select` never returns makes the fresh
+   * and replayed results differ in the test and agree in production, which is
+   * the wrong way round for a fixture to be wrong.
+   */
+  const createdPost = {
+    id: mockPost.id,
+    title: mockPost.title,
+    published: mockPost.published,
+    createdAt: mockPost.createdAt,
+    updatedAt: mockPost.updatedAt,
+    author: mockPost.author,
+  };
+
+  beforeEach(() => {
+    rows.clear();
+
+    // The unique index on (scope, action, key) is the whole mechanism, so the
+    // stand-in enforces it the way Postgres does: the insert fails.
+    vi.mocked(prisma.idempotencyKey.create).mockImplementation(((args: {
+      data: KeyRow;
+    }) => {
+      const id = rowId(args.data);
+      if (rows.has(id)) {
+        return Promise.reject(
+          new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+            code: "P2002",
+            clientVersion: "7.9.1",
+          }),
+        );
+      }
+      rows.set(id, { ...args.data, result: null });
+      return Promise.resolve(args.data);
+    }) as never);
+
+    vi.mocked(prisma.idempotencyKey.updateMany).mockImplementation(((args: {
+      where: RowSelector;
+      data: Partial<KeyRow>;
+    }) => {
+      const row = rows.get(rowId(args.where));
+      if (!row || !matches(row, args.where)) {
+        return Promise.resolve({ count: 0 });
+      }
+
+      Object.assign(row, args.data);
+      // Prisma's sentinel for SQL NULL is not a value the row should carry.
+      if (args.data.result === Prisma.DbNull) row.result = null;
+      return Promise.resolve({ count: 1 });
+    }) as never);
+
+    vi.mocked(prisma.idempotencyKey.findUnique).mockImplementation(((args: {
+      where: {
+        scope_action_key: { scope: string; action: string; key: string };
+      };
+    }) =>
+      Promise.resolve(
+        rows.get(rowId(args.where.scope_action_key)) ?? null,
+      )) as never);
+
+    vi.mocked(prisma.idempotencyKey.deleteMany).mockImplementation(((args: {
+      where: RowSelector;
+    }) => {
+      const id = rowId(args.where);
+      const row = rows.get(id);
+      if (!row || !matches(row, args.where)) {
+        return Promise.resolve({ count: 0 });
+      }
+      rows.delete(id);
+      return Promise.resolve({ count: 1 });
+    }) as never);
+
+    vi.mocked(prisma.post.create).mockResolvedValue(createdPost as never);
+  });
+
+  it("writes one post for a resubmitted key and answers both alike", async () => {
+    const idempotencyKey = newKey();
+
+    const first = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+    const second = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+
+    expect(prisma.post.create).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+  });
+
+  it("gives a replayed result the same Date fields as a fresh one", async () => {
+    // The whole reason `createPostAction` declares an `output` schema. Without
+    // it `createdAt` comes back out of the Json column as a string, and only
+    // on the second submission — the hardest place to notice a type error.
+    const idempotencyKey = newKey();
+
+    await createPostAction({ idempotencyKey, title: "Hello World" });
+    const replayed = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+
+    expect(replayed.success).toBe(true);
+    if (replayed.success) {
+      expect(replayed.data.createdAt).toBeInstanceOf(Date);
+      expect(replayed.data.createdAt).toEqual(mockPost.createdAt);
+    }
+  });
+
+  it("does not invalidate the cache a second time on a replay", async () => {
+    // A replay changed nothing, so dropping a warm blog entry for it would be
+    // a purge anyone can trigger by resubmitting.
+    vi.mocked(prisma.post.create).mockResolvedValue({
+      ...createdPost,
+      published: true,
+    } as never);
+    const idempotencyKey = newKey();
+
+    await createPostAction({ idempotencyKey, title: "Hello World" });
+    const dropped = droppedTags().length;
+    await createPostAction({ idempotencyKey, title: "Hello World" });
+
+    expect(droppedTags()).toHaveLength(dropped);
+  });
+
+  it("refuses a key reused for a different post", async () => {
+    const idempotencyKey = newKey();
+
+    await createPostAction({ idempotencyKey, title: "Hello World" });
+    const result = await createPostAction({
+      idempotencyKey,
+      title: "A different post entirely",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain("repeat of a different request");
+    }
+    expect(prisma.post.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes a key to its author, so two users may use the same one", async () => {
+    const idempotencyKey = newKey();
+
+    await createPostAction({ idempotencyKey, title: "Hello World" });
+
+    mockAuth.mockResolvedValue({
+      ...mockSession,
+      user: { ...mockSession.user, id: "user-2" },
+    });
+    const second = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+
+    expect(second.success).toBe(true);
+    expect(prisma.post.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a retry through after the first attempt failed", async () => {
+    // The failure path releases the key. A retry that could never execute is a
+    // worse outcome than a duplicate: the user is stuck.
+    //
+    // The factory logs the original error before replacing it with the generic
+    // sentence, which is correct and is noise here.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(prisma.post.create)
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(createdPost as never);
+    const idempotencyKey = newKey();
+
+    const failed = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+    const retried = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+
+    expect(failed.success).toBe(false);
+    expect(retried.success).toBe(true);
+    expect(prisma.post.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("holds the second of two overlapping submissions rather than writing twice", async () => {
+    let release: (() => void) | undefined;
+    vi.mocked(prisma.post.create).mockImplementation(
+      (() =>
+        new Promise((resolve) => {
+          release = () => resolve(createdPost);
+        })) as never,
+    );
+
+    const idempotencyKey = newKey();
+    const first = createPostAction({ idempotencyKey, title: "Hello World" });
+
+    // Let the first call reach `prisma.post.create` before the second starts,
+    // which is exactly the window a double-click lands in.
+    await vi.waitFor(() => expect(release).toBeDefined());
+    const second = await createPostAction({
+      idempotencyKey,
+      title: "Hello World",
+    });
+
+    expect(second.success).toBe(false);
+    if (!second.success) {
+      expect(second.error).toContain("already being processed");
+    }
+
+    release?.();
+    await expect(first).resolves.toMatchObject({ success: true });
+    expect(prisma.post.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a missing or too-short key before anything is written", async () => {
+    const missing = await createPostAction({
+      title: "Hello World",
+    } as unknown as Parameters<typeof createPostAction>[0]);
+    const tooShort = await createPostAction({
+      idempotencyKey: "short",
+      title: "Hello World",
+    });
+
+    expect(missing.success).toBe(false);
+    expect(tooShort.success).toBe(false);
+    expect(prisma.post.create).not.toHaveBeenCalled();
+    expect(prisma.idempotencyKey.create).not.toHaveBeenCalled();
   });
 });

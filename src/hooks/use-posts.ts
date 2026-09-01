@@ -2,10 +2,17 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { createPostAction, deletePostAction, togglePublishAction } from "@/actions/posts";
+import {
+  createPostAction,
+  deletePostAction,
+  togglePublishAction,
+} from "@/actions/posts";
 import type { PostSummary } from "@/lib/dal/posts";
 
-export type SerializedPostSummary = Omit<PostSummary, "createdAt" | "updatedAt"> & {
+export type SerializedPostSummary = Omit<
+  PostSummary,
+  "createdAt" | "updatedAt"
+> & {
   createdAt: string;
   updatedAt: string;
 };
@@ -37,14 +44,19 @@ export function useCreatePost() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (input: { title: string; content?: string }) => {
+    mutationFn: async (input: {
+      idempotencyKey: string;
+      title: string;
+      content?: string;
+    }) => {
       const result = await createPostAction(input);
       if (!result.success) throw new Error(result.error);
       return result.data;
     },
     onMutate: async (input) => {
       await queryClient.cancelQueries({ queryKey: POSTS_QUERY_KEY });
-      const previous = queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
+      const previous =
+        queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
 
       const optimistic: SerializedPostSummary = {
         id: `optimistic-${Date.now()}`,
@@ -55,10 +67,10 @@ export function useCreatePost() {
         author: { id: "", name: null, email: "" },
       };
 
-      queryClient.setQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY, (old) => [
-        optimistic,
-        ...(old ?? []),
-      ]);
+      queryClient.setQueryData<SerializedPostSummary[]>(
+        POSTS_QUERY_KEY,
+        (old) => [optimistic, ...(old ?? [])],
+      );
 
       return { previous };
     },
@@ -87,10 +99,12 @@ export function useDeletePost() {
     },
     onMutate: async (postId) => {
       await queryClient.cancelQueries({ queryKey: POSTS_QUERY_KEY });
-      const previous = queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
+      const previous =
+        queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
 
-      queryClient.setQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY, (old) =>
-        old?.filter((p) => p.id !== postId) ?? [],
+      queryClient.setQueryData<SerializedPostSummary[]>(
+        POSTS_QUERY_KEY,
+        (old) => old?.filter((p) => p.id !== postId) ?? [],
       );
 
       return { previous };
@@ -121,10 +135,15 @@ export function useTogglePublish() {
     },
     onMutate: async (postId) => {
       await queryClient.cancelQueries({ queryKey: POSTS_QUERY_KEY });
-      const previous = queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
+      const previous =
+        queryClient.getQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY);
 
-      queryClient.setQueryData<SerializedPostSummary[]>(POSTS_QUERY_KEY, (old) =>
-        old?.map((p) => (p.id === postId ? { ...p, published: !p.published } : p)) ?? [],
+      queryClient.setQueryData<SerializedPostSummary[]>(
+        POSTS_QUERY_KEY,
+        (old) =>
+          old?.map((p) =>
+            p.id === postId ? { ...p, published: !p.published } : p,
+          ) ?? [],
       );
 
       return { previous };

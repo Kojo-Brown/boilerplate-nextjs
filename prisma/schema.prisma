@@ -72,6 +72,59 @@ model Post {
   @@map("posts")
 }
 
+/// One client-generated idempotency key, and the result it is standing in for.
+///
+/// The unique index is what makes the whole mechanism work: claiming a key is an
+/// `INSERT` that either succeeds or violates `[scope, action, key]`, so two
+/// concurrent submissions of the same key cannot both decide they are first.
+/// A read-then-write ("does a row exist? no — insert one") looks equivalent and
+/// is not: the window between the two statements is exactly the double-submit
+/// this table exists to survive.
+///
+/// `scope` is the principal the key belongs to (`user:<id>`), not a foreign key.
+/// It is deliberately opaque so the same table can serve a future scope that is
+/// not a user row, and there is no cascade to depend on — `expiresAt` is what
+/// removes rows, and a sweep can run without knowing what a scope means.
+///
+/// `expiresAt` means "when this row stops being authoritative", and what that
+/// implies depends on `status`. For `IN_PROGRESS` it is a *lease*: an attempt
+/// that crashed between claiming a key and recording its result would otherwise
+/// hold that key forever, and the caller could never retry. For `COMPLETED` it
+/// is the retention window: after it passes the key is free again, which is the
+/// point at which a very late retry re-executes rather than replaying.
+model IdempotencyKey {
+  id          String            @id @default(cuid())
+  key         String
+  scope       String
+  action      String
+  fingerprint String
+  /// Identifies the attempt that currently holds this row.
+  ///
+  /// Without it the lease above is unsafe in the one situation it exists for.
+  /// An attempt that stalls past its lease is taken over by a second attempt,
+  /// and then wakes up: `WHERE key = …` alone would let it write its result
+  /// over the live claim, or delete the row out from under it on the way to
+  /// reporting its own failure. Both writes carry the token, so a claim that
+  /// has moved on simply matches nothing.
+  claimToken  String
+  status      IdempotencyStatus @default(IN_PROGRESS)
+  /// The successful result, JSON-encoded. Null while in progress — a failed
+  /// attempt releases its row instead of storing the failure.
+  result      Json?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  expiresAt   DateTime
+
+  @@unique([scope, action, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+enum IdempotencyStatus {
+  IN_PROGRESS
+  COMPLETED
+}
+
 model VerificationToken {
   identifier String
   token      String   @unique
