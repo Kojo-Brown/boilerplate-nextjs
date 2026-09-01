@@ -12,11 +12,42 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import { useCreatePost } from "@/hooks/use-posts";
+import { newIdempotencyKey } from "@/lib/actions/idempotency-key";
 
+/**
+ * The client half of `createPostAction`'s idempotency, which is the half with
+ * the trap in it.
+ *
+ * The key identifies *this submission*, not this request, so it is minted once
+ * and then held across every attempt at it. Minting one inside `handleSubmit`
+ * would compile, read correctly, and protect nothing: the second click of a
+ * double-click would arrive carrying a different key and be, as far as the
+ * server can tell, a second post someone wanted.
+ *
+ * So the key lives in a ref, is created on the first submission that needs one,
+ * and is cleared only when the post has actually been created. Two consequences
+ * follow, and both are the point:
+ *
+ *   - A failed attempt keeps its key, so the user's retry is deduplicated
+ *     against the attempt that may have succeeded on the server before the
+ *     connection dropped.
+ *   - Editing the title after a failure and submitting again reuses the key for
+ *     a different payload, which the server answers with a conflict rather than
+ *     with the first attempt's post. That is the correct answer — the two are
+ *     genuinely different requests — and `handleSubmit` mints a fresh key when
+ *     the form's contents change, so the case a user can actually reach is the
+ *     one that works.
+ *
+ * `disabled={createPost.isPending}` on the submit button stays, and is not a
+ * substitute for any of this: it is set in a React commit, and a second click
+ * dispatched before that commit lands sees an enabled button. It also does
+ * nothing at all for a reload mid-request.
+ */
 export function CreatePostDialog() {
   const [open, setOpen] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
+  const submissionRef = useRef<{ key: string; payload: string } | null>(null);
   const createPost = useCreatePost();
 
   function handleSubmit(e: React.FormEvent) {
@@ -26,13 +57,28 @@ export function CreatePostDialog() {
 
     if (!title) return;
 
+    const input = { title, ...(content && { content }) };
+
+    // A key belongs to a payload. Reusing one after the user has changed what
+    // they are submitting would trade a duplicate post for a conflict error on
+    // a request that is genuinely new, so the payload is compared and a change
+    // starts a fresh submission.
+    const payload = JSON.stringify(input);
+    const previous = submissionRef.current;
+    const idempotencyKey =
+      previous && previous.payload === payload
+        ? previous.key
+        : newIdempotencyKey();
+    submissionRef.current = { key: idempotencyKey, payload };
+
     createPost.mutate(
-      { title, ...(content && { content }) },
+      { idempotencyKey, ...input },
       {
         // `useCreatePost` rejects on a failed action, so reaching onSuccess
         // already means the post was created — there is no result envelope to
         // unwrap here, and errors surface through the hook's onError toast.
         onSuccess: () => {
+          submissionRef.current = null;
           setOpen(false);
           if (titleRef.current) titleRef.current.value = "";
           if (contentRef.current) contentRef.current.value = "";

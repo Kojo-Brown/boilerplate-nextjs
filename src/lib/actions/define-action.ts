@@ -173,6 +173,26 @@ export function toFieldErrors(error: z.ZodError): Record<string, string[]> {
 }
 
 /**
+ * Wraps the call to a handler, with the parsed input and whatever `prepare`
+ * established already in hand.
+ *
+ * The one seam in this file, and it exists for one caller: `defineAuthedAction`
+ * builds an idempotency wrapper here. It could not be a fourth leg inside
+ * `runHardenedAction` without this module importing the store, and the store
+ * imports `@/lib/prisma` — the same Node-only-graph split that `define-action`
+ * and `define-authed-action` already are. It sits *after* the schema because
+ * an idempotency key is part of an action's input, and the fingerprint that
+ * decides whether two attempts are the same request has to be taken of the
+ * parsed value rather than of whatever arrived over the wire.
+ */
+export type RunWrapper<TIn, TOut, TPrepared> = (context: {
+  input: TIn;
+  prepared: TPrepared;
+  /** Calls the handler. Not called at all on a replay. */
+  run: () => Promise<TOut>;
+}) => Promise<TOut>;
+
+/**
  * The shared body of the result-returning factories: check the origin, run
  * whatever guard the caller supplies, parse the input, run the handler, and
  * turn anything thrown into a result.
@@ -201,6 +221,7 @@ export async function runHardenedAction<TIn, TOut, TPrepared>(
   raw: unknown,
   prepare: () => Promise<TPrepared>,
   run: (input: TIn, prepared: TPrepared) => Promise<TOut> | TOut,
+  wrapRun?: RunWrapper<TIn, TOut, TPrepared>,
 ): Promise<ActionResult<TOut>> {
   try {
     await assertSameOrigin();
@@ -212,7 +233,12 @@ export async function runHardenedAction<TIn, TOut, TPrepared>(
       return err(summarise(parsed.error), toFieldErrors(parsed.error));
     }
 
-    return ok(await run(parsed.data, prepared));
+    const input = parsed.data;
+    const invoke = async (): Promise<TOut> => run(input, prepared);
+
+    return ok(
+      await (wrapRun ? wrapRun({ input, prepared, run: invoke }) : invoke()),
+    );
   } catch (thrown) {
     // Control flow, not failure — `redirect()` and `notFound()` inside a
     // handler communicate by throwing, and swallowing one here would turn a

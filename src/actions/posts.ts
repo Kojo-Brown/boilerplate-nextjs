@@ -8,6 +8,7 @@ import {
   defineAuthedFormAction,
 } from "@/lib/actions/define-authed-action";
 import { invalidate } from "@/lib/cache/invalidation";
+import { idempotencyKeySchema } from "@/lib/actions/idempotency-key";
 import type { EditablePost, PostSummary } from "@/lib/dal/posts";
 
 /**
@@ -40,6 +41,15 @@ import type { EditablePost, PostSummary } from "@/lib/dal/posts";
  * action should re-derive; authorisation is "may they touch this row", which is
  * a question about the data and can only be answered next to the query that
  * loads it.
+ *
+ * ## Idempotency
+ *
+ * `createPostAction` declares an `idempotency` plan, so a repeated submission
+ * of the same client-generated key replays the first result instead of writing
+ * a second post. The other three do not, and that is a decision rather than an
+ * omission: each of them names the row it acts on, so repeating one is either a
+ * no-op or an answer the UI already handles. See `docs/idempotency.md` for the
+ * full argument and for what a caller has to do to hold up its end.
  */
 
 const postIdSchema = z
@@ -76,12 +86,52 @@ const updatePostSchema = z.object({
     .transform((value) => (value === undefined || value === "" ? null : value)),
 });
 
+/**
+ * Creating a post is the mutation with no natural key, which is what makes it
+ * the one that needs a supplied one.
+ *
+ * Every other action here names the row it acts on: a second `deletePostAction`
+ * for the same id finds the post already gone and answers "Post not found", and
+ * a second `updatePostAction` writes the same values a second time. Neither
+ * leaves a mess. A second `createPostAction` writes a second post — and the two
+ * clicks that produce it are ordinary, not adversarial. See
+ * `docs/idempotency.md`.
+ *
+ * The key is a required field rather than an optional one. Optional would mean
+ * every call site decides for itself whether this mutation is deduplicated,
+ * which is the same "convention rather than structure" that
+ * `assert-action-hardening.ts` exists to rule out one level up.
+ */
 const createPostSchema = z.object({
+  idempotencyKey: idempotencyKeySchema,
   title: z
     .string()
     .min(1, "Title is required")
     .max(255, "Title must be under 255 characters"),
   content: z.string().max(100_000, "Content is too long").optional(),
+});
+
+/**
+ * The shape a replayed `createPostAction` result is revived into.
+ *
+ * It has to exist because a stored result is JSON: `createdAt` goes into the
+ * `Json` column as a `Date` and comes back as a string, and `PostCard` calls
+ * `new Date(post.createdAt)` — which happens to survive a string, while
+ * anything reaching for a `Date` method would not. Coercing here means the
+ * replay path and the fresh path hand back the same thing, which
+ * `posts.test.ts` asserts by comparing them rather than by describing them.
+ */
+const postSummaryOutput = z.object({
+  id: z.string(),
+  title: z.string(),
+  published: z.boolean(),
+  createdAt: z.coerce.date(),
+  updatedAt: z.coerce.date(),
+  author: z.object({
+    id: z.string(),
+    name: z.string().nullable(),
+    email: z.string(),
+  }),
 });
 
 /** The fields every mutation returns, so the three cannot drift apart. */
@@ -98,6 +148,10 @@ export const createPostAction = defineAuthedAction({
   name: "createPost",
   input: createPostSchema,
   unauthenticatedMessage: "You must be signed in to create a post.",
+  idempotency: {
+    key: (input) => input.idempotencyKey,
+    output: postSummaryOutput,
+  },
   handler: async ({ input, user }): Promise<PostSummary> => {
     const post = await prisma.post.create({
       data: {

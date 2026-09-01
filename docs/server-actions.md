@@ -36,6 +36,12 @@ that fails it should never have reached the process. Session before schema so an
 anonymous caller learns "sign in" rather than a field-by-field description of the
 payload that would have worked.
 
+There is an optional fourth, and it answers a question the three above cannot:
+_is this the same request as the last one?_ Two clicks on a submit button are
+both correctly originated, correctly authenticated and correctly shaped, so
+nothing here separates them. `docs/idempotency.md` covers the `idempotency`
+option that does, on the two authenticated factories.
+
 ## The factories
 
 Five, differing in the signature React requires at the call site:
@@ -223,8 +229,11 @@ It is reset to the same-origin default after every test.
 - **No rate limiting.** A hardened action still answers as fast as it is asked.
   That is its own SPEC item ("Rate limiting Server Actions and route handlers at
   the edge") and it is the fourth leg of this story.
-- **No idempotency.** A double-submitted `createPostAction` still creates two
-  posts; also its own SPEC item.
+- ~~**No idempotency.**~~ Done: `defineAuthedAction` and
+  `defineAuthedFormAction` take an `idempotency` plan, and `createPostAction`
+  declares one, so a resubmitted key replays the first result instead of
+  creating a second post. See `docs/idempotency.md`. The gap it leaves is
+  atomicity within a handler, which belongs to the outbox item.
 - **No E2E coverage of the origin check.** Asserting it end to end means posting
   a forged action request at a running server with a real encrypted action id,
   which is a larger piece of harness than this item. The rules are covered as a

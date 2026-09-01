@@ -13,7 +13,11 @@ vi.mock("sonner", () => ({
   },
 }));
 
-import { createPostAction, deletePostAction, togglePublishAction } from "@/actions/posts";
+import {
+  createPostAction,
+  deletePostAction,
+  togglePublishAction,
+} from "@/actions/posts";
 import { toast } from "sonner";
 
 const mockPost = {
@@ -25,15 +29,24 @@ const mockPost = {
   author: { id: "user-1", name: "Alice", email: "alice@example.com" },
 };
 
+/** Any schema-valid key: these tests mock the action, so it is never parsed. */
+const IDEMPOTENCY_KEY = "test-idempotency-key-0001";
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("createPostAction (server action integration)", () => {
   it("resolves with the created post on success", async () => {
-    vi.mocked(createPostAction).mockResolvedValue({ success: true, data: mockPost });
+    vi.mocked(createPostAction).mockResolvedValue({
+      success: true,
+      data: mockPost,
+    });
 
-    const result = await createPostAction({ title: "Hello World" });
+    const result = await createPostAction({
+      idempotencyKey: IDEMPOTENCY_KEY,
+      title: "Hello World",
+    });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -43,11 +56,22 @@ describe("createPostAction (server action integration)", () => {
   });
 
   it("is called with correct arguments including optional content", async () => {
-    vi.mocked(createPostAction).mockResolvedValue({ success: true, data: mockPost });
+    vi.mocked(createPostAction).mockResolvedValue({
+      success: true,
+      data: mockPost,
+    });
 
-    await createPostAction({ title: "Test", content: "Body" });
+    await createPostAction({
+      idempotencyKey: IDEMPOTENCY_KEY,
+      title: "Test",
+      content: "Body",
+    });
 
-    expect(createPostAction).toHaveBeenCalledWith({ title: "Test", content: "Body" });
+    expect(createPostAction).toHaveBeenCalledWith({
+      idempotencyKey: IDEMPOTENCY_KEY,
+      title: "Test",
+      content: "Body",
+    });
   });
 
   it("resolves with an error result for an empty title", async () => {
@@ -57,7 +81,10 @@ describe("createPostAction (server action integration)", () => {
       fieldErrors: { title: ["Title is required"] },
     });
 
-    const result = await createPostAction({ title: "" });
+    const result = await createPostAction({
+      idempotencyKey: IDEMPOTENCY_KEY,
+      title: "",
+    });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -68,7 +95,10 @@ describe("createPostAction (server action integration)", () => {
 
 describe("deletePostAction (server action integration)", () => {
   it("resolves with success for a valid owned post", async () => {
-    vi.mocked(deletePostAction).mockResolvedValue({ success: true, data: undefined });
+    vi.mocked(deletePostAction).mockResolvedValue({
+      success: true,
+      data: undefined,
+    });
 
     const result = await deletePostAction("post-1");
 
@@ -77,7 +107,10 @@ describe("deletePostAction (server action integration)", () => {
   });
 
   it("resolves with error when post is not found", async () => {
-    vi.mocked(deletePostAction).mockResolvedValue({ success: false, error: "Post not found." });
+    vi.mocked(deletePostAction).mockResolvedValue({
+      success: false,
+      error: "Post not found.",
+    });
 
     const result = await deletePostAction("missing");
 
@@ -132,7 +165,10 @@ describe("togglePublishAction (server action integration)", () => {
   });
 
   it("resolves with error when post is not found", async () => {
-    vi.mocked(togglePublishAction).mockResolvedValue({ success: false, error: "Post not found." });
+    vi.mocked(togglePublishAction).mockResolvedValue({
+      success: false,
+      error: "Post not found.",
+    });
 
     const result = await togglePublishAction("missing");
 
