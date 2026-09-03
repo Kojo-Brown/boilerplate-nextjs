@@ -273,6 +273,33 @@ because a rejected save must not clear the draft that caused it.
 to reach for this over the TanStack Query mutations on `/posts` — this
 repository ships both on purpose.
 
+## Optimistic concurrency
+
+The editor posts a whole document minutes after reading it, so every write to
+that row in between is invisible to it. Left alone that is a **lost update**: two
+people edit one post, the second save quietly erases the first, nothing errors
+and nothing is logged.
+
+`Post.version` is the token that makes it detectable. The editor sends the
+version it read, and the save is one statement that matches on it —
+`UPDATE … WHERE id = $1 AND version = $2` — so a row somebody else has written
+since matches nothing and no data is overwritten. The check is inside the write
+rather than a read before it, because "look, then act" is not a check under
+concurrency.
+
+Detection alone would only be a save button that fails, so a rejected save comes
+back carrying the row it found, and the editor compares three versions of every
+field: the one it loaded, the one in the browser, and the one in the database.
+Fields only one side touched resolve on their own — they retitled the post while
+you rewrote the body, and neither is a conflict — and the panel asks about what
+is genuinely contested, with both texts on screen. Applying a resolution loads
+the merge into the editor and rebases it, rather than saving it: a merge nobody
+has read yet is not something to write over somebody else's work.
+
+[docs/optimistic-concurrency.md](./docs/optimistic-concurrency.md) has the
+mechanism, the three ways a conditional write can match nothing, and what the
+version column deliberately does not cover.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

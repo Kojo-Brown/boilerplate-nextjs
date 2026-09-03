@@ -63,6 +63,28 @@ model Post {
   title     String
   content   String?
   published Boolean  @default(false)
+  /// Optimistic-concurrency token for `title` and `content`.
+  ///
+  /// The editor loads a row, someone edits it for a few minutes, and the save
+  /// posts back a whole document. Without a token that save is a blind
+  /// overwrite: a second writer's edit is gone, nothing errors, and the only
+  /// record that it ever existed is in the other person's browser. This column
+  /// is what turns that into a detectable event — the update carries the version
+  /// it read, matches on it in the `WHERE`, and updates no rows if the value has
+  /// moved. See `docs/optimistic-concurrency.md`.
+  ///
+  /// An integer counter rather than `updatedAt`, which is the other obvious
+  /// token and a worse one: two writes inside the same clock tick are
+  /// indistinguishable, the column's precision differs across databases, and a
+  /// comparison has to survive a round trip through JSON and back into a `Date`.
+  /// A counter is exact, and monotonic per row by construction.
+  ///
+  /// It covers the fields the editor writes and deliberately not `published`:
+  /// `togglePublishAction` writes that column and nothing else, so the two
+  /// mutations cannot lose each other's work, and making a publish bump this
+  /// would reject an open editor's save for a change that touched none of its
+  /// fields. See the note on `updatePostAction`.
+  version   Int      @default(1)
   authorId  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
