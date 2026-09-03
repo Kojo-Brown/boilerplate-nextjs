@@ -13,7 +13,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
 import { toast } from "@/lib/toast";
+import { mergeEditable } from "@/lib/concurrency/post-conflict";
+import type { EditableFields } from "@/lib/concurrency/post-conflict";
 import type { EditablePost } from "@/lib/dal/posts";
+import { ConflictPanel } from "./conflict-panel";
 
 /**
  * `useActionState` + `useOptimistic` over the two post mutations, with the
@@ -37,10 +40,46 @@ import type { EditablePost } from "@/lib/dal/posts";
  *   rejected save the heading snaps back to the stored title while the textarea
  *   keeps what was typed, so the screen says "this is what is saved, that is
  *   what you tried" instead of silently discarding one of the two.
+ *
+ * The third thing this component owns is the *version* the draft is based on —
+ * `basis` below — and with it the conflict panel. `docs/optimistic-concurrency.md`
+ * is the long version of that half; the short one is that a save carries the
+ * version it read, a save whose row has moved comes back `conflict` instead of
+ * overwriting somebody's work, and everything the panel needs is derived from
+ * that result rather than stored.
  */
 
 /** The subset of the row an in-flight mutation claims will be true. */
 type OptimisticPatch = Partial<Pick<EditablePost, "title" | "published">>;
+
+/**
+ * The newest row this component knows about.
+ *
+ * There are three sources and they arrive out of order: the `post` prop (the
+ * Server Component's read, which catches up only when something invalidates),
+ * the row a successful save returned, and a row adopted from a conflict
+ * resolution. Picking the highest `version` rather than tracking a "current"
+ * in state is what keeps them consistent without an effect to synchronise
+ * them — and `Post.version` is monotonic per row, so "highest" is a total
+ * order rather than a guess.
+ *
+ * `post` is first so a tie resolves to the server's own read.
+ */
+function newest(...rows: readonly (EditablePost | null)[]): EditablePost {
+  // The first element is the `post` prop at every call site, so the reduce
+  // always has a seed and the non-null assertion below is not one.
+  const [first, ...rest] = rows as [EditablePost, ...(EditablePost | null)[]];
+
+  return rest.reduce<EditablePost>(
+    (best, row) => (row && row.version > best.version ? row : best),
+    first,
+  );
+}
+
+/** The row's editable half, as the merge compares it. */
+function fieldsOf(row: EditablePost): EditableFields {
+  return { title: row.title, content: row.content };
+}
 
 export function PostEditor({ post }: { post: EditablePost }) {
   const [saveState, saveAction, isSaving] = useActionState(
@@ -48,6 +87,17 @@ export function PostEditor({ post }: { post: EditablePost }) {
     null,
   );
   const [isToggling, startToggling] = useTransition();
+
+  /**
+   * The row a conflict resolution was applied from, once the author has made
+   * one.
+   *
+   * The only piece of this that has to be state: everything else about a
+   * conflict is derivable from the last save's result, but "the author looked
+   * at the other version and decided" is an event, and nothing in the props or
+   * the result records that it happened.
+   */
+  const [adopted, setAdopted] = useState<EditablePost | null>(null);
 
   /**
    * The row as the screen should currently show it: the server's value, with
@@ -61,8 +111,48 @@ export function PostEditor({ post }: { post: EditablePost }) {
    * has not been refreshed by the time the transition ends, the discard shows
    * the stale row for one frame before the new data lands.
    */
+  /** The row the last save wrote, before the prop has caught up. */
+  const savedRow =
+    saveState?.success && saveState.data.status === "saved"
+      ? saveState.data.post
+      : null;
+
+  /** The row the last save found instead of the one it expected. */
+  const conflictRow =
+    saveState?.success && saveState.data.status === "conflict"
+      ? saveState.data.current
+      : null;
+
+  /**
+   * The row the draft is based on: what the next save claims to have read, and
+   * what a three-way merge measures both sides against.
+   *
+   * This is why `expectedVersion` is not simply `post.version`. After a
+   * conflict nothing invalidates — no row was written — so the prop stays at
+   * the version this editor loaded, and a save built from it would present the
+   * same stale token and conflict again forever.
+   */
+  const basis = newest(post, savedRow, adopted);
+
+  /**
+   * The conflict the author still has to deal with, if any.
+   *
+   * Derived rather than stored, so there is no state to clear and no way for a
+   * panel to outlive the result that produced it. Adopting a row is what closes
+   * it: the resolution is based on that exact version, so a conflict whose row
+   * is no newer than the adopted one has been answered — and one that *is*
+   * newer is a third writer, which has to reopen it.
+   */
+  const conflict =
+    conflictRow && (!adopted || adopted.version < conflictRow.version)
+      ? conflictRow
+      : null;
+
   const [optimistic, applyOptimistic] = useOptimistic(
-    post,
+    // `basis` rather than `post`: after a resolution the adopted row is the
+    // truest thing on screen, and the heading claiming otherwise until the next
+    // refresh would contradict the panel that had just described it.
+    basis,
     (current, patch: OptimisticPatch) => ({ ...current, ...patch }),
   );
 
@@ -90,6 +180,23 @@ export function PostEditor({ post }: { post: EditablePost }) {
   const isBusy = isSaving || isToggling;
 
   /**
+   * The three-way comparison the panel renders, recomputed on every keystroke
+   * while a conflict is open.
+   *
+   * Cheap — two string comparisons — and correct by construction that way: an
+   * author who keeps typing while the panel is up is changing `mine`, and a
+   * merge frozen at the moment of the conflict would offer them a choice
+   * between the other version and text they have since replaced.
+   */
+  const merge = conflict
+    ? mergeEditable({
+        base: fieldsOf(basis),
+        mine: draft,
+        theirs: fieldsOf(conflict),
+      })
+    : null;
+
+  /**
    * Only the success half reaches a toast.
    *
    * The auth forms toast their whole-form failures because they have nowhere
@@ -100,8 +207,28 @@ export function PostEditor({ post }: { post: EditablePost }) {
    * timer.
    */
   useEffect(() => {
-    if (saveState?.success) toast.success("Post saved");
+    if (saveState?.success && saveState.data.status === "saved") {
+      toast.success("Post saved");
+    }
   }, [saveState]);
+
+  /**
+   * Takes the resolved values into the editor and rebases the draft on the row
+   * they were reconciled against.
+   *
+   * Both halves matter. Without the values the author would have to retype
+   * their own merge; without the rebase the next save would carry the version
+   * this editor originally loaded and be rejected by the same check, for a
+   * conflict that has just been resolved.
+   *
+   * It deliberately does not save. See the note on `ConflictPanel`.
+   */
+  function handleResolve(values: EditableFields) {
+    if (!conflict) return;
+
+    setDraft({ title: values.title, content: values.content ?? "" });
+    setAdopted(conflict);
+  }
 
   function handleSubmit(formData: FormData) {
     const title = draft.title.trim();
@@ -186,12 +313,34 @@ export function PostEditor({ post }: { post: EditablePost }) {
         </div>
       </div>
 
+      {merge && conflict && (
+        <ConflictPanel
+          merge={merge}
+          theirVersion={conflict.version}
+          onResolve={handleResolve}
+        />
+      )}
+
       <form action={handleSubmit} className="flex flex-col gap-4">
         {/* The row this form writes. A hidden field rather than a bound
             argument so the whole payload arrives as one `FormData` the schema
             parses in one place — and it is validated like every other field,
             because a hidden input is as forgeable as a visible one. */}
         <input type="hidden" name="postId" value={post.id} />
+        {/* The optimistic-concurrency token: the version this draft was made
+            from, which the `UPDATE` matches on. Hidden and forgeable like the
+            id beside it, and validated by the schema for the same reason — but
+            worth being clear about what the check is for. It stops an *honest*
+            client from overwriting an edit it never saw; a caller that posts
+            the current version on purpose gets what an unconditional save would
+            have given everyone, and it is the ownership check, not this, that
+            decides who may write the row at all. */}
+        <input
+          type="hidden"
+          name="expectedVersion"
+          value={basis.version}
+          data-testid="expected-version"
+        />
 
         <div className="flex flex-col gap-1.5">
           <label htmlFor="post-title" className="text-sm font-medium">

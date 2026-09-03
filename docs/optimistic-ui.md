@@ -120,7 +120,14 @@ test ends and React says so on stderr.
 - **No E2E coverage.** Asserting the rollback end to end needs a server that can
   be made to reject a specific save on demand; the unit tests cover the same
   state machine with the action mocked.
-- **No conflict detection.** Two tabs editing one post both save, and the last
-  write wins silently. That is the next SPEC item in this phase (optimistic
-  concurrency with a `version` column), not an oversight here.
+- ~~**No conflict detection.**~~ Done: the save carries the `Post.version` it
+  read, a save whose row has moved comes back `conflict` rather than
+  overwriting, and the editor offers a three-way merge. See
+  [optimistic-concurrency.md](./optimistic-concurrency.md). One consequence
+  belongs here: the heading and the pill now render from `basis` — the newest
+  row the component knows about, which is the `post` prop, the row the last save
+  returned, or a row adopted from a conflict resolution, whichever has the
+  highest version — rather than from `post` alone. The rollback story above is
+  unchanged (a failed save moves none of the three), and the flicker argument
+  still applies to everything the prop feeds that a save's own result does not.
 - **No idempotency.** A double-submitted save writes twice. Also its own item.

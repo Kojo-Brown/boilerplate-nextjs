@@ -9,7 +9,9 @@ import {
 } from "@/lib/actions/define-authed-action";
 import { invalidate } from "@/lib/cache/invalidation";
 import { idempotencyKeySchema } from "@/lib/actions/idempotency-key";
-import type { EditablePost, PostSummary } from "@/lib/dal/posts";
+import { getEditablePost } from "@/lib/dal/posts";
+import type { PostSummary } from "@/lib/dal/posts";
+import type { SavePostOutcome } from "@/lib/concurrency/post-conflict";
 
 /**
  * The post mutations, and the cache entries they are responsible for.
@@ -50,6 +52,11 @@ import type { EditablePost, PostSummary } from "@/lib/dal/posts";
  * omission: each of them names the row it acts on, so repeating one is either a
  * no-op or an answer the UI already handles. See `docs/idempotency.md` for the
  * full argument and for what a caller has to do to hold up its end.
+ *
+ * `updatePostAction`'s version check sharpens that claim rather than
+ * complicating it: a repeated save now carries a token its own first attempt
+ * has already moved, which is why the conditional write below distinguishes
+ * "the row already says this" from "somebody else changed it".
  */
 
 const postIdSchema = z
@@ -74,6 +81,29 @@ const postIdSchema = z
  */
 const updatePostSchema = z.object({
   postId: postIdSchema,
+  /**
+   * The `Post.version` the editor loaded, and the whole of the optimistic
+   * concurrency check. See `docs/optimistic-concurrency.md`.
+   *
+   * `z.coerce.number()` because it arrives as a string in a `FormData`, and
+   * required rather than optional: an optional token means every call site
+   * decides for itself whether this mutation may silently overwrite somebody
+   * else's edit, which is the same "convention rather than structure" the
+   * hardening factories exist to rule out. A caller with no version to send has
+   * not read the row, and a save that has not read the row is the blind
+   * overwrite this field exists to prevent.
+   *
+   * `.int().positive()` rather than a bare number: the column starts at 1 and
+   * only ever increments, so a fractional or negative token is malformed rather
+   * than merely stale — and `Number.MAX_SAFE_INTEGER` bounds it because beyond
+   * that, integers stop being distinguishable and `expectedVersion + 1 ===
+   * expectedVersion` becomes true.
+   */
+  expectedVersion: z.coerce
+    .number()
+    .int("That is not a version")
+    .positive("That is not a version")
+    .max(Number.MAX_SAFE_INTEGER, "That is not a version"),
   title: z
     .string()
     .trim()
@@ -178,6 +208,7 @@ const editablePostSelect = {
   content: true,
   published: true,
   updatedAt: true,
+  version: true,
 } as const;
 
 /**
@@ -196,12 +227,51 @@ const editablePostSelect = {
  * would be a guess. So the flags handed to `invalidate` are equal here on
  * purpose — an edit to a published post drops its blog entries because the
  * *content* changed, and an edit to a draft drops nothing.
+ *
+ * ## Optimistic concurrency
+ *
+ * This is the mutation that can lose somebody's work. It posts a whole
+ * document, minutes after reading it, and every other write to the row in that
+ * window is invisible to it. So the save is conditional: `expectedVersion` is
+ * the `Post.version` the editor loaded, it goes in the `WHERE`, and the write
+ * increments it. A row somebody else has saved since matches nothing, no rows
+ * are updated, and the outcome is a `conflict` carrying the row as it now
+ * stands — which is what `ConflictPanel` needs to offer a merge.
+ * `docs/optimistic-concurrency.md` is the long version.
+ *
+ * Three things about the shape of that are deliberate.
+ *
+ * **The version is matched in the `UPDATE`, not read and compared first.** A
+ * `findUnique` that checks the version and an `update` that trusts the check
+ * are two statements, and the window between them is exactly the concurrent
+ * save being guarded against — the same read-then-write that
+ * `IdempotencyKey`'s unique index exists to avoid one table over. One statement
+ * whose `WHERE` carries the token cannot be raced: Postgres either matches the
+ * row or does not.
+ *
+ * **`updateManyAndReturn` rather than `update`.** Prisma's `update` accepts the
+ * same filtered `where` and throws `P2025` when nothing matches, which turns an
+ * ordinary, expected outcome into exception-shaped control flow — and into a
+ * `catch` that cannot tell a version that moved from a row that was deleted
+ * without going back to the database anyway. An empty array says the same thing
+ * without pretending anything went wrong. Both compile to one `UPDATE … WHERE
+ * id = $1 AND version = $2 RETURNING …`.
+ *
+ * **A conflict is a success, not an `ActionError`.** The failure half of
+ * `ActionResult` carries a sentence; a conflict has to carry a row. See
+ * `SavePostOutcome`.
+ *
+ * The ownership read above stays where it is, and is not merged into the
+ * conditional `WHERE`. It answers a different question — "may you touch this
+ * row at all", which deserves its own message — and it is what lets the empty
+ * result below be read as "the version moved" rather than as any of the three
+ * other reasons a filtered update can match nothing.
  */
 export const updatePostAction = defineAuthedFormAction({
   name: "updatePost",
   input: updatePostSchema,
   unauthenticatedMessage: "You must be signed in to edit a post.",
-  handler: async ({ input, user }): Promise<EditablePost> => {
+  handler: async ({ input, user }): Promise<SavePostOutcome> => {
     const existing = await prisma.post.findUnique({
       where: { id: input.postId },
       select: { authorId: true, published: true },
@@ -215,11 +285,58 @@ export const updatePostAction = defineAuthedFormAction({
       throw new ActionError("You can only edit your own posts.");
     }
 
-    const updated = await prisma.post.update({
-      where: { id: input.postId },
-      data: { title: input.title, content: input.content },
+    const [updated] = await prisma.post.updateManyAndReturn({
+      where: {
+        id: input.postId,
+        // Belt and braces beside the ownership check above. That check is a
+        // separate statement, so it is a claim about a moment that has passed;
+        // this one is part of the write itself and cannot be outrun.
+        authorId: user.id,
+        version: input.expectedVersion,
+      },
+      data: {
+        title: input.title,
+        content: input.content,
+        // The increment is what makes the token move, and it is in the same
+        // statement as the write for the same reason the check is: `version + 1`
+        // computed in JavaScript from a value read earlier is two writers
+        // agreeing on the same next number.
+        version: { increment: 1 },
+      },
       select: editablePostSelect,
     });
+
+    if (!updated) {
+      // Nothing matched. Ownership was established above and does not change,
+      // so this is either a version that moved or a row that has since been
+      // deleted — and the re-read distinguishes them. It is on the conflict
+      // path only: the save that succeeds pays for none of it.
+      const current = await getEditablePost(input.postId, user.id);
+
+      if (!current) {
+        throw new ActionError("Post not found.");
+      }
+
+      // The row already says what this save was trying to make it say, so
+      // there is nothing to reconcile and reporting a conflict would be
+      // reporting one against ourselves. This is the ordinary double-submit —
+      // two clicks, or a retry after a response that never arrived — where the
+      // first attempt landed, moved the version, and the second is holding a
+      // token that is stale precisely *because* its own write succeeded.
+      // Without this branch every double-clicked save ends in a conflict panel
+      // offering a choice between two identical documents.
+      if (current.title === input.title && current.content === input.content) {
+        return { status: "saved", post: current };
+      }
+
+      // No `invalidate` on either of these paths, deliberately: nothing was
+      // written, so no cache entry is stale — and on the branch above, whichever
+      // attempt did write it has already dropped the tags.
+      // `scripts/assert-cache-invalidation.ts` is satisfied by the call on the
+      // writing path below; it asks whether an action that writes reports it,
+      // which is a property of the body rather than of one branch.
+      return { status: "conflict", current };
+    }
 
     invalidate({
       kind: "post.updated",
@@ -227,7 +344,7 @@ export const updatePostAction = defineAuthedFormAction({
       wasPublished: existing.published,
       isPublished: updated.published,
     });
-    return updated;
+    return { status: "saved", post: updated };
   },
 });
 

@@ -305,6 +305,11 @@ describe("getEditablePost", () => {
           content: true,
           published: true,
           updatedAt: true,
+          // The optimistic-concurrency token. Pinned here with the rest
+          // because a read that quietly stopped selecting it would leave the
+          // editor with no version to send, and the save would fail its schema
+          // rather than the page failing to load — a long way from the cause.
+          version: true,
         },
       }),
     );

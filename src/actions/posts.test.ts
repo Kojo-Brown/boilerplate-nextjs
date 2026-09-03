@@ -5,8 +5,14 @@ vi.mock("@/lib/prisma", () => ({
     post: {
       create: vi.fn(),
       findUnique: vi.fn(),
+      // `getEditablePost`, which `updatePostAction` re-reads through when its
+      // conditional write matches nothing.
+      findFirst: vi.fn(),
       delete: vi.fn(),
       update: vi.fn(),
+      // The editor's save: one `UPDATE … WHERE id = ? AND version = ?
+      // RETURNING …`, whose empty result *is* the conflict.
+      updateManyAndReturn: vi.fn(),
     },
     // `createPostAction` is idempotent, so every call to it claims a key
     // before the handler runs. `beforeEach` stubs these to "the key was free",
@@ -68,6 +74,7 @@ const mockPost = {
   id: "post-1",
   title: "Hello World",
   published: false,
+  version: 1,
   createdAt: new Date("2024-01-01"),
   updatedAt: new Date("2024-01-01"),
   authorId: "user-1",
@@ -303,69 +310,89 @@ describe("updatePostAction", () => {
     return data;
   }
 
+  /** A submission from an editor that loaded version 3 of the post. */
+  function submission(fields: Record<string, string>): FormData {
+    return formData({ postId: "post-1", expectedVersion: "3", ...fields });
+  }
+
   const existing = { authorId: "user-1", published: false };
+
+  /** The row the conditional write returns when it matches. */
+  function written(overrides: Record<string, unknown> = {}) {
+    return { ...mockPost, version: 4, ...overrides };
+  }
 
   it("saves a post owned by the user", async () => {
     vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
-    vi.mocked(prisma.post.update).mockResolvedValue({
-      ...mockPost,
-      title: "Edited",
-      content: "New body",
-    } as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      written({ title: "Edited", content: "New body" }),
+    ] as never);
 
     const result = await updatePostAction(
       null,
-      formData({ postId: "post-1", title: "Edited", content: "New body" }),
+      submission({ title: "Edited", content: "New body" }),
     );
 
     expect(result.success).toBe(true);
-    expect(prisma.post.update).toHaveBeenCalledWith(
+    if (result.success) {
+      expect(result.data.status).toBe("saved");
+    }
+    expect(prisma.post.updateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: "post-1" },
-        data: { title: "Edited", content: "New body" },
+        // The version is part of the write's own `WHERE`, not something read
+        // and compared first: a check in a separate statement leaves exactly
+        // the window this column exists to close.
+        where: { id: "post-1", authorId: "user-1", version: 3 },
+        data: {
+          title: "Edited",
+          content: "New body",
+          version: { increment: 1 },
+        },
       }),
     );
   });
 
   it("never writes `published`, so saving a draft cannot publish it", async () => {
     vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
-    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      written(),
+    ] as never);
 
     await updatePostAction(
       null,
       // A caller posting the field anyway is the case that matters: the schema
       // has no `published` key, so it is dropped rather than trusted.
-      formData({ postId: "post-1", title: "Edited", published: "true" }),
+      submission({ title: "Edited", published: "true" }),
     );
 
-    const [call] = vi.mocked(prisma.post.update).mock.calls;
+    const [call] = vi.mocked(prisma.post.updateManyAndReturn).mock.calls;
     expect(call?.[0].data).not.toHaveProperty("published");
   });
 
   it("stores an emptied textarea as null rather than an empty string", async () => {
     vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
-    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      written(),
+    ] as never);
 
-    await updatePostAction(
-      null,
-      formData({ postId: "post-1", title: "Edited", content: "" }),
-    );
+    await updatePostAction(null, submission({ title: "Edited", content: "" }));
 
-    expect(prisma.post.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { title: "Edited", content: null } }),
+    expect(prisma.post.updateManyAndReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ content: null }),
+      }),
     );
   });
 
   it("trims the title, so the saved value matches the optimistic one", async () => {
     vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
-    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      written(),
+    ] as never);
 
-    await updatePostAction(
-      null,
-      formData({ postId: "post-1", title: "  Edited  " }),
-    );
+    await updatePostAction(null, submission({ title: "  Edited  " }));
 
-    expect(prisma.post.update).toHaveBeenCalledWith(
+    expect(prisma.post.updateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ title: "Edited" }),
       }),
@@ -373,16 +400,39 @@ describe("updatePostAction", () => {
   });
 
   it("returns a field error for an empty title", async () => {
-    const result = await updatePostAction(
-      null,
-      formData({ postId: "post-1", title: "   " }),
-    );
+    const result = await updatePostAction(null, submission({ title: "   " }));
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.fieldErrors?.title?.[0]).toContain("required");
     }
-    expect(prisma.post.update).not.toHaveBeenCalled();
+    expect(prisma.post.updateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a submission with no version to check", async () => {
+    // Not a formality. A save with no token cannot be conditional, so accepting
+    // one would mean any caller can opt out of the concurrency check by leaving
+    // a field off — which is the blind overwrite the column exists to prevent.
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.fieldErrors?.expectedVersion?.[0]).toBeDefined();
+    }
+    expect(prisma.post.updateManyAndReturn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a version that is not a whole positive number", async () => {
+    const result = await updatePostAction(
+      null,
+      formData({ postId: "post-1", expectedVersion: "1.5", title: "Edited" }),
+    );
+
+    expect(result.success).toBe(false);
+    expect(prisma.post.updateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("refuses to save a post owned by somebody else", async () => {
@@ -393,7 +443,7 @@ describe("updatePostAction", () => {
 
     const result = await updatePostAction(
       null,
-      formData({ postId: "post-1", title: "Edited" }),
+      submission({ title: "Edited" }),
     );
 
     expect(result.success).toBe(false);
@@ -403,7 +453,7 @@ describe("updatePostAction", () => {
       // in different places, and an ownership failure has no field to blame.
       expect(result.fieldErrors).toBeUndefined();
     }
-    expect(prisma.post.update).not.toHaveBeenCalled();
+    expect(prisma.post.updateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("returns a failure when the post no longer exists", async () => {
@@ -411,14 +461,14 @@ describe("updatePostAction", () => {
 
     const result = await updatePostAction(
       null,
-      formData({ postId: "post-1", title: "Edited" }),
+      submission({ title: "Edited" }),
     );
 
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toContain("not found");
     }
-    expect(prisma.post.update).not.toHaveBeenCalled();
+    expect(prisma.post.updateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("returns a failure when not authenticated", async () => {
@@ -426,7 +476,7 @@ describe("updatePostAction", () => {
 
     const result = await updatePostAction(
       null,
-      formData({ postId: "post-1", title: "Edited" }),
+      submission({ title: "Edited" }),
     );
 
     expect(result.success).toBe(false);
@@ -438,16 +488,116 @@ describe("updatePostAction", () => {
 
   it("ignores the previous result it is handed", async () => {
     vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
-    vi.mocked(prisma.post.update).mockResolvedValue(mockPost as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      written(),
+    ] as never);
 
     // `previous` is whatever React sent back from the client. An action that
     // branched on it would be branching on client-supplied state.
     const result = await updatePostAction(
       { success: false, error: "anything at all" },
-      formData({ postId: "post-1", title: "Edited" }),
+      submission({ title: "Edited" }),
     );
 
     expect(result.success).toBe(true);
+  });
+
+  /**
+   * The half the version column exists for.
+   *
+   * Every test here has the conditional write match nothing — which is what
+   * Postgres does when the row has moved — and is about what the action makes
+   * of that. The distinction it has to draw is three ways: somebody else wrote
+   * the row, this same save already wrote it, or the row is gone.
+   */
+  describe("when the row has moved", () => {
+    beforeEach(() => {
+      vi.mocked(prisma.post.findUnique).mockResolvedValue(existing as never);
+      // Nothing matched `version = 3`.
+      vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([] as never);
+    });
+
+    it("reports a conflict carrying the row as it now stands", async () => {
+      const theirs = {
+        id: "post-1",
+        title: "Their title",
+        content: "Their body",
+        published: false,
+        updatedAt: new Date("2026-01-02"),
+        version: 7,
+      };
+      vi.mocked(prisma.post.findFirst).mockResolvedValue(theirs as never);
+
+      const result = await updatePostAction(
+        null,
+        submission({ title: "My title", content: "My body" }),
+      );
+
+      // A success, not an error: the client cannot merge anything from a
+      // sentence, and this outcome has a row attached.
+      expect(result.success).toBe(true);
+      if (result.success && result.data.status === "conflict") {
+        expect(result.data.current).toEqual(theirs);
+      } else {
+        expect.unreachable("expected a conflict outcome");
+      }
+      expect(droppedTags()).toEqual([]);
+    });
+
+    it("re-reads through the ownership filter, so a conflict cannot leak a row", async () => {
+      vi.mocked(prisma.post.findFirst).mockResolvedValue({
+        ...mockPost,
+        version: 7,
+      } as never);
+
+      await updatePostAction(null, submission({ title: "My title" }));
+
+      expect(prisma.post.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: "post-1", authorId: "user-1" },
+        }),
+      );
+    });
+
+    it("reports success when the row already says what this save was writing", async () => {
+      // The ordinary double-submit: the first attempt landed and moved the
+      // version, so the second arrives with a token that is stale because of
+      // its own success. A conflict here would offer a choice between two
+      // identical documents.
+      vi.mocked(prisma.post.findFirst).mockResolvedValue({
+        ...mockPost,
+        title: "Edited",
+        content: "New body",
+        version: 4,
+      } as never);
+
+      const result = await updatePostAction(
+        null,
+        submission({ title: "Edited", content: "New body" }),
+      );
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.status).toBe("saved");
+      }
+      // Whichever attempt did the writing already dropped the tags; this one
+      // wrote nothing and must not drop them again.
+      expect(droppedTags()).toEqual([]);
+    });
+
+    it("fails when the row has been deleted rather than edited", async () => {
+      vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+
+      const result = await updatePostAction(
+        null,
+        submission({ title: "Edited" }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain("not found");
+      }
+    });
   });
 });
 
@@ -569,17 +719,16 @@ describe("cache invalidation", () => {
   it("drops the blog cache when a published post is edited", async () => {
     const data = new FormData();
     data.append("postId", "post-1");
+    data.append("expectedVersion", "1");
     data.append("title", "Edited");
 
     vi.mocked(prisma.post.findUnique).mockResolvedValue({
       authorId: "user-1",
       published: true,
     } as never);
-    vi.mocked(prisma.post.update).mockResolvedValue({
-      ...mockPost,
-      published: true,
-      title: "Edited",
-    } as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      { ...mockPost, published: true, title: "Edited", version: 2 },
+    ] as never);
 
     await updatePostAction(null, data);
 
@@ -591,16 +740,16 @@ describe("cache invalidation", () => {
   it("does not touch the blog cache when a draft is edited", async () => {
     const data = new FormData();
     data.append("postId", "post-1");
+    data.append("expectedVersion", "1");
     data.append("title", "Edited");
 
     vi.mocked(prisma.post.findUnique).mockResolvedValue({
       authorId: "user-1",
       published: false,
     } as never);
-    vi.mocked(prisma.post.update).mockResolvedValue({
-      ...mockPost,
-      title: "Edited",
-    } as never);
+    vi.mocked(prisma.post.updateManyAndReturn).mockResolvedValue([
+      { ...mockPost, title: "Edited", version: 2 },
+    ] as never);
 
     await updatePostAction(null, data);
 

@@ -122,7 +122,7 @@ export async function getPublishedPostById(
  */
 export type EditablePost = Pick<
   Post,
-  "id" | "title" | "content" | "published" | "updatedAt"
+  "id" | "title" | "content" | "published" | "updatedAt" | "version"
 >;
 
 /**
@@ -155,6 +155,11 @@ export async function getEditablePost(
       content: true,
       published: true,
       updatedAt: true,
+      // The version the editor's next save will claim to be based on. A read
+      // that omitted it would leave the client with no token to send, and the
+      // save would have to fall back to an unconditional overwrite — which is
+      // the lost update this column exists to prevent.
+      version: true,
     },
   });
 }

@@ -35,6 +35,7 @@ const post: EditablePost = {
   content: "Original body",
   published: false,
   updatedAt: new Date("2026-01-01T00:00:00Z"),
+  version: 3,
 };
 
 beforeEach(() => {
