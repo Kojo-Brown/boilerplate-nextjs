@@ -332,6 +332,21 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for rate limiting — a defence whose absence is invisible by
+      # construction, because an endpoint that is not counted answers exactly
+      # like one that is. Two ways for that to happen and this closes both: an
+      # endpoint the proxy's matcher excludes never reaches the limiter at all
+      # (`api/auth` was excluded, which left `POST /api/auth/callback/credentials`
+      # — one argon2 verification per request — unreachable by anything), and an
+      # endpoint that reaches it but matches no rule has no budget. This reads
+      # the compiled matcher Next actually applies, out of the build's
+      # functions-config manifest, rather than re-implementing the matcher
+      # syntax and asserting against its own reading of it.
+      - name: Assert rate limit coverage
+        run: pnpm exec tsx scripts/assert-rate-limit-coverage.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning
