@@ -1,10 +1,31 @@
-import { describe, it, expect } from "vitest";
+import { NextRequest, NextResponse } from "next/server";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { NextFetchEvent } from "next/server";
 import {
   authConfig,
   PROTECTED_PREFIXES,
   ADMIN_PREFIXES,
   AUTH_PAGES,
 } from "@/auth.config";
+
+/**
+ * The session gate, stubbed.
+ *
+ * `NextAuth(authConfig)` resolves providers and reads secrets at module scope,
+ * which is not what the proxy tests below are about: the question there is the
+ * *order* of the two concerns in `src/proxy.ts` and which requests reach the
+ * gate at all. The stub records that it was called and answers with a plain
+ * `next()`. It does not affect the `authorized` tests in this file — those call
+ * the callback in `@/auth.config` directly, and that module imports nothing
+ * from `next-auth` but a type.
+ */
+const sessionGate = vi.fn<() => Response | undefined>(() => undefined);
+
+vi.mock("next-auth", () => ({
+  default: () => ({ auth: () => sessionGate }),
+}));
+
+const { default: proxy, config } = await import("@/proxy");
 
 type AuthorizedParams = Parameters<
   NonNullable<NonNullable<typeof authConfig.callbacks>["authorized"]>
@@ -246,5 +267,156 @@ describe("authorized callback — /forbidden page", () => {
       request: makeRequest("/forbidden"),
     });
     expect(result).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The proxy handler itself: the rate limit, the session gate, and their order.
+// ---------------------------------------------------------------------------
+
+function request(
+  path: string,
+  init: { method?: string; address?: string } = {},
+): NextRequest {
+  return new NextRequest(`https://example.test${path}`, {
+    method: init.method ?? "GET",
+    headers: { "x-forwarded-for": init.address ?? "203.0.113.9" },
+  });
+}
+
+const event = {} as NextFetchEvent;
+
+const NOW = 1_800_000_000_000;
+
+/** A fresh address per test, so the process-wide store cannot leak between them. */
+let addressCounter = 0;
+function freshAddress(): string {
+  addressCounter += 1;
+  return `198.51.${Math.floor(addressCounter / 250)}.${addressCounter % 250}`;
+}
+
+beforeEach(() => {
+  sessionGate.mockClear();
+  sessionGate.mockImplementation(() => undefined);
+});
+
+describe("the matcher", () => {
+  it("covers NextAuth's endpoints", () => {
+    // The regression this feature exists for. While `api/auth` was excluded
+    // here, `POST /api/auth/callback/credentials` — one argon2 verification per
+    // request, reachable directly with a CSRF token anyone can fetch — never
+    // reached this file and could not be counted.
+    expect(config.matcher.join(" ")).not.toContain("api/auth");
+  });
+
+  it("still skips Next's internals and static assets", () => {
+    const matcher = config.matcher.join(" ");
+    expect(matcher).toContain("_next/static");
+    expect(matcher).toContain("_next/image");
+    expect(matcher).toContain("favicon");
+  });
+});
+
+describe("proxy", () => {
+  it("runs the session gate for an ordinary page", async () => {
+    await proxy(request("/dashboard", { address: freshAddress() }), event);
+    expect(sessionGate).toHaveBeenCalledTimes(1);
+  });
+
+  it("substitutes next() when the gate returns nothing", async () => {
+    const response = await proxy(
+      request("/dashboard", { address: freshAddress() }),
+      event,
+    );
+    expect(response.status).toBe(200);
+  });
+
+  it("passes the gate's own response through", async () => {
+    const redirect = NextResponse.redirect("https://example.test/login");
+    sessionGate.mockImplementation(() => redirect);
+
+    const response = await proxy(
+      request("/dashboard", { address: freshAddress() }),
+      event,
+    );
+    expect(response.headers.get("location")).toBe("https://example.test/login");
+  });
+
+  it("does not run the session gate on NextAuth's own endpoints", async () => {
+    // The exclusion that used to live in the matcher. It has to survive, or
+    // every OAuth callback acquires a session read it never needed.
+    await proxy(
+      request("/api/auth/callback/google", { address: freshAddress() }),
+      event,
+    );
+    expect(sessionGate).not.toHaveBeenCalled();
+  });
+
+  it("still counts those endpoints", async () => {
+    const address = freshAddress();
+    const attempt = () =>
+      proxy(
+        request("/api/auth/callback/credentials", { method: "POST", address }),
+        event,
+      );
+
+    for (let index = 0; index < 10; index += 1) {
+      expect((await attempt()).status).not.toBe(429);
+    }
+
+    expect((await attempt()).status).toBe(429);
+  });
+
+  it("refuses before the session gate runs", async () => {
+    // The reason the limit is applied here at all: a refused request must not
+    // cost a session read, a route match, or a database connection.
+    const address = freshAddress();
+
+    for (let index = 0; index < 10; index += 1) {
+      await proxy(request("/login", { method: "POST", address }), event);
+    }
+    sessionGate.mockClear();
+
+    const refused = await proxy(
+      request("/login", { method: "POST", address }),
+      event,
+    );
+
+    expect(refused.status).toBe(429);
+    expect(sessionGate).not.toHaveBeenCalled();
+  });
+
+  it("reports the remaining budget on an allowed request", async () => {
+    const response = await proxy(
+      request("/login", { method: "POST", address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get("RateLimit-Limit")).toBe("10");
+    expect(response.headers.get("RateLimit-Remaining")).toBe("9");
+  });
+
+  it("leaves unlimited traffic without rate-limit headers", async () => {
+    const response = await proxy(
+      request("/blog", { address: freshAddress() }),
+      event,
+    );
+    expect(response.headers.get("RateLimit-Limit")).toBeNull();
+  });
+
+  it("uses one clock reading for the decision and the headers", async () => {
+    // Three reads of Date.now() produce three instants, and a Retry-After
+    // computed from a later one than the decision is a Retry-After that is
+    // subtly too short.
+    const now = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      await proxy(
+        request("/login", { method: "POST", address: freshAddress() }),
+        event,
+      );
+      expect(now).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

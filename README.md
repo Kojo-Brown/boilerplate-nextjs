@@ -300,6 +300,38 @@ has read yet is not something to write over somebody else's work.
 mechanism, the three ways a conditional write can match nothing, and what the
 version column deliberately does not cover.
 
+## Rate limiting
+
+Server Actions and route handlers are counted in `src/proxy.ts`, before routing,
+before the session is read and before any database connection is opened. The
+budgets are a table in `src/lib/rate-limit/policy.ts` — ten credential attempts
+a minute, 120 Server Actions, 60 API writes and 300 API reads per endpoint —
+each with the reason it is that size. Page navigations are deliberately outside
+it: Next prefetches every `<Link>` that scrolls into view, so a budget low
+enough to be a defence would refuse the framework's own traffic.
+
+Two things it does that the usual implementation does not.
+`X-Forwarded-For` is read from the **right**, counting back
+`RATE_LIMIT_TRUSTED_PROXIES` hops, because every entry to the left of the one
+our own proxy wrote can be sent by the caller — `split(",")[0]` hands an
+attacker a fresh bucket per request. And IPv6 is keyed by /64 rather than by
+address, because one subscriber is given a whole /64 and can otherwise mint
+18 quintillion buckets from one machine.
+
+It also closed a hole. `config.matcher` excluded `api/auth` so that OAuth
+callbacks would not be gated by the session check — but excluding a path from
+the matcher excludes it from the whole proxy, and
+`POST /api/auth/callback/credentials` is the password check, reachable directly
+with a CSRF token anyone can fetch. Every guess ran a full argon2 verification
+and nothing counted it. The exclusion now lives in code that skips the session
+read alone.
+
+`pnpm exec tsx scripts/assert-rate-limit-coverage.ts` runs in CI after the build
+and fails if an endpoint is outside the compiled matcher or matches no rule.
+[docs/rate-limiting.md](./docs/rate-limiting.md) has the algorithm, the
+`RATE_LIMIT_TRUSTED_PROXIES` table, why "at the edge" is not available in
+Next 16, and what the in-memory store is not.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`
