@@ -166,10 +166,16 @@ constraint failure.
 **This does not make a handler atomic**, and the gap is worth knowing rather
 than discovering. A handler that writes a row and _then_ throws — an
 `invalidate()` failing after `prisma.post.create` succeeded — releases the key,
-and the retry writes a second row. Idempotency keys deduplicate requests; the
-item that makes a handler's own effects atomic is transactional writes with an
-outbox row, further down `SPEC.md`. Until then, an idempotent handler should do
-its writing in one Prisma call or one interactive transaction.
+and the retry writes a second row. Idempotency keys deduplicate requests; they
+do not make a handler's own effects atomic.
+
+`writeWithOutbox` is what closes that, and only for handlers that use it: the
+writes and the record of their effects commit together, and the dispatch that
+follows the commit leaves a `PENDING` row for the relay rather than failing the
+handler — so there is no longer a path where the key is released over work that
+already happened. `createPostAction` goes through it. A handler that writes
+outside it still has the gap and should do its writing in a single Prisma call.
+See [`outbox.md`](./outbox.md).
 
 ## Leases, retention, and the claim token
 

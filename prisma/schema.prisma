@@ -147,6 +147,98 @@ enum IdempotencyStatus {
   COMPLETED
 }
 
+/// One thing that happened, recorded in the same transaction as the rows that
+/// made it happen.
+///
+/// ## Why a row rather than a function call
+///
+/// Every mutation here owes an effect to code it does not call: a published
+/// post has to drop the blog's cache entries, and one day it will also have to
+/// notify a subscriber and update a search index. Doing that inline — write the
+/// row, then perform the effect — has no failure mode in the happy path and two
+/// outside it. The process can die between the commit and the effect, in which
+/// case the effect never happens and nothing records that it was owed; or the
+/// effect can be performed against a transaction that then rolls back, in which
+/// case it announces something that did not occur.
+///
+/// A row closes both. It is written inside the same transaction as the domain
+/// write, so it exists if and only if that write committed, and it is durable,
+/// so an effect that has not been performed yet is still owed after a restart.
+/// `src/lib/outbox/` is the whole mechanism; `docs/outbox.md` is the argument.
+///
+/// ## The states, and why "claimed" is not one of them
+///
+/// `status` has three values and a claim is not among them. An attempt takes a
+/// row by writing `claimToken` and `leaseExpiresAt`, exactly as an attempt takes
+/// an `IdempotencyKey`, and a row whose lease has expired is available again —
+/// so "claimed" is not a state, it is a `PENDING` row with a live lease. Making
+/// it a fourth status would mean two representations of the same fact
+/// (`CLAIMED` with an expired lease *is* `PENDING`), and every query would have
+/// to remember to handle both.
+///
+///   PENDING    Owed. Claimable once `availableAt` has passed and no live lease
+///              holds it.
+///   PROCESSED  Done. Kept for a retention window as an audit trail, then swept.
+///   FAILED     Given up on after `MAX_RELAY_ATTEMPTS`, or unparseable. A
+///              dead letter: it needs a person, and retrying it forever would
+///              bury the rows that could still succeed.
+///
+/// ## `availableAt`
+///
+/// When the row becomes claimable. It is `now()` for a new event and moves into
+/// the future on each failed attempt, which is how the relay's backoff is
+/// expressed — a delay held in the row rather than in a worker's memory, so it
+/// survives the worker.
+model OutboxEvent {
+  id      String @id @default(cuid())
+  /// The event name, e.g. `post.published`. A string rather than an enum:
+  /// `src/lib/outbox/events.ts` owns the taxonomy and parses this column
+  /// through a Zod discriminated union on the way out, and a database enum
+  /// would mean a migration to add an event type that only the application
+  /// understands anyway.
+  type    String
+  /// The event's data, as JSON.
+  ///
+  /// Parsed through a schema on every read, never trusted. A payload written by
+  /// one deployment is read by the next, and JSON has no `Date` — the same trap
+  /// that makes `IdempotencyKey.result` need an output schema, in a place where
+  /// it is worse, because a relay reads rows nobody is waiting for.
+  payload Json
+
+  status         OutboxStatus @default(PENDING)
+  /// How many attempts have been made. Drives the backoff and the dead letter.
+  attempts       Int          @default(0)
+  availableAt    DateTime     @default(now())
+  /// Identifies the attempt currently holding this row; null when none is.
+  ///
+  /// Every write that ends an attempt carries it in the `WHERE`, so an attempt
+  /// whose lease expired while it was still running cannot mark a row it no
+  /// longer owns — the same argument as `IdempotencyKey.claimToken`.
+  claimToken     String?
+  claimedAt      DateTime?
+  /// When the current claim stops being authoritative and the row is claimable
+  /// again. A worker that is killed mid-dispatch holds nothing beyond this.
+  leaseExpiresAt DateTime?
+  processedAt    DateTime?
+  /// The last dispatch failure, for the person reading a dead letter.
+  lastError      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  /// The relay's claim query, in the order it filters: status first, then the
+  /// availability window.
+  @@index([status, availableAt])
+  /// The sweep of processed rows past their retention window.
+  @@index([processedAt])
+  @@map("outbox_events")
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
 model VerificationToken {
   identifier String
   token      String   @unique

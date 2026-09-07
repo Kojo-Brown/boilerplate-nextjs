@@ -1,13 +1,12 @@
 "use server";
 
 import { z } from "zod";
-import { prisma } from "@/lib/prisma";
 import { ActionError } from "@/lib/actions/result";
 import {
   defineAuthedAction,
   defineAuthedFormAction,
 } from "@/lib/actions/define-authed-action";
-import { invalidate } from "@/lib/cache/invalidation";
+import { writeWithOutbox } from "@/lib/outbox/write";
 import { idempotencyKeySchema } from "@/lib/actions/idempotency-key";
 import { getEditablePost } from "@/lib/dal/posts";
 import type { PostSummary } from "@/lib/dal/posts";
@@ -28,6 +27,31 @@ import type { SavePostOutcome } from "@/lib/concurrency/post-conflict";
  * decision lives there and not here. `scripts/assert-cache-invalidation.ts`
  * fails CI if a Server Action in this directory writes to the database without
  * going through it.
+ *
+ * ## Transactional writes
+ *
+ * None of these calls `invalidate()` directly any more. Each runs its writes
+ * inside `writeWithOutbox` and reports what happened with `emit`, which records
+ * an outbox row *in the same transaction as the write*; the dispatch — the same
+ * `invalidate()` as before — happens after the commit, and anything it fails to
+ * do is retried by the relay rather than lost.
+ *
+ * The reason is the pair of failures the old two-step sequence had. A write
+ * that commits and a process that dies before `invalidate()` leaves the blog
+ * serving a stale list with nothing anywhere recording that an invalidation was
+ * owed. Worse, an `invalidate()` that *throws* after a committed write used to
+ * fail the whole action — and for `createPostAction`, whose idempotency key is
+ * released on failure so a retry may execute, that turned one click into two
+ * posts. `@/lib/actions/idempotency` names that hole and points here; this is
+ * it being closed. See `docs/outbox.md`.
+ *
+ * Two rules follow from the shape and both are gated by
+ * `scripts/assert-transactional-writes.ts`, because both are invisible at
+ * runtime: inside the callback the transaction client `tx` is the only client
+ * that may be used (the imported `prisma` singleton runs on another connection,
+ * outside the transaction, and survives its rollback), and nothing outside
+ * `@/lib/outbox` may write an outbox row (a row written on its own is a promise
+ * of an effect with nothing guaranteeing the write it describes).
  *
  * ## Hardening
  *
@@ -182,23 +206,23 @@ export const createPostAction = defineAuthedAction({
     key: (input) => input.idempotencyKey,
     output: postSummaryOutput,
   },
-  handler: async ({ input, user }): Promise<PostSummary> => {
-    const post = await prisma.post.create({
-      data: {
-        title: input.title,
-        ...(input.content !== undefined && { content: input.content }),
-        authorId: user.id,
-      },
-      select: postSummarySelect,
-    });
+  handler: async ({ input, user }): Promise<PostSummary> =>
+    writeWithOutbox(async ({ tx, emit }) => {
+      const post = await tx.post.create({
+        data: {
+          title: input.title,
+          ...(input.content !== undefined && { content: input.content }),
+          authorId: user.id,
+        },
+        select: postSummarySelect,
+      });
 
-    invalidate({
-      kind: "post.created",
-      postId: post.id,
-      published: post.published,
-    });
-    return post;
-  },
+      emit({
+        type: "post.created",
+        payload: { postId: post.id, published: post.published },
+      });
+      return post;
+    }),
 });
 
 /** The fields `/posts/[id]` reads, so the editor's read and write agree. */
@@ -272,41 +296,66 @@ export const updatePostAction = defineAuthedFormAction({
   input: updatePostSchema,
   unauthenticatedMessage: "You must be signed in to edit a post.",
   handler: async ({ input, user }): Promise<SavePostOutcome> => {
-    const existing = await prisma.post.findUnique({
-      where: { id: input.postId },
-      select: { authorId: true, published: true },
+    // The transaction covers the ownership read and the conditional write, so
+    // the two see one snapshot. The conflict re-read below is deliberately
+    // *outside* it: it exists to report what the row looks like now, which is
+    // the one question a transaction that has already failed to match cannot
+    // answer — and it runs through the DAL, on the pooled client, which inside
+    // a transaction callback would be a second connection pretending to be the
+    // same one.
+    const outcome = await writeWithOutbox(async ({ tx, emit }) => {
+      const existing = await tx.post.findUnique({
+        where: { id: input.postId },
+        select: { authorId: true, published: true },
+      });
+
+      if (!existing) {
+        throw new ActionError("Post not found.");
+      }
+
+      if (existing.authorId !== user.id) {
+        throw new ActionError("You can only edit your own posts.");
+      }
+
+      const [updated] = await tx.post.updateManyAndReturn({
+        where: {
+          id: input.postId,
+          // Belt and braces beside the ownership check above. That check is a
+          // separate statement, so it is a claim about a moment that has passed;
+          // this one is part of the write itself and cannot be outrun.
+          authorId: user.id,
+          version: input.expectedVersion,
+        },
+        data: {
+          title: input.title,
+          content: input.content,
+          // The increment is what makes the token move, and it is in the same
+          // statement as the write for the same reason the check is: `version + 1`
+          // computed in JavaScript from a value read earlier is two writers
+          // agreeing on the same next number.
+          version: { increment: 1 },
+        },
+        select: editablePostSelect,
+      });
+
+      // Nothing written, so nothing emitted: an event for a save that matched
+      // no rows would be an announcement of a change that did not happen, and
+      // the outbox would deliver it faithfully.
+      if (!updated) return { status: "stale" } as const;
+
+      emit({
+        type: "post.updated",
+        payload: {
+          postId: updated.id,
+          wasPublished: existing.published,
+          isPublished: updated.published,
+        },
+      });
+
+      return { status: "saved", post: updated } as const;
     });
 
-    if (!existing) {
-      throw new ActionError("Post not found.");
-    }
-
-    if (existing.authorId !== user.id) {
-      throw new ActionError("You can only edit your own posts.");
-    }
-
-    const [updated] = await prisma.post.updateManyAndReturn({
-      where: {
-        id: input.postId,
-        // Belt and braces beside the ownership check above. That check is a
-        // separate statement, so it is a claim about a moment that has passed;
-        // this one is part of the write itself and cannot be outrun.
-        authorId: user.id,
-        version: input.expectedVersion,
-      },
-      data: {
-        title: input.title,
-        content: input.content,
-        // The increment is what makes the token move, and it is in the same
-        // statement as the write for the same reason the check is: `version + 1`
-        // computed in JavaScript from a value read earlier is two writers
-        // agreeing on the same next number.
-        version: { increment: 1 },
-      },
-      select: editablePostSelect,
-    });
-
-    if (!updated) {
+    if (outcome.status === "stale") {
       // Nothing matched. Ownership was established above and does not change,
       // so this is either a version that moved or a row that has since been
       // deleted — and the re-read distinguishes them. It is on the conflict
@@ -329,22 +378,16 @@ export const updatePostAction = defineAuthedFormAction({
         return { status: "saved", post: current };
       }
 
-      // No `invalidate` on either of these paths, deliberately: nothing was
-      // written, so no cache entry is stale — and on the branch above, whichever
-      // attempt did write it has already dropped the tags.
-      // `scripts/assert-cache-invalidation.ts` is satisfied by the call on the
-      // writing path below; it asks whether an action that writes reports it,
-      // which is a property of the body rather than of one branch.
+      // No event on either of these paths, deliberately: nothing was written,
+      // so no cache entry is stale — and on the branch above, whichever attempt
+      // did write it has already emitted one.
+      // `scripts/assert-cache-invalidation.ts` is satisfied by the `emit` on
+      // the writing path above; it asks whether an action that writes reports
+      // it, which is a property of the body rather than of one branch.
       return { status: "conflict", current };
     }
 
-    invalidate({
-      kind: "post.updated",
-      postId: updated.id,
-      wasPublished: existing.published,
-      isPublished: updated.published,
-    });
-    return { status: "saved", post: updated };
+    return outcome;
   },
 });
 
@@ -352,64 +395,78 @@ export const deletePostAction = defineAuthedAction({
   name: "deletePost",
   input: postIdSchema,
   unauthenticatedMessage: "You must be signed in to delete a post.",
-  handler: async ({ input: postId, user }): Promise<void> => {
-    // `published` is selected alongside the ownership check because it is not
-    // recoverable afterwards: once the row is deleted there is no way to ask
-    // whether the page being dropped was ever public, and a delete that guesses
-    // would either leave a 404'd post cached or purge the blog on every draft.
-    const post = await prisma.post.findUnique({
-      where: { id: postId },
-      select: { authorId: true, published: true },
-    });
+  handler: async ({ input: postId, user }): Promise<void> =>
+    writeWithOutbox(async ({ tx, emit }) => {
+      // `published` is selected alongside the ownership check because it is not
+      // recoverable afterwards: once the row is deleted there is no way to ask
+      // whether the page being dropped was ever public, and a delete that guesses
+      // would either leave a 404'd post cached or purge the blog on every draft.
+      //
+      // In one transaction with the delete, that read is also no longer a claim
+      // about a moment that has passed — a publish landing between the two would
+      // otherwise decide the invalidation from a value that was already stale.
+      const post = await tx.post.findUnique({
+        where: { id: postId },
+        select: { authorId: true, published: true },
+      });
 
-    if (!post) {
-      throw new ActionError("Post not found.");
-    }
+      if (!post) {
+        throw new ActionError("Post not found.");
+      }
 
-    if (post.authorId !== user.id) {
-      throw new ActionError("You can only delete your own posts.");
-    }
+      if (post.authorId !== user.id) {
+        throw new ActionError("You can only delete your own posts.");
+      }
 
-    await prisma.post.delete({ where: { id: postId } });
+      await tx.post.delete({ where: { id: postId } });
 
-    invalidate({
-      kind: "post.deleted",
-      postId,
-      wasPublished: post.published,
-    });
-  },
+      emit({
+        type: "post.deleted",
+        payload: { postId, wasPublished: post.published },
+      });
+    }),
 });
 
 export const togglePublishAction = defineAuthedAction({
   name: "togglePublish",
   input: postIdSchema,
   unauthenticatedMessage: "You must be signed in to update a post.",
-  handler: async ({ input: postId, user }): Promise<PostSummary> => {
-    const post = await prisma.post.findUnique({
-      where: { id: postId },
-      select: { authorId: true, published: true },
-    });
+  handler: async ({ input: postId, user }): Promise<PostSummary> =>
+    writeWithOutbox(async ({ tx, emit }) => {
+      const post = await tx.post.findUnique({
+        where: { id: postId },
+        select: { authorId: true, published: true },
+      });
 
-    if (!post) {
-      throw new ActionError("Post not found.");
-    }
+      if (!post) {
+        throw new ActionError("Post not found.");
+      }
 
-    if (post.authorId !== user.id) {
-      throw new ActionError("You can only update your own posts.");
-    }
+      if (post.authorId !== user.id) {
+        throw new ActionError("You can only update your own posts.");
+      }
 
-    const updated = await prisma.post.update({
-      where: { id: postId },
-      data: { published: !post.published },
-      select: postSummarySelect,
-    });
+      // Still read-then-write rather than a conditional update on `published`,
+      // and the transaction does not change that: two rapid toggles can still
+      // both read `false` and both write `true` under the default isolation
+      // level. What the transaction does fix is the *invalidation* — the
+      // before/after pair now comes from one snapshot, so it cannot describe a
+      // transition that never happened. See `docs/optimistic-concurrency.md`
+      // for why `published` is deliberately outside the version token.
+      const updated = await tx.post.update({
+        where: { id: postId },
+        data: { published: !post.published },
+        select: postSummarySelect,
+      });
 
-    invalidate({
-      kind: "post.updated",
-      postId,
-      wasPublished: post.published,
-      isPublished: updated.published,
-    });
-    return updated;
-  },
+      emit({
+        type: "post.updated",
+        payload: {
+          postId,
+          wasPublished: post.published,
+          isPublished: updated.published,
+        },
+      });
+      return updated;
+    }),
 });

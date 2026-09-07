@@ -99,6 +99,48 @@ describe("R1 — a writing action must invalidate", () => {
     expect(findings[0]?.message).toContain("archiveAction");
   });
 
+  it("sees a write made through a transaction client", () => {
+    // The mutations write through `tx`, not `prisma`. A gate that only knew the
+    // singleton's name would stop seeing any of them — and would pass every one
+    // of them vacuously, which is worse than failing.
+    // `assert-transactional-writes.ts` T2 is what makes the name reliable: a
+    // callback that renames its client fails the build there.
+    const findings = checkSources([
+      file(
+        "src/actions/posts.ts",
+        `"use server";
+         import { writeWithOutbox } from "@/lib/outbox/write";
+         export const createPostAction = writeWithOutbox(async ({ tx }) => {
+           return tx.post.create({ data: {} });
+         });`,
+      ),
+    ]);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.rule).toBe("R1");
+    expect(findings[0]?.message).toContain("createPostAction");
+  });
+
+  it("accepts `emit` as the report for a transactional write", () => {
+    // The duty is unchanged — an action that writes must say what it wrote —
+    // and only the mechanism moved: the event is recorded in the transaction
+    // and dispatched, by the same `invalidate()`, after the commit.
+    expect(
+      checkSources([
+        file(
+          "src/actions/posts.ts",
+          `"use server";
+           import { writeWithOutbox } from "@/lib/outbox/write";
+           export const createPostAction = writeWithOutbox(async ({ tx, emit }) => {
+             const post = await tx.post.create({ data: {} });
+             emit({ type: "post.created", payload: { postId: post.id, published: post.published } });
+             return post;
+           });`,
+        ),
+      ]),
+    ).toEqual([]);
+  });
+
   it("only applies to `use server` modules", () => {
     // A plain module under src/actions/ is not an action surface. The DAL
     // writes constantly and is invalidated by its callers.

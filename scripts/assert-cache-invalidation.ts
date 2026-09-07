@@ -16,7 +16,9 @@
  * anything: a write and its invalidation are two calls in one function body.
  *
  *   R1  An exported function in `src/actions/` that performs a Prisma write
- *       must call `invalidate(...)`, or be listed in EXEMPT with a reason.
+ *       must report it — `invalidate(...)` for a write outside a transaction,
+ *       `emit(...)` for one inside `writeWithOutbox` — or be listed in EXEMPT
+ *       with a reason.
  *
  *   R2  Only `src/lib/cache/invalidation.ts` may import Next's invalidation
  *       APIs. A mutation that reaches for `updateTag` directly has minted a
@@ -61,8 +63,20 @@ const INVALIDATION_APIS = new Set([
 /** The module allowed to call them, relative to the repository root. */
 const INVALIDATION_MODULE = "src/lib/cache/invalidation.ts";
 
-/** The function that must appear in a writing action's body. */
-const INVALIDATE_CALL = "invalidate";
+/**
+ * The calls that count as reporting a mutation, either of which satisfies R1.
+ *
+ * `emit` joined `invalidate` with the outbox: a transactional mutation records
+ * its event inside the transaction and the dispatch — the same `invalidate()`
+ * as before — happens after the commit, in `@/lib/outbox/write`. The duty this
+ * rule enforces is unchanged and so is its wording: an action that writes must
+ * say what it wrote. Only the mechanism moved.
+ *
+ * Accepting both is not a loosening. `assert-transactional-writes.ts` is what
+ * keeps `emit` honest — an emit outside a `writeWithOutbox` callback would not
+ * compile, since nothing else provides one.
+ */
+const REPORTING_CALLS = new Set(["invalidate", "emit"]);
 
 /**
  * Writing actions that legitimately invalidate nothing.
@@ -198,7 +212,21 @@ function exportedValueNames(source: ts.SourceFile): string[] {
   return names;
 }
 
-/** Whether a node's subtree contains a `prisma.<model>.<write>(...)` call. */
+/**
+ * The identifiers a write can be performed through.
+ *
+ * `tx` is the transaction client `writeWithOutbox` hands its callback, and it
+ * is here because the transactional mutations write through it exclusively —
+ * without this name, `tx.post.create(...)` is not seen as a write at all and
+ * every one of those actions passes R1 vacuously, which is worse than failing
+ * it. Recognising the name is safe rather than conventional:
+ * `assert-transactional-writes.ts` T2 requires the callback to bind its client
+ * as exactly `tx`, so a rename is a build failure rather than a way to make
+ * this gate stop looking.
+ */
+const CLIENT_NAMES = new Set(["prisma", "tx"]);
+
+/** Whether a node's subtree contains a `<client>.<model>.<write>(...)` call. */
 function containsPrismaWrite(root: ts.Node): boolean {
   let found = false;
 
@@ -213,19 +241,19 @@ function containsPrismaWrite(root: ts.Node): boolean {
       const receiver = node.expression.expression;
 
       // `prisma.post.create(...)` — the receiver of the write method is itself
-      // a property access whose root identifier is `prisma`. Matching on the
+      // a property access whose root identifier is a client. Matching on the
       // root rather than the whole text keeps `prisma.$transaction(...)` and
       // aliased clients in scope without hardcoding model names.
       if (WRITE_METHODS.has(method)) {
         if (
           ts.isPropertyAccessExpression(receiver) &&
           ts.isIdentifier(receiver.expression) &&
-          receiver.expression.text === "prisma"
+          CLIENT_NAMES.has(receiver.expression.text)
         ) {
           found = true;
           return;
         }
-        if (ts.isIdentifier(receiver) && receiver.text === "prisma") {
+        if (ts.isIdentifier(receiver) && CLIENT_NAMES.has(receiver.text)) {
           found = true;
           return;
         }
@@ -239,7 +267,7 @@ function containsPrismaWrite(root: ts.Node): boolean {
   return found;
 }
 
-/** Whether a node's subtree calls `invalidate(...)`. */
+/** Whether a node's subtree calls `invalidate(...)` or `emit(...)`. */
 function containsInvalidateCall(root: ts.Node): boolean {
   let found = false;
 
@@ -249,7 +277,7 @@ function containsInvalidateCall(root: ts.Node): boolean {
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      node.expression.text === INVALIDATE_CALL
+      REPORTING_CALLS.has(node.expression.text)
     ) {
       found = true;
       return;
@@ -359,10 +387,12 @@ export function checkSources(
         file: file.relativePath,
         line: lineOf(source, fn.node),
         message:
-          `\`${fn.name}\` writes to the database but never calls \`${INVALIDATE_CALL}()\`. ` +
-          `Report the mutation to @/lib/cache/invalidation so the cached reads that ` +
-          `depend on those rows are dropped — or, if none do, add it to EXEMPT in ` +
-          `this script with the reason.`,
+          `\`${fn.name}\` writes to the database but reports nothing — no ` +
+          `${[...REPORTING_CALLS].map((call) => `\`${call}()\``).join(" or ")} ` +
+          `anywhere in its body. Report the mutation, so the cached reads that depend ` +
+          `on those rows are dropped: \`emit()\` inside a writeWithOutbox callback, or ` +
+          `\`invalidate()\` for a write that is genuinely not transactional. If no cached ` +
+          `read depends on it, add it to EXEMPT in this script with the reason.`,
       });
     }
   }
