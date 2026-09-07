@@ -2,6 +2,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
+    /**
+     * The mutations now run inside `writeWithOutbox`, so every one of them goes
+     * through an interactive transaction.
+     *
+     * The callback is handed this same mocked client, which keeps every
+     * assertion below written against `prisma.post.*` rather than a second
+     * object — and is exactly why a unit test cannot tell `tx.post.create` from
+     * `prisma.post.create`. That distinction is a real one in production (a
+     * different connection, outside the transaction, surviving its rollback);
+     * `scripts/assert-transactional-writes.ts` is what checks it statically,
+     * and `src/lib/outbox/write.test.ts` is the one place the two clients are
+     * kept apart.
+     */
+    $transaction: vi.fn(),
+    outboxEvent: {
+      createMany: vi.fn(),
+      updateMany: vi.fn(),
+    },
     post: {
       create: vi.fn(),
       findUnique: vi.fn(),
@@ -94,9 +112,33 @@ function newKey(): string {
   return `test-idempotency-key-${String(keyCounter).padStart(4, "0")}`;
 }
 
+/**
+ * Prisma's interactive transaction, as these tests need it: run the callback
+ * against the mocked client and resolve with whatever it returns, or propagate
+ * its throw as a rollback would.
+ *
+ * `vi.mocked` binds to the batch overload of `$transaction`, so it is narrowed
+ * here to the interactive form — the same move made for NextAuth's overloaded
+ * `auth` above.
+ */
+const mockTransaction = vi.mocked(
+  prisma.$transaction as unknown as (
+    callback: (client: unknown) => Promise<unknown>,
+    options?: { timeout: number; maxWait: number },
+  ) => Promise<unknown>,
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuth.mockResolvedValue(mockSession);
+
+  mockTransaction.mockImplementation(async (callback) => callback(prisma));
+  vi.mocked(prisma.outboxEvent.createMany).mockResolvedValue({
+    count: 1,
+  } as never);
+  vi.mocked(prisma.outboxEvent.updateMany).mockResolvedValue({
+    count: 1,
+  } as never);
 
   // The key is free: the claiming insert succeeds, so the handler runs.
   vi.mocked(prisma.idempotencyKey.create).mockResolvedValue({} as never);

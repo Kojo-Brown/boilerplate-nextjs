@@ -93,6 +93,13 @@ export const API_ROUTES: readonly ApiRouteDeclaration[] = [
       "verifies an HMAC over the raw request body and drops cache tags — Web Crypto and a framework primitive, with no database read anywhere in it. The portability check is what keeps an existence check on the post ('does this id exist before we revalidate it?') from being added, which would pull Prisma in and make the endpoint's answer depend on replication lag",
   },
   {
+    path: "/api/outbox",
+    runtime: "nodejs",
+    portable: false,
+    because:
+      "claims outbox rows, dispatches them and records the outcome — three Prisma statements per event, so this is the one endpoint that could not be portable however it were written. It shares /api/revalidate's HMAC and its authority (both can only cause revalidations), and unlike that route it must stay next to the database rather than in front of it",
+  },
+  {
     path: "/api/posts",
     runtime: "nodejs",
     portable: false,

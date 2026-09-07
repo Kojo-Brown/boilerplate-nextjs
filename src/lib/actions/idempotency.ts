@@ -46,15 +46,21 @@
  * the row is deleted, so a retry with the same key is allowed to execute.
  *
  * That is the useful behaviour for the cases that actually happen: a deadlock,
- * a dropped connection, a transient constraint failure. It is also the one
- * that leaves a real hole, and it is worth stating plainly rather than
- * discovering: a handler that writes a row and *then* throws — an
- * `invalidate()` that fails after `prisma.post.create` succeeded — releases the
- * key, and the retry writes a second row. Idempotency keys deduplicate
- * requests; they do not make a handler's own effects atomic. The item that
- * closes that is transactional writes with an outbox row, further down
- * `SPEC.md`; until then, an idempotent handler should do its writing in one
- * Prisma call or one interactive transaction, which `createPostAction` does.
+ * a dropped connection, a transient constraint failure. It is also the one that
+ * used to leave a real hole, and the hole is worth keeping written down because
+ * the shape of the fix follows from it: a handler that writes a row and *then*
+ * throws — an `invalidate()` that fails after `prisma.post.create` succeeded —
+ * releases the key, and the retry writes a second row. Idempotency keys
+ * deduplicate requests; they do not make a handler's own effects atomic.
+ *
+ * `@/lib/outbox/write` is what closes it, and only for handlers that use it. A
+ * transactional handler's writes and the record of its effects commit together,
+ * and the dispatch that follows the commit cannot fail the handler — it leaves a
+ * `PENDING` row for the relay instead. So there is no longer a path where the
+ * key is released over work that already happened. An idempotent handler that
+ * writes outside `writeWithOutbox` still has the hole, and should do its
+ * writing in a single Prisma call if it is not going to use it; see
+ * `docs/outbox.md`.
  *
  * ## Why the result is JSON, and why replay needs a schema
  *

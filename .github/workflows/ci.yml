@@ -315,6 +315,22 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the transaction boundary. A mutation's rows and its
+      # outbox event commit together or not at all — but only if the callback
+      # writes through the transaction client it was handed. Reaching for the
+      # imported `prisma` singleton instead compiles, type checks (both are
+      # clients with the same methods), and passes every unit test, because the
+      # tests mock that module and the mock hands back the same object; what it
+      # actually does is run the statement on a second connection, outside the
+      # transaction, where it commits on its own and survives the rollback meant
+      # to undo it. This reads the sources and fails on that, on a callback that
+      # renames or omits the client, and on an outbox row written outside
+      # @/lib/outbox.
+      - name: Assert transactional writes
+        run: pnpm exec tsx scripts/assert-transactional-writes.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # And again, for Server Actions. Every export of a `"use server"` module
       # is an unauthenticated POST endpoint — not just the ones wired to a form
       # — and the three things that make that safe (origin check, session
