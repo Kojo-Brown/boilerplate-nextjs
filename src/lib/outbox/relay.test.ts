@@ -77,7 +77,9 @@ describe("relayOutbox", () => {
     expect(dispatched).toEqual([
       { type: "post.created", payload: { postId: "post-1", published: true } },
     ]);
-    expect(calls.processed).toEqual([{ id: "row-1", token: expect.any(String) }]);
+    expect(calls.processed).toEqual([
+      { id: "row-1", token: expect.any(String) },
+    ]);
     expect(report).toMatchObject({
       claimed: 1,
       processed: 1,

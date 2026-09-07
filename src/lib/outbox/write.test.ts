@@ -275,7 +275,10 @@ describe("writeWithOutbox", () => {
       { context: "route-handler" },
     );
 
-    expect(mockDispatch).toHaveBeenCalledWith(expect.anything(), "route-handler");
+    expect(mockDispatch).toHaveBeenCalledWith(
+      expect.anything(),
+      "route-handler",
+    );
   });
 
   it("hands the callback a client that is not the singleton", async () => {
