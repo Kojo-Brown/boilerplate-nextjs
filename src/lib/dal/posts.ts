@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { paginateQuery } from "@/lib/pagination";
+import { requestMemo } from "@/lib/request-memo";
+import { loadPost } from "@/lib/dal/loaders";
 import type { Post, User } from "@prisma/client";
 import type { CursorPage, CursorPageParams } from "@/lib/pagination";
 
@@ -14,22 +16,22 @@ export type PostSummary = Pick<
   author: Pick<User, "id" | "name" | "email">;
 };
 
-export async function getPublishedPosts(): Promise<PostSummary[]> {
-  return prisma.post.findMany({
+const POST_SUMMARY_SELECT = {
+  id: true,
+  title: true,
+  published: true,
+  createdAt: true,
+  updatedAt: true,
+  author: { select: { id: true, name: true, email: true } },
+} as const;
+
+export const getPublishedPosts = requestMemo(async (): Promise<PostSummary[]> =>
+  prisma.post.findMany({
     where: { published: true },
-    select: {
-      id: true,
-      title: true,
-      published: true,
-      createdAt: true,
-      updatedAt: true,
-      author: {
-        select: { id: true, name: true, email: true },
-      },
-    },
+    select: POST_SUMMARY_SELECT,
     orderBy: { createdAt: "desc" },
-  });
-}
+  }),
+);
 
 /**
  * Every post, published or not, newest first — the blog index as an author
@@ -45,39 +47,34 @@ export async function getPublishedPosts(): Promise<PostSummary[]> {
  * Deliberately not scoped to an author. Draft mode is a whole-site preview —
  * see `docs/draft-mode.md` for who can open one and what that grants.
  */
-export async function getPostsForPreview(): Promise<PostSummary[]> {
-  return prisma.post.findMany({
-    select: POST_SUMMARY_SELECT,
-    orderBy: { createdAt: "desc" },
-  });
-}
+export const getPostsForPreview = requestMemo(
+  async (): Promise<PostSummary[]> =>
+    prisma.post.findMany({
+      select: POST_SUMMARY_SELECT,
+      orderBy: { createdAt: "desc" },
+    }),
+);
 
-export async function getPostsByUser(userId: string): Promise<PostSummary[]> {
-  return prisma.post.findMany({
-    where: { authorId: userId },
-    select: {
-      id: true,
-      title: true,
-      published: true,
-      createdAt: true,
-      updatedAt: true,
-      author: {
-        select: { id: true, name: true, email: true },
-      },
-    },
-    orderBy: { createdAt: "desc" },
-  });
-}
+export const getPostsByUser = requestMemo(
+  async (userId: string): Promise<PostSummary[]> =>
+    prisma.post.findMany({
+      where: { authorId: userId },
+      select: POST_SUMMARY_SELECT,
+      orderBy: { createdAt: "desc" },
+    }),
+);
 
-export async function getPostById(id: string): Promise<PostWithAuthor | null> {
-  return prisma.post.findUnique({
-    where: { id },
-    include: {
-      author: {
-        select: { id: true, name: true, email: true, image: true },
-      },
-    },
-  });
+/**
+ * One post with its author, with no access filter.
+ *
+ * Reads through the request-scoped batch loader rather than issuing its own
+ * `findUnique`, which changes nothing for a single call and means N of them —
+ * one per row of a list, the shape this whole layer exists to prevent — leave
+ * as one `… WHERE "id" IN (…)`. See `@/lib/dal/batch` for why Prisma's own
+ * batcher does not cover that case.
+ */
+export function getPostById(id: string): Promise<PostWithAuthor | null> {
+  return loadPost(id);
 }
 
 /**
@@ -100,18 +97,17 @@ export async function getPostById(id: string): Promise<PostWithAuthor | null> {
  * `findFirst` rather than `findUnique`: `findUnique` accepts only unique fields
  * in its `where`, and `published` is not one.
  */
-export async function getPublishedPostById(
-  id: string,
-): Promise<PostWithAuthor | null> {
-  return prisma.post.findFirst({
-    where: { id, published: true },
-    include: {
-      author: {
-        select: { id: true, name: true, email: true, image: true },
+export const getPublishedPostById = requestMemo(
+  async (id: string): Promise<PostWithAuthor | null> =>
+    prisma.post.findFirst({
+      where: { id, published: true },
+      include: {
+        author: {
+          select: { id: true, name: true, email: true, image: true },
+        },
       },
-    },
-  });
-}
+    }),
+);
 
 /**
  * The fields the editor at `/posts/[id]` reads and writes.
@@ -143,39 +139,106 @@ export type EditablePost = Pick<
  * `findFirst` rather than `findUnique`: `findUnique` accepts only unique fields
  * in its `where`, and `authorId` is not one.
  */
-export async function getEditablePost(
-  id: string,
-  userId: string,
-): Promise<EditablePost | null> {
-  return prisma.post.findFirst({
-    where: { id, authorId: userId },
-    select: {
-      id: true,
-      title: true,
-      content: true,
-      published: true,
-      updatedAt: true,
-      // The version the editor's next save will claim to be based on. A read
-      // that omitted it would leave the client with no token to send, and the
-      // save would have to fall back to an unconditional overwrite — which is
-      // the lost update this column exists to prevent.
-      version: true,
-    },
-  });
+export const getEditablePost = requestMemo(
+  async (id: string, userId: string): Promise<EditablePost | null> =>
+    prisma.post.findFirst({
+      where: { id, authorId: userId },
+      select: {
+        id: true,
+        title: true,
+        content: true,
+        published: true,
+        updatedAt: true,
+        // The version the editor's next save will claim to be based on. A read
+        // that omitted it would leave the client with no token to send, and the
+        // save would have to fall back to an unconditional overwrite — which is
+        // the lost update this column exists to prevent.
+        version: true,
+      },
+    }),
+);
+
+export const getPostCountByUser = requestMemo(
+  async (userId: string): Promise<number> =>
+    prisma.post.count({ where: { authorId: userId } }),
+);
+
+/**
+ * How many posts this author has, split by whether they are published.
+ *
+ * One `GROUP BY "published"` where `/dashboard` used to run three `COUNT(*)`s —
+ * `@stats` counting all posts and published ones, `@notifications` counting
+ * unpublished ones — none of which could see the others because each rendered
+ * behind its own boundary. The three numbers are one question about one row
+ * set, and this is that question.
+ *
+ * `drafts` is derived rather than counted: `total - published` is exact for a
+ * boolean column that cannot be null, and a third aggregate would be a number
+ * that could disagree with the other two if the rows moved between statements.
+ */
+export interface PostCounts {
+  readonly total: number;
+  readonly published: number;
+  readonly drafts: number;
 }
 
-export async function getPostCountByUser(userId: string): Promise<number> {
-  return prisma.post.count({ where: { authorId: userId } });
-}
+export const getPostCountsByAuthor = requestMemo(
+  async (userId: string): Promise<PostCounts> => {
+    const groups = await prisma.post.groupBy({
+      by: ["published"],
+      where: { authorId: userId },
+      _count: { _all: true },
+    });
 
-const POST_SUMMARY_SELECT = {
-  id: true,
-  title: true,
-  published: true,
-  createdAt: true,
-  updatedAt: true,
-  author: { select: { id: true, name: true, email: true } },
-} as const;
+    let total = 0;
+    let published = 0;
+    for (const group of groups) {
+      total += group._count._all;
+      if (group.published) published += group._count._all;
+    }
+
+    return { total, published, drafts: total - published };
+  },
+);
+
+export type RecentPost = Pick<Post, "id" | "title" | "published" | "createdAt">;
+
+/**
+ * This author's newest posts, for the dashboard's activity list.
+ *
+ * `limit` is an argument rather than a constant because it is part of what
+ * makes two callers the same read — and it is a number, so it keys the memo.
+ * See the note on argument identity in `@/lib/request-memo`.
+ */
+export const getRecentPostsByAuthor = requestMemo(
+  async (userId: string, limit: number): Promise<RecentPost[]> =>
+    prisma.post.findMany({
+      where: { authorId: userId },
+      select: { id: true, title: true, published: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    }),
+);
+
+export type LastEditedPost = Pick<Post, "title" | "updatedAt" | "published">;
+
+/**
+ * The post this author touched most recently, or `null` if they have none.
+ *
+ * Ordered by `updatedAt`, deliberately not by `createdAt` like
+ * `getRecentPostsByAuthor` — "what you were last working on" and "what you most
+ * recently wrote" are different questions, and answering the first with the
+ * second would show a stale row the moment anyone edits an old post. That is
+ * why this is a second query rather than the first element of the list above.
+ */
+export const getLastEditedPostByAuthor = requestMemo(
+  async (userId: string): Promise<LastEditedPost | null> =>
+    prisma.post.findFirst({
+      where: { authorId: userId },
+      orderBy: { updatedAt: "desc" },
+      select: { title: true, updatedAt: true, published: true },
+    }),
+);
 
 export async function getPaginatedPostsByUser(
   userId: string,

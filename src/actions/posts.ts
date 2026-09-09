@@ -360,7 +360,16 @@ export const updatePostAction = defineAuthedFormAction({
       // so this is either a version that moved or a row that has since been
       // deleted — and the re-read distinguishes them. It is on the conflict
       // path only: the save that succeeds pays for none of it.
-      const current = await getEditablePost(input.postId, user.id);
+      //
+      // `.uncached` because this read follows a write in the same request.
+      // `getEditablePost` is memoised per request, so an earlier read of this
+      // same post — there is none today, and nothing stops one being added —
+      // would be replayed here and report the row as it was *before* the
+      // update that just ran. On this path that is not a stale value in a
+      // cache, it is the wrong answer to "did somebody else change this?",
+      // which decides whether the author is shown a conflict panel. See
+      // `@/lib/request-memo`.
+      const current = await getEditablePost.uncached(input.postId, user.id);
 
       if (!current) {
         throw new ActionError("Post not found.");

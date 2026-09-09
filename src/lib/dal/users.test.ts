@@ -26,19 +26,21 @@ beforeEach(() => {
 });
 
 describe("getUserById", () => {
+  // Reads through the request-scoped batch loader, so the statement is a keyed
+  // `findMany`. `loaders.test.ts` covers the batching; these pin the contract.
   it("finds user by id with selected fields", async () => {
-    vi.mocked(prisma.user.findUnique).mockResolvedValue(mockUser as never);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([mockUser] as never);
 
     const result = await getUserById("user-1");
 
-    expect(prisma.user.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "user-1" } }),
+    expect(prisma.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["user-1"] } } }),
     );
     expect(result?.id).toBe("user-1");
   });
 
   it("returns null for a missing user", async () => {
-    vi.mocked(prisma.user.findUnique).mockResolvedValue(null);
+    vi.mocked(prisma.user.findMany).mockResolvedValue([] as never);
     expect(await getUserById("nonexistent")).toBeNull();
   });
 });
