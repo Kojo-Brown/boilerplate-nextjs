@@ -363,6 +363,26 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the shape of the reads themselves. A duplicate query has
+      # no symptom: it is correct, indexed, fast, and the page renders exactly
+      # what it should. The only evidence is in the database's statement log,
+      # which nothing here reads — which is how one `/dashboard` request came to
+      # run five statements against `posts` for one user and seven decodes of one
+      # session cookie, each of them a reasonable thing for the component that
+      # wrote it to do. Parallel routes and Suspense boundaries render
+      # independently, so no component can see what another has already asked
+      # for; the only place two of them can share a read is a layer above both.
+      # This reads the sources and fails on a query issued from a component, on
+      # a data-layer read that is not request-scoped, on a list that maps rows
+      # onto a read, and on a memo whose argument can never match.
+      #
+      # Static analysis, so it needs no build output — it is in this job to keep
+      # the gates together.
+      - name: Assert no N+1 reads
+        run: pnpm exec tsx scripts/assert-no-n-plus-one.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning

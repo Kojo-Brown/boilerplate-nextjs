@@ -332,6 +332,40 @@ and fails if an endpoint is outside the compiled matcher or matches no rule.
 `RATE_LIMIT_TRUSTED_PROXIES` table, why "at the edge" is not available in
 Next 16, and what the in-memory store is not.
 
+## Query fan-out (N+1)
+
+Every read a component performs goes through `src/lib/dal/`, is memoised for the
+request with React's `cache()`, and — where it is keyed by id — batched into one
+`… WHERE "id" IN (…)`.
+
+The N+1 this application had is not the one from the textbooks. A list that
+queries once per row was never possible here: every list read already pulls its
+relation through `select`. What it had instead is the App Router's version —
+server components ask for what they render, parallel routes and Suspense
+boundaries render independently, so N components each read the same thing and
+none of them can see that the others already did. Measured against a live
+Postgres, one `/dashboard` request ran **five statements against `posts` for one
+user** and decoded the same session cookie **seven times**. Every one of those
+queries was correct, indexed, and the smallest thing its component needed; the
+duplication was a property of the render rather than of any line in it, which is
+why eleven green checks had nothing to say about it. It is now three statements
+and one decode.
+
+The batch loader exists because Prisma's own dataloader does not cover the cases
+that arise here. Measured on Prisma 7.9.1: it batches `findUnique` calls in one
+tick with an identical selection set, and nothing else — not awaits in separate
+ticks, not two components wanting different columns, and never `findFirst`,
+which is what half this repository's by-id reads must be to carry their
+ownership predicate.
+
+`pnpm exec tsx scripts/assert-no-n-plus-one.ts` runs in CI and fails on a query
+issued from a component, a data-layer read that is not request-scoped, a list
+that maps rows onto a read, a memo whose argument can never match, and a loader
+built at module scope — that last one being a cross-user data leak rather than a
+performance bug. Run against `main`'s own sources it reports fifteen findings.
+[docs/n-plus-one.md](./docs/n-plus-one.md) has the before/after tables, the
+Prisma batching matrix, and what the rules deliberately do not cover.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

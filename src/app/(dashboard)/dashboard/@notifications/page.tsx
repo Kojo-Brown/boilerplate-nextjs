@@ -1,17 +1,24 @@
 import { getRequiredSession } from "@/lib/session";
-import { prisma } from "@/lib/prisma";
+import {
+  getLastEditedPostByAuthor,
+  getPostCountsByAuthor,
+} from "@/lib/dal/posts";
 import { NotificationsWidget } from "./_components/notifications-widget";
 import type { Notification } from "./_components/notifications-widget";
 
+/**
+ * The draft count comes from the same memoised `GROUP BY` that `@stats` reads,
+ * so this slot no longer issues a `COUNT(*)` of its own — whichever of the two
+ * renders first pays for it. The two slots cannot see each other and do not
+ * need to; sharing the read is what the data layer is for. See
+ * `docs/n-plus-one.md`.
+ */
 async function buildNotifications(userId: string): Promise<Notification[]> {
-  const [draftCount, latestPost] = await Promise.all([
-    prisma.post.count({ where: { authorId: userId, published: false } }),
-    prisma.post.findFirst({
-      where: { authorId: userId },
-      orderBy: { updatedAt: "desc" },
-      select: { title: true, updatedAt: true, published: true },
-    }),
+  const [counts, latestPost] = await Promise.all([
+    getPostCountsByAuthor(userId),
+    getLastEditedPostByAuthor(userId),
   ]);
+  const draftCount = counts.drafts;
 
   const items: Notification[] = [
     {

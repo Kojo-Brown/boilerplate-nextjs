@@ -7,6 +7,7 @@ vi.mock("@/lib/prisma", () => ({
       findUnique: vi.fn(),
       findFirst: vi.fn(),
       count: vi.fn(),
+      groupBy: vi.fn(),
     },
   },
 }));
@@ -22,6 +23,9 @@ import {
   getEditablePost,
   getPaginatedPostsByUser,
   getPaginatedPublishedPosts,
+  getPostCountsByAuthor,
+  getRecentPostsByAuthor,
+  getLastEditedPostByAuthor,
 } from "./posts";
 
 const mockPost = {
@@ -135,19 +139,24 @@ describe("getPostsByUser", () => {
 });
 
 describe("getPostById", () => {
+  // It reads through the request-scoped batch loader, so the statement is a
+  // keyed `findMany` rather than a `findUnique`. `loaders.test.ts` covers the
+  // batching itself; these two pin the contract callers depend on.
   it("looks up by primary key", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue(mockFullPost as never);
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockFullPost] as never);
 
     const result = await getPostById("post-1");
 
-    expect(prisma.post.findUnique).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "post-1" } }),
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["post-1"] } } }),
     );
     expect(result?.id).toBe("post-1");
   });
 
   it("returns null when post does not exist", async () => {
-    vi.mocked(prisma.post.findUnique).mockResolvedValue(null);
+    // A key with no row comes back as an absent row, not an error — the
+    // loader's `fetch` returns fewer rows than it was asked for.
+    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
 
     const result = await getPostById("missing");
     expect(result).toBeNull();
@@ -178,14 +187,17 @@ describe("getPublishedPostById", () => {
 
   it("includes the same author fields as getPostById", async () => {
     // The two feed one page. A narrower author here would render a byline that
-    // differs between the preview and the published view.
-    vi.mocked(prisma.post.findUnique).mockResolvedValue(mockFullPost as never);
+    // differs between the preview and the published view. Still worth pinning
+    // now that the unfiltered read goes through the batch loader: the loader's
+    // `include` and this one are written in different modules, so they can
+    // drift without either looking wrong on its own.
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockFullPost] as never);
     vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
 
     await getPostById("post-1");
     await getPublishedPostById("post-1");
 
-    const [unfiltered] = vi.mocked(prisma.post.findUnique).mock.calls[0] ?? [];
+    const [unfiltered] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
     const [filtered] = vi.mocked(prisma.post.findFirst).mock.calls[0] ?? [];
     expect((filtered as { include: unknown }).include).toEqual(
       (unfiltered as { include: unknown }).include,
@@ -319,5 +331,120 @@ describe("getEditablePost", () => {
     vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
 
     await expect(getEditablePost("post-1", "user-2")).resolves.toBeNull();
+  });
+});
+
+describe("getPostCountsByAuthor", () => {
+  const groups = (published: number, drafts: number) =>
+    [
+      { published: true, _count: { _all: published } },
+      { published: false, _count: { _all: drafts } },
+    ] as never;
+
+  it("answers all three tiles with one GROUP BY", async () => {
+    vi.mocked(prisma.post.groupBy).mockResolvedValue(groups(3, 2));
+
+    const counts = await getPostCountsByAuthor("user-1");
+
+    // The regression this replaces: `@stats` ran two COUNT(*)s and
+    // `@notifications` a third, for the same author, in the same render.
+    expect(prisma.post.groupBy).toHaveBeenCalledTimes(1);
+    expect(prisma.post.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        by: ["published"],
+        where: { authorId: "user-1" },
+      }),
+    );
+    expect(counts).toEqual({ total: 5, published: 3, drafts: 2 });
+  });
+
+  it("reports zeroes for an author with no posts", async () => {
+    // Postgres returns no groups at all, not groups of zero.
+    vi.mocked(prisma.post.groupBy).mockResolvedValue([] as never);
+
+    expect(await getPostCountsByAuthor("user-1")).toEqual({
+      total: 0,
+      published: 0,
+      drafts: 0,
+    });
+  });
+
+  it("handles an author whose posts are all published", async () => {
+    vi.mocked(prisma.post.groupBy).mockResolvedValue([
+      { published: true, _count: { _all: 4 } },
+    ] as never);
+
+    expect(await getPostCountsByAuthor("user-1")).toEqual({
+      total: 4,
+      published: 4,
+      drafts: 0,
+    });
+  });
+
+  it("handles an author whose posts are all drafts", async () => {
+    vi.mocked(prisma.post.groupBy).mockResolvedValue([
+      { published: false, _count: { _all: 4 } },
+    ] as never);
+
+    expect(await getPostCountsByAuthor("user-1")).toEqual({
+      total: 4,
+      published: 0,
+      drafts: 4,
+    });
+  });
+});
+
+describe("getRecentPostsByAuthor", () => {
+  it("takes the caller's limit, newest first", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+
+    await getRecentPostsByAuthor("user-1", 5);
+
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { authorId: "user-1" },
+        orderBy: { createdAt: "desc" },
+        take: 5,
+      }),
+    );
+  });
+
+  it("selects only what the activity list renders", async () => {
+    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+
+    await getRecentPostsByAuthor("user-1", 5);
+
+    const [args] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
+    expect((args as { select: unknown }).select).toEqual({
+      id: true,
+      title: true,
+      published: true,
+      createdAt: true,
+    });
+  });
+});
+
+describe("getLastEditedPostByAuthor", () => {
+  it("orders by updatedAt, not createdAt", async () => {
+    // The two are different questions. Ordering this one by `createdAt` would
+    // make "last worked on" stop moving the moment an old post is edited,
+    // which is also why it is a second query rather than the first row of
+    // getRecentPostsByAuthor.
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+
+    await getLastEditedPostByAuthor("user-1");
+
+    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { authorId: "user-1" },
+        orderBy: { updatedAt: "desc" },
+      }),
+    );
+  });
+
+  it("returns null for an author with no posts", async () => {
+    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+
+    expect(await getLastEditedPostByAuthor("user-1")).toBeNull();
   });
 });

@@ -1,26 +1,15 @@
 import Link from "next/link";
-import { prisma } from "@/lib/prisma";
+import { getRecentPostsByAuthor } from "@/lib/dal/posts";
 
 type RecentPostsProps = {
   userId: string;
 };
 
-async function fetchRecentPosts(userId: string) {
-  return prisma.post.findMany({
-    where: { authorId: userId },
-    select: {
-      id: true,
-      title: true,
-      published: true,
-      createdAt: true,
-    },
-    orderBy: { createdAt: "desc" },
-    take: 5,
-  });
-}
+/** How many rows the activity list shows. */
+const RECENT_POST_LIMIT = 5;
 
 export async function RecentPosts({ userId }: RecentPostsProps) {
-  const posts = await fetchRecentPosts(userId);
+  const posts = await getRecentPostsByAuthor(userId, RECENT_POST_LIMIT);
 
   return (
     <div
@@ -46,7 +35,11 @@ export async function RecentPosts({ userId }: RecentPostsProps) {
       {posts.length === 0 ? (
         <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
           No posts yet.{" "}
-          <Link href="/posts" className="font-medium hover:underline" style={{ color: "var(--primary)" }}>
+          <Link
+            href="/posts"
+            className="font-medium hover:underline"
+            style={{ color: "var(--primary)" }}
+          >
             Create your first post
           </Link>
         </p>
@@ -74,7 +67,9 @@ export async function RecentPosts({ userId }: RecentPostsProps) {
                 >
                   {post.published ? "Live" : "Draft"}
                 </span>
-                <span className="truncate text-sm font-medium">{post.title}</span>
+                <span className="truncate text-sm font-medium">
+                  {post.title}
+                </span>
               </div>
               <time
                 dateTime={post.createdAt.toISOString()}
