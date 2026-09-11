@@ -43,6 +43,27 @@ const server = z.object({
   // that revalidates and nothing else. See src/lib/webhooks/signature.ts and
   // docs/on-demand-revalidation.md.
   REVALIDATE_SECRET: optionalSecret,
+  // Where Web Vitals batches are forwarded. Optional, and unset is the
+  // supported default rather than "disabled": absent, `resolveVitalsSink`
+  // selects the log sink, which writes one JSON line per metric to stdout and
+  // is queryable on every platform that collects it. Set it to an ingest URL to
+  // forward instead. See src/lib/vitals/sink.ts and docs/web-vitals.md.
+  //
+  // Validated as a URL because a typo here is otherwise a `fetch` that throws
+  // once per page view, caught and logged by the route handler, with metrics
+  // silently going nowhere.
+  VITALS_COLLECTOR_URL: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url().optional(),
+  ),
+  // Bearer token for that collector. Not `optionalSecret`: a collector's ingest
+  // key is whatever length that vendor mints, and refusing to boot because
+  // someone's key is 24 characters would be this repository inventing a rule
+  // for a credential it does not issue.
+  VITALS_API_KEY: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().optional(),
+  ),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
   // Extra origins allowed to post Server Actions, comma-separated. Empty in

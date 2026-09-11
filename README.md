@@ -366,6 +366,40 @@ performance bug. Run against `main`'s own sources it reports fifteen findings.
 [docs/n-plus-one.md](./docs/n-plus-one.md) has the before/after tables, the
 Prisma batching matrix, and what the rules deliberately do not cover.
 
+## Core Web Vitals
+
+The application measures its own field performance. `<WebVitalsReporter>` sits
+in the root layout, buffers everything `useReportWebVitals` reports, and sends
+one beacon per page view to `POST /api/vitals`, which rates each metric against
+the published thresholds and hands it to a sink.
+
+The default sink needs no configuration: one JSON line per metric on stdout,
+which every platform this targets already collects and every log platform that
+collects it can query. Set `VITALS_COLLECTOR_URL` to forward the batch to a
+collector instead. Nothing on the wire identifies the visitor, `path` is the
+pathname with no query string, and the rating is computed on the server rather
+than taken from the client.
+
+Three decisions in it are not obvious and are the ones worth reading about. The
+buffer dedupes by metric id, because CLS and INP are _revised_ as a page lives
+and a queue that appended would send three LCP rows. The flush is on
+`visibilitychange` and `pagehide` and deliberately not `unload` — which is never
+dispatched on mobile Safari and whose mere registration costs the page its
+back/forward cache entry, making the visitor's next navigation slower in the
+metric this exists to measure. And the path comes from `location`, not
+`usePathname`: that is a per-request read, and in the root layout it puts a
+dynamic hole in all fourteen routes to obtain a string only ever used in a
+callback after hydration.
+
+`pnpm exec tsx scripts/assert-vitals-wiring.ts` runs in CI and fails if the
+reporter leaves the root layout, stops subscribing, loses a flush listener or
+gains a forbidden one, or if the endpoint stops existing, stops being declared,
+or stops being rate-limited. Every one of those builds, type checks and renders
+correctly; the only symptom is a dashboard that stops filling in, which looks
+exactly like a dashboard nobody has opened.
+[docs/web-vitals.md](./docs/web-vitals.md) has the thresholds, the sink
+interface, and what this deliberately does not collect.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

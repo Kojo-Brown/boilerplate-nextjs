@@ -383,6 +383,25 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the telemetry pipeline — the one feature here whose
+      # failure mode is silence. The reporter can vanish from the root layout,
+      # the hook subscription can be refactored away, and the endpoint can be
+      # renamed on one side of the wire; in every case the application builds,
+      # renders and serves every page correctly, and the only symptom is a
+      # dashboard that stops filling in, which looks exactly like a dashboard
+      # nobody has opened. This reads the sources and fails on all three, and
+      # on an `unload`/`beforeunload` flush listener — which both fails to
+      # collect the metric on mobile Safari and, by disqualifying the page from
+      # the back/forward cache, makes the visitor's next navigation slower in
+      # the very metric this feature exists to measure.
+      #
+      # Static analysis, so it needs no build output — it is in this job to
+      # keep the gates together.
+      - name: Assert Web Vitals wiring
+        run: pnpm exec tsx scripts/assert-vitals-wiring.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The same argument as the route-shape gate above, applied to the
       # stylesheet. Next only runs PostCSS when a `postcss.config.*` exists and
       # silently falls back to Lightning CSS when it does not — and Lightning

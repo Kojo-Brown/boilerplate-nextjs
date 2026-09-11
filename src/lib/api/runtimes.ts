@@ -93,6 +93,13 @@ export const API_ROUTES: readonly ApiRouteDeclaration[] = [
       "verifies an HMAC over the raw request body and drops cache tags — Web Crypto and a framework primitive, with no database read anywhere in it. The portability check is what keeps an existence check on the post ('does this id exist before we revalidate it?') from being added, which would pull Prisma in and make the endpoint's answer depend on replication lag",
   },
   {
+    path: "/api/vitals",
+    runtime: "nodejs",
+    portable: true,
+    because:
+      "validates a Web Vitals batch and hands it to a sink — a Zod parse, a threshold table and either a log line or one outbound fetch, with no database anywhere in it. It is hit once per page view, which makes it the route where portability is worth the most: it is pure overhead on the application's own capacity and belongs in front of it. The check is what keeps 'attach the user id while we are here' from adding a Prisma import and taking that away",
+  },
+  {
     path: "/api/outbox",
     runtime: "nodejs",
     portable: false,

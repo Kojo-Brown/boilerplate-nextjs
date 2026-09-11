@@ -101,6 +101,14 @@ export const API_READ_POLICY: RateLimitPolicy = {
     "reads are cheap and the paginated endpoint is driven by an infinite scroll, so this has to clear ordinary UI traffic by a wide margin. It is a ceiling on scraping, not on use",
 };
 
+export const TELEMETRY_POLICY: RateLimitPolicy = {
+  name: "telemetry",
+  limit: 240,
+  windowMs: MINUTE,
+  because:
+    "POST /api/vitals is a beacon, so it arrives once per page view and its traffic scales with readership rather than with intent — an office behind one NAT gateway can produce a hundred a minute doing nothing unusual, which is why this is not folded into api-write's per-endpoint 60. It still needs a ceiling rather than an exemption, because the endpoint can be configured to forward each batch to a collector: that turns one cheap unauthenticated POST into one outbound request, which is an amplifier. 240 is four a second sustained, well above any real readership behind one address and far below a useful flood. Refusal is free here in a way it is nowhere else in this table — a 429 on a beacon costs a metric nobody was waiting for, and the visitor never learns it happened",
+};
+
 export const AUTH_ENDPOINT_POLICY: RateLimitPolicy = {
   name: "auth-endpoint",
   limit: 120,
@@ -127,10 +135,10 @@ export const RATE_LIMIT_EXEMPT: readonly { path: string; because: string }[] = [
 /**
  * The rules, in precedence order. First match wins.
  *
- * Order matters twice: the credential rules are ahead of the general
- * `/api/auth` rule, and every `/api` rule is ahead of the Server Action rule,
- * because a POST to `/api/...` is not a Server Action but the fallback would
- * not know that.
+ * Order matters three times: the credential rules are ahead of the general
+ * `/api/auth` rule, the telemetry rule is ahead of the general `/api` rules,
+ * and every `/api` rule is ahead of the Server Action rule, because a POST to
+ * `/api/...` is not a Server Action but the fallback would not know that.
  */
 export const RATE_LIMIT_RULES: readonly RateLimitRule[] = [
   {
@@ -151,6 +159,13 @@ export const RATE_LIMIT_RULES: readonly RateLimitRule[] = [
   {
     policy: AUTH_ENDPOINT_POLICY,
     matches: ({ pathname }) => pathname.startsWith("/api/auth/"),
+  },
+  {
+    // Ahead of the two general `/api` rules, which would otherwise claim it:
+    // this is a write by method and a read by cost, and neither of their
+    // budgets is the right size for traffic that arrives once per page view.
+    policy: TELEMETRY_POLICY,
+    matches: ({ pathname }) => pathname === "/api/vitals",
   },
   {
     policy: API_WRITE_POLICY,
