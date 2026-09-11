@@ -269,7 +269,7 @@ the factory table, the Next comparison, and these gaps.
 
 ## Phase 10 — Performance
 
-- [ ] Core Web Vitals instrumentation via `useReportWebVitals` shipped to an analytics sink
+- [x] Core Web Vitals instrumentation via `useReportWebVitals` shipped to an analytics sink — `<WebVitalsReporter>` in the root layout buffers what the hook reports and beacons one batch per page view to `POST /api/vitals`, which rates each metric server-side and hands it to a sink (`log` by default, needing no configuration; `http` behind `VITALS_COLLECTOR_URL`). Three things were not obvious: the queue dedupes by metric id because CLS and INP are *revised* rather than re-measured, the flush is on `visibilitychange`/`pagehide` and never `unload` — whose mere registration costs the page its bfcache entry, slowing the visitor's next navigation in the metric this measures — and the path comes from `location`, not `usePathname`, because that is a per-request read and the build rejected it outright (`Uncached data was accessed outside of <Suspense>`) for putting a dynamic hole in all fourteen routes. Also found: `useReportWebVitals` re-subscribes without unsubscribing, so an inline closure registers six fresh `web-vitals` listeners per render. `scripts/assert-vitals-wiring.ts` gates the wiring; 104 new tests (PR #39)
 - [ ] Bundle budget gate in CI + per-route JS payload report
 - [ ] `next/font` self-hosting with subsetting and zero layout shift
 - [ ] Third-party script strategy audit with `next/script` and a facade pattern
