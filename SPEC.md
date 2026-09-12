@@ -270,7 +270,27 @@ the factory table, the Next comparison, and these gaps.
 ## Phase 10 — Performance
 
 - [x] Core Web Vitals instrumentation via `useReportWebVitals` shipped to an analytics sink — `<WebVitalsReporter>` in the root layout buffers what the hook reports and beacons one batch per page view to `POST /api/vitals`, which rates each metric server-side and hands it to a sink (`log` by default, needing no configuration; `http` behind `VITALS_COLLECTOR_URL`). Three things were not obvious: the queue dedupes by metric id because CLS and INP are _revised_ rather than re-measured, the flush is on `visibilitychange`/`pagehide` and never `unload` — whose mere registration costs the page its bfcache entry, slowing the visitor's next navigation in the metric this measures — and the path comes from `location`, not `usePathname`, because that is a per-request read and the build rejected it outright (`Uncached data was accessed outside of <Suspense>`) for putting a dynamic hole in all fourteen routes. Also found: `useReportWebVitals` re-subscribes without unsubscribing, so an inline closure registers six fresh `web-vitals` listeners per render. `scripts/assert-vitals-wiring.ts` gates the wiring; 104 new tests (PR #39)
-- [ ] Bundle budget gate in CI + per-route JS payload report
+- [x] Bundle budget gate in CI + per-route JS payload report — Next 16 removed
+      the number: under Turbopack the route table prints revalidation windows
+      and no sizes at all, so nothing was reporting payload size and the
+      feedback loop for "this page got 80 kB heavier" was a user on a slow
+      connection. `scripts/assert-bundle-budget.ts` reads the documents the
+      build wrote, measures the scripts each tells a browser to fetch, and fails
+      on a route over its ceiling. `noModule` scripts are excluded — Next's
+      legacy polyfill bundle is 39.5 kB gzipped and modern browsers skip it, so
+      counting it would add the same number to all 17 routes; the gate fails
+      separately if it ever loses the attribute. Budgets are two numbers, not
+      one: the shared baseline (React, React DOM, the router — 147.4 kB) moves
+      on a framework upgrade, the per-route ceilings when a route's own code
+      does. `ROUTE_BUDGETS` is checked in both directions, so neither a route
+      that stopped prerendering nor a new one shipping unmeasured gets past it.
+      Found on the way: the providers chunk is 80 kB gzipped (TanStack Query +
+      Zod) and reaches every route but `/_global-error`, which is the one route
+      that replaces the root layout. Verified against the failure it names —
+      one `import { faker }` in the theme toggle put 15 of 17 routes 141–151 kB
+      over budget — and the CI run on Node 24 reproduced the local Node 22
+      numbers byte for byte. The table is written to the job summary panel and
+      `.next/analyze/bundle-budget.json`; 50 new tests (PR #40)
 - [ ] `next/font` self-hosting with subsetting and zero layout shift
 - [ ] Third-party script strategy audit with `next/script` and a facade pattern
 - [ ] Edge middleware geo/AB routing with cookie-stable bucketing
