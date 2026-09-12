@@ -400,6 +400,46 @@ exactly like a dashboard nobody has opened.
 [docs/web-vitals.md](./docs/web-vitals.md) has the thresholds, the sink
 interface, and what this deliberately does not collect.
 
+## Bundle budgets
+
+Every route has a ceiling on the JavaScript it ships, and CI prints what each
+one actually costs.
+
+```
+Route                     First load        Own      Budget    Headroom  Chunks
+-------------------------------------------------------------------------------
+/posts/[id]                 266.3 kB   118.9 kB    280.0 kB     13.7 kB      15
+/                           247.7 kB   100.3 kB    260.0 kB     12.3 kB      11
+/_global-error              147.6 kB     0.2 kB    156.0 kB      8.4 kB       8
+
+Shared by every route: 147.4 kB across 7 chunk(s) (budget 155.0 kB).
+Legacy polyfill bundle: 39.5 kB, `noModule`, not counted above.
+```
+
+This exists because Next 16 removed the number. Under Turbopack the route table
+`next build` prints has revalidation windows and no sizes at all, so nothing was
+reporting payload size — and in an App Router application client JavaScript is
+not added by anyone deciding to add it. A Server Component imports a helper, the
+helper imports a module carrying `"use client"`, and that module's whole import
+graph is in the browser bundle: no directive changed, no import in the diff
+mentions a client component, and the page renders correctly. It just costs more
+to open. The providers chunk here is 80 kB gzipped and reaches every route but
+`/_global-error` for exactly that reason.
+
+Sizes are gzipped and measured from the documents the build wrote, so they are
+what a browser fetches on a cold visit rather than what the application can
+eventually load. Next's `noModule` polyfill bundle is excluded — modern browsers
+skip it — and the gate fails if it ever loses that attribute and starts being
+served to everyone.
+
+`pnpm exec tsx scripts/assert-bundle-budget.ts` runs in CI after the build,
+fails on a route over its budget, and writes the table to the job summary panel
+and `.next/analyze/bundle-budget.json`. Adding one
+`import { faker } from "@faker-js/faker"` to the theme toggle puts 15 of the 17
+routes over budget, which is the failure it is for.
+[docs/bundle-budget.md](./docs/bundle-budget.md) has the measurement rules and
+what to do when it fails.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

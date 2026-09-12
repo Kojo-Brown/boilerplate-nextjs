@@ -415,6 +415,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the size of what the build ships to a browser. Next 16
+      # removed the `First Load JS` column from the route table — under
+      # Turbopack the build prints revalidation windows and no sizes at all —
+      # so the feedback loop for "this page got 80 kB heavier" was a user on a
+      # slow connection. That is worse here than the missing column suggests:
+      # client JavaScript is not added by anyone deciding to add it, it arrives
+      # when a Server Component imports a helper that imports a module carrying
+      # `"use client"`, which changes no directive and mentions no client
+      # component in the diff. Verified against the failure it names: one
+      # `import { faker }` added to the theme toggle — a component the nav
+      # renders on every page — put 15 of 17 routes between 141 kB and 151 kB
+      # over budget. This reads the documents the build wrote, measures the
+      # scripts each one loads, and fails on a route over its ceiling.
+      #
+      # It also writes the per-route table to this job's summary panel, which is
+      # where a reviewer will actually see it.
+      - name: Assert bundle budget
+        run: pnpm exec tsx scripts/assert-bundle-budget.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:
