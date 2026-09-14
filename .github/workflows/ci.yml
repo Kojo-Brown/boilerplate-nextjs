@@ -436,6 +436,28 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the fonts. Two of the three things `next/font` is used
+      # for here are decided by options whose effect is invisible from the
+      # source, and this build disagrees with the documentation about both.
+      # Passing `fallback` does not add fallbacks — it *removes* the
+      # metric-matched face that keeps the swap from moving the page, so the
+      # option that reads as extra safety is the one that turns the safety off.
+      # `adjustFontFallback`, the option that is supposed to decide that, is
+      # implemented in the webpack loader and does nothing under Turbopack, in
+      # either direction. Neither shows up in review, in a test, or in a
+      # screenshot taken after the font is cached; the cost is a first-time
+      # visitor watching the text re-flow, in a metric this repo collects and
+      # nobody reads per-commit. This reads the emitted stylesheet and the
+      # documents and fails on a family list whose fallback is not
+      # metric-matched, on override percentages that have drifted from the
+      # metrics they were derived from, on a subset that grew, and on the
+      # `<html>` class going missing — which leaves every font built, preloaded
+      # and declared, and nothing resolving them.
+      - name: Assert font loading
+        run: pnpm exec tsx scripts/assert-font-loading.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

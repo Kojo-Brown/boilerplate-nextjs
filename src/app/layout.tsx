@@ -4,6 +4,7 @@ import { QueryProvider } from "@/components/providers/query-provider";
 import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { WebVitalsReporter } from "@/components/vitals/web-vitals-reporter";
+import { fontVariables } from "@/styles/fonts";
 import "@/styles/globals.css";
 
 export const metadata: Metadata = {
@@ -49,6 +50,18 @@ export const metadata: Metadata = {
  * `scripts/assert-vitals-wiring.ts` fails the build if it goes missing from
  * this file, because telemetry that has stopped being collected looks exactly
  * like telemetry nobody has looked at. See docs/web-vitals.md.
+ *
+ * ---
+ *
+ * `fontVariables` is on `<html>` because that is the only element the rules
+ * that read it are in scope for: `globals.css` resolves `--font-sans` and
+ * `--font-mono` from these variables inside `@theme`, which is emitted at
+ * `:root`. On `<body>` instead, every `font-sans` utility in the application
+ * resolves to the generic fallback and the application renders in a system
+ * face that looks almost right. `next-themes` is well behaved about this — it
+ * adds and removes its own class with `classList` rather than assigning
+ * `className` — so the two coexist on the same element. See docs/fonts.md and
+ * `scripts/assert-font-loading.ts`.
  */
 export default function RootLayout({
   children,
@@ -58,7 +71,7 @@ export default function RootLayout({
   modal: React.ReactNode;
 }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={fontVariables} suppressHydrationWarning>
       <body>
         <ThemeProvider
           attribute="class"

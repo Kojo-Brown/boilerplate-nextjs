@@ -459,6 +459,43 @@ fails if the emitted CSS is missing its utilities or still carries Tailwind's
 own at-rules. [docs/styling.md](./docs/styling.md) has the token conventions and
 the full account of the failure.
 
+## Fonts
+
+Inter and JetBrains Mono, downloaded at build time by `next/font` and served
+from this origin — no request to `fonts.googleapis.com` for the CSS and none to
+`fonts.gstatic.com` for the file, so two DNS lookups and two TLS handshakes to a
+third party come off the critical path and a CSP can describe the page without
+naming anyone else.
+
+The part a visitor actually perceives is the fallback. A web font cannot be used
+for the first paint, so the first frame is laid out in something the browser
+already has; if the two fonts have different proportions, every line is
+re-measured when the real one lands and everything below moves. `size-adjust`
+and the three line-box overrides make the stand-in lay out like the real font
+before the real font exists, so the swap changes the glyphs and not their
+positions. The four percentages are derived from
+`next/dist/server/capsize-font-metrics.json` — the table `next/font` itself
+reads — and re-derived from it on every build.
+
+Two of `next/font`'s options do not mean what they look like here, and both were
+found by reading the build output rather than the documentation:
+
+| Option                      | Reads as                      | Actually                                            |
+| --------------------------- | ----------------------------- | --------------------------------------------------- |
+| `fallback: [...]`           | extra fallbacks, just in case | **removes** the metric-matched face                 |
+| `adjustFontFallback: false` | turns that face off           | nothing — it is webpack-only, and this is Turbopack |
+
+So neither option reports what the build did, and the emitted stylesheet is the
+only honest account of it. `pnpm exec tsx scripts/assert-font-loading.ts` runs in
+CI after the build and reads exactly that: it fails on a family list whose
+fallback is not metric-matched, on override percentages that have drifted from
+the metrics, on a subset that grew, on a preloaded file nothing references, and
+on the generated class going missing from `<html>` — which leaves every font
+built, preloaded and declared while the whole application silently renders in
+`system-ui`. [docs/fonts.md](./docs/fonts.md) has the arithmetic, why the
+monospace face uses Courier New as its donor rather than the Arial Next picks,
+and the one gap the gate deliberately does not assert.
+
 ## CI
 
 Every gate is warning-fatal — a warning fails the job rather than scrolling past:
