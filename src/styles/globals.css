@@ -46,6 +46,69 @@
    state that builds, tests and lints clean. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* The metric-matched fallback face for the monospace typeface.
+
+   A web font arrives after the first paint, so the first frame is laid out in
+   whatever the browser already has. When the real font lands every line
+   re-flows, and everything below the re-flowed line moves. That movement is
+   Cumulative Layout Shift, and in a text-heavy page that has otherwise been
+   careful it is the largest single source of it.
+
+   The fix is to make the fallback lay out like the real font before the real
+   font exists. `size-adjust` scales the fallback so its character advance
+   matches; `ascent-override`, `descent-override` and `line-gap-override` pin
+   the line box to the same height. The swap then changes which glyphs are
+   drawn and nothing about where they sit.
+
+   `next/font` does this by itself and does it correctly for Inter — the build
+   emits an `Inter Fallback` face over Arial, and nothing about it needs to be
+   written here. This rule exists because it does *not* do it correctly for a
+   monospace face. Next picks the donor by category: Times New Roman for a
+   serif, Arial for everything else, monospace included. For JetBrains Mono
+   that is Arial scaled by 134.59% so the two *average* advances agree — and
+   average is the wrong statistic for a monospace face. Arial's advances do not
+   agree with each other, so the fallback line has the right total width and
+   the wrong width at every point inside it. `/blog` and `/photos` set inline
+   `font-mono` spans inside flowing paragraphs; a span that measures
+   differently moves the paragraph's wrap point, which moves every line after
+   it. The machinery meant to prevent shift causes it.
+
+   Courier New is monospace, is on every desktop platform, and its advance —
+   1229/2048 em against JetBrains Mono's 600/1000 — is the same 0.6 em to
+   within two hundredths of a percent. Scaling it essentially not at all is
+   what a good metric donor looks like.
+
+   The numbers are not invented and are not copied from a blog post. They are
+   computed the way Next computes them, from the same table it reads —
+   `next/dist/server/capsize-font-metrics.json`:
+
+     size-adjust       = (font.xWidthAvg / font.unitsPerEm)
+                       / (donor.xWidthAvg / donor.unitsPerEm)
+     ascent-override   = font.ascent  / (font.unitsPerEm * size-adjust)
+     descent-override  = font.descent / (font.unitsPerEm * size-adjust)
+     line-gap-override = font.lineGap / (font.unitsPerEm * size-adjust)
+
+   `scripts/assert-font-loading.ts` runs those four lines against the metrics
+   in `node_modules` and fails if what is written here no longer matches, so
+   these stay derived values rather than four magic numbers nobody can check.
+
+   The second `local()` is for the platforms where the first does not exist.
+   Liberation Mono is a metric-compatible substitute for Courier New by design
+   — same advances, same vertical metrics — so on a Linux desktop the overrides
+   remain exactly as correct as they are on the platform they were computed
+   for. Where neither is installed the rule contributes no usable source, the
+   browser skips the family, and the stack falls through to `ui-monospace` —
+   no worse than having written nothing here, which is the right way for this
+   to degrade. */
+@font-face {
+  font-family: "JetBrains Mono Metric Fallback";
+  src: local("Courier New"), local("Liberation Mono");
+  ascent-override: 102.02%;
+  descent-override: 30%;
+  line-gap-override: 0%;
+  size-adjust: 99.98%;
+}
+
 @layer base {
   :root {
     --primary: oklch(55% 0.2 250);
@@ -70,7 +133,10 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
-    font-family: system-ui, sans-serif;
+    /* Resolves through the `@theme` entry below to Inter, self-hosted by
+       `next/font`. It was `system-ui, sans-serif`, which is three different
+       typefaces across three operating systems and a design nobody chose. */
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
 }
@@ -91,7 +157,46 @@
    freezing in whatever the variables held at `:root`; with it the `var()`
    is substituted into the utility itself, so `bg-background` re-reads
    `--background` and follows the `.dark` override. */
+/* Binds Tailwind's two type roles to the families `next/font` generates.
+   `src/styles/fonts.ts` puts `--font-inter` and `--font-jetbrains-mono` on
+   `<html>`; this is where they become `font-sans` and `font-mono`.
+
+   The names differ on purpose. `next/font`'s `variable` option and Tailwind's
+   `--font-*` theme namespace would otherwise both want to own `--font-sans` —
+   the class on `<html>` assigning it one value and this block assigning it
+   another, with cascade order between a class attribute and a `:root` rule
+   deciding which typeface the application renders in. Keeping the raw family
+   list under the typeface's own name leaves exactly one definition of the
+   role, here, where re-pointing `--font-sans` at a different face is a
+   one-line change.
+
+   Order is the whole of the anti-CLS behaviour, and most of it is inside the
+   variables rather than visible here: `var(--font-inter)` expands to `"Inter",
+   "Inter Fallback"` and `var(--font-jetbrains-mono)` to `"JetBrains Mono",
+   "JetBrains Mono Metric Fallback", ui-monospace, monospace`, so in both cases
+   the metric-matched face is already second in the list and is what lays out
+   the first frame. What must not happen is a generic getting in front of it —
+   an unadjusted system face ahead of an adjusted one restores the shift and
+   changes nothing else that anyone would notice. `scripts/assert-font-loading.ts`
+   asserts the resolved order for exactly that reason.
+
+   The generics at the end are the last line of defence and should not
+   normally be reached. They are here for the case where the variable is not
+   defined at all — a tree rendered without the
+   root layout, which is what `/_global-error` is: it replaces the layout
+   rather than nesting inside it, so its `<html>` carries no class and neither
+   `--font-inter` nor `--font-jetbrains-mono` is defined anywhere on the page.
+   Without a generic at the end of the list an unresolved `var()` leaves
+   `font-family` invalid and drops the document to the browser's default
+   serif.
+
+   `inline` is inherited from the block's colour half rather than needed:
+   these values are `var()` references and both work either way. It matters
+   for the colours, which are re-assigned under `.dark`. */
 @theme inline {
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), monospace;
+
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-background: var(--background);
