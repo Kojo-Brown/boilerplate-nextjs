@@ -291,7 +291,34 @@ the factory table, the Next comparison, and these gaps.
       over budget — and the CI run on Node 24 reproduced the local Node 22
       numbers byte for byte. The table is written to the job summary panel and
       `.next/analyze/bundle-budget.json`; 50 new tests (PR #40)
-- [ ] `next/font` self-hosting with subsetting and zero layout shift
+- [x] `next/font` self-hosting with subsetting and zero layout shift — Inter and
+      JetBrains Mono are downloaded at build time and served from this origin,
+      replacing a `system-ui, sans-serif` body stack and a default
+      `ui-monospace` that rendered a different document on every operating
+      system. Self-hosting was the cheap half. The half a visitor perceives is
+      the metric-matched fallback, and two `next/font` options do not do what
+      they read as — both found by building the application twice and diffing
+      the emitted stylesheet, not from the documentation. `fallback: [...]`
+      does not add fallbacks, it **removes** the adjusted `@font-face`:
+      declared with it and `adjustFontFallback` at its default of `true`, the
+      build emitted no adjusted face at all and resolved the family to
+      `"Inter", system-ui, arial, sans-serif` — the option that reads as extra
+      safety is the switch that turns the safety off, and nothing warns.
+      `adjustFontFallback: false`, meanwhile, does nothing: it is implemented in
+      the webpack loader, and Next 16 builds with Turbopack. So neither option
+      reports what the build did and only the emitted CSS does. The monospace
+      face also overrides Next's donor, which is Arial for anything non-serif —
+      a proportional font stretched 134.59% to match JetBrains Mono's _average_
+      advance, right in total and wrong at every point inside the line, which
+      moves the wrap point of the paragraphs that carry inline `font-mono`
+      spans. Courier New is already the same 0.6 em (99.98%). The four override
+      percentages are recomputed from `next/dist/server/capsize-font-metrics.json`
+      on every build rather than trusted. `scripts/assert-font-loading.ts` gates
+      all of it and was verified against the failure it names; 48 new tests. Not
+      done: no head `<link rel="preload" as="font">` — Next emits the preload as
+      an RSC resource hint that reaches 15 of 26 documents, so the gate asserts
+      the weaker property that is true and docs/fonts.md records the gap
+      (PR #41)
 - [ ] Third-party script strategy audit with `next/script` and a facade pattern
 - [ ] Edge middleware geo/AB routing with cookie-stable bucketing
 - [ ] React Compiler enabled with a memo-removal audit
