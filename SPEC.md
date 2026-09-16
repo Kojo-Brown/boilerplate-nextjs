@@ -319,7 +319,48 @@ the factory table, the Next comparison, and these gaps.
       an RSC resource hint that reaches 15 of 26 documents, so the gate asserts
       the weaker property that is true and docs/fonts.md records the gap
       (PR #41)
-- [ ] Third-party script strategy audit with `next/script` and a facade pattern
+- [x] Third-party script strategy audit with `next/script` and a facade pattern
+      — the one class of page weight every other gate here is blind to by
+      construction: a vendor's script is in no chunk, in no route manifest and
+      adds nothing to any route's first-load JavaScript, so the bundle budget
+      cannot see it, and what it loads is decided after the build by someone
+      outside this repository. So the control is a declaration, not a
+      measurement. `src/lib/third-party/catalogue.ts` is the inventory — every
+      origin a browser is asked to contact that this application does not
+      serve, with how it loads, whether it is preconnected, the one module
+      allowed to mount it and why it is worth the cost — and
+      `scripts/assert-third-party-scripts.ts` keeps the inventory and the source
+      from drifting apart across 8 rules: no hand-written `<script>` (JSON-LD
+      exempt, `dangerouslySetInnerHTML` included), an explicit `strategy` on
+      every `<Script>` because `next/script`'s silent `afterInteractive`
+      default means the load order is otherwise decided by an omission,
+      `beforeInteractive` only in the root layout where Next honours it, every
+      absolute subresource host declared, `images.remotePatterns` and the
+      catalogue agreeing both ways, every mount importing its entry's id
+      constant, `next/script` imported only by declared mounts, and no facade
+      or wildcard host preconnected. Every rule checked against the failure it
+      names in the real tree, not only against fixtures. `VideoFacade` is the
+      worked example: a poster frame and a `<button>` that answers Enter and
+      Space, `autoplay=1` on the activated URL so the press that opened it is
+      the gesture the autoplay policy wants, the connection warmed on hover and
+      focus via React 19's `preconnect` rather than on every page view, and an
+      `allow` list of the five capabilities a player needs instead of the
+      vendor snippet's seven — `allow` is a Permissions Policy delegation, so
+      `clipboard-write` and `web-share` in a copy-pasted embed are granted for
+      the lifetime of the frame for nothing. The runtime half is not something
+      a static gate can know, so `e2e/third-party.spec.ts` watches the network:
+      an article settles with zero requests to the embed origin, and the player
+      is requested on the press and only on the press — verified against the
+      failure it names by flipping the facade's initial state to activated,
+      which reports four requests on page load. Analytics is inert unless
+      `NEXT_PUBLIC_PLAUSIBLE_DOMAIN` is set, confirmed in a browser both ways.
+      `/blog/[slug]`'s budget goes 262 → 277 kB (measured 250.9 → 265.4 kB;
+      the 14.5 kB is `next/image` plus `BlurImage`, which the route did not
+      previously pull in) — raised deliberately against an embed that is
+      ~1.2 MB on render. Also found and worked around a pre-existing
+      test-isolation hazard: `revalidate-webhook.spec.ts` leaves `/blog`
+      advertising a post it deleted, whose page answers 200 with the not-found
+      boundary. 80 new tests; 13 CI gates, up from 12 (PR #42)
 - [ ] Edge middleware geo/AB routing with cookie-stable bucketing
 - [ ] React Compiler enabled with a memo-removal audit
 
