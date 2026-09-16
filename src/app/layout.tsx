@@ -3,7 +3,9 @@ import { Toaster } from "sonner";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
+import { ThirdPartyScripts } from "@/components/third-party/third-party-scripts";
 import { WebVitalsReporter } from "@/components/vitals/web-vitals-reporter";
+import { env } from "@/lib/env";
 import { fontVariables } from "@/styles/fonts";
 import "@/styles/globals.css";
 
@@ -53,6 +55,20 @@ export const metadata: Metadata = {
  *
  * ---
  *
+ * `<ThirdPartyScripts>` is here for a different reason than the reporter above
+ * it: not because it has to be, but because there must be exactly one place
+ * third-party scripts are mounted from, and the root layout is the only node
+ * every route shares. Scattering `<Script>` across the pages that happen to
+ * need a vendor is how an inventory stops being an inventory. It is a Server
+ * Component, reads no cookies and renders nothing of its own when nothing is
+ * configured — which is the default — so it makes no route dynamic and adds no
+ * markup to a checkout that has not set an analytics domain. The decision of
+ * *what* loads and *how* lives in `src/lib/third-party/catalogue.ts`;
+ * `scripts/assert-third-party-scripts.ts` is the audit over it. See
+ * docs/third-party-scripts.md.
+ *
+ * ---
+ *
  * `fontVariables` is on `<html>` because that is the only element the rules
  * that read it are in scope for: `globals.css` resolves `--font-sans` and
  * `--font-mono` from these variables inside `@theme`, which is emitted at
@@ -85,6 +101,11 @@ export default function RootLayout({
               {modal}
               <Toaster richColors closeButton />
               <WebVitalsReporter />
+              <ThirdPartyScripts
+                config={{
+                  plausibleDomain: env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN,
+                }}
+              />
             </QueryProvider>
           </SessionProvider>
         </ThemeProvider>

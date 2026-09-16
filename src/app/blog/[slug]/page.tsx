@@ -6,8 +6,53 @@ import { getBlogPost } from "@/lib/cache/blog";
 import { PreviewBanner } from "@/components/preview/preview-banner";
 import { DraftBadge } from "@/components/preview/draft-badge";
 import { toParagraphs } from "@/lib/prose";
+import { VideoFacade } from "@/components/third-party/video-facade";
+import { getPhotoById, photoSrc } from "@/lib/photos";
+import type { Photo } from "@/lib/photos";
 import { IsrBadge } from "../_components/isr-badge";
 import { RevalidateButton } from "../_components/revalidate-button";
+
+/**
+ * The embed this page demonstrates the facade with.
+ *
+ * `jNQXAC9IVRw` is "Me at the zoo", the first video uploaded to YouTube in
+ * 2005 — chosen because it is about as unlikely to be taken down or made
+ * private as a video gets, and a dead id here would be a broken frame that no
+ * gate could catch: nothing in the build fetches it, exactly as nothing fetches
+ * the Unsplash sources in `src/lib/photos.ts`.
+ *
+ * The poster comes from the photo catalogue rather than from YouTube's
+ * thumbnail CDN, and that is the whole point rather than a convenience: taking
+ * it from `i.ytimg.com` would put a request to the vendor back on every
+ * article's first paint, which is most of what the facade removes. Serve the
+ * poster from an origin the page already talks to. See
+ * docs/third-party-scripts.md.
+ */
+const DEMO_VIDEO = {
+  id: "jNQXAC9IVRw",
+  title: "Me at the zoo — the first video uploaded to YouTube",
+  posterPhotoId: "mountain-golden-hour",
+} as const;
+
+/**
+ * Resolves a poster at module load, so a photo renamed out of the catalogue
+ * fails the build rather than rendering a facade with a broken frame.
+ *
+ * `getPhotoById` rather than `PHOTOS[0]`: `noUncheckedIndexedAccess` types an
+ * index read as `Photo | undefined`, and softening that with `?? something`
+ * would turn a missing poster into a silently different page.
+ */
+function requirePhoto(id: string): Photo {
+  const photo = getPhotoById(id);
+  if (!photo) {
+    throw new Error(
+      `The video facade demo references the photo "${id}", which is not in PHOTOS.`,
+    );
+  }
+  return photo;
+}
+
+const POSTER_PHOTO = requirePhoto(DEMO_VIDEO.posterPhotoId);
 
 /**
  * ISR under Cache Components, plus the draft-mode read.
@@ -176,6 +221,30 @@ export default async function BlogPostPage({
             No content yet.
           </p>
         )}
+      </div>
+
+      <div
+        className="flex flex-col gap-3 border-t pt-6"
+        style={{ borderColor: "var(--border)" }}
+      >
+        <p className="text-sm font-medium">Third-party embed (facade)</p>
+        <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
+          Nothing is requested from the player until you press play. Until then
+          this is a poster frame and a button served from this application; the
+          connection to the embed origin is warmed on hover and focus, not on
+          load.
+        </p>
+        <VideoFacade
+          videoId={DEMO_VIDEO.id}
+          title={DEMO_VIDEO.title}
+          poster={{
+            // Deliberately not `priority`: the facade sits at the foot of an
+            // article, so it is never the largest contentful paint and
+            // preloading it would compete with the text that is.
+            src: photoSrc(POSTER_PHOTO, 1280),
+            alt: POSTER_PHOTO.alt,
+          }}
+        />
       </div>
 
       <div

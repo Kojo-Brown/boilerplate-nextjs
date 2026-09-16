@@ -94,6 +94,23 @@ const server = z.object({
 
 const client = z.object({
   NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
+  // The site domain registered with Plausible, and the switch that decides
+  // whether any analytics script is mounted at all. Absent — which is every
+  // fresh clone, every CI build and every preview deployment — nothing is
+  // loaded and no request leaves the browser for a vendor. See
+  // src/lib/third-party/catalogue.ts and docs/third-party-scripts.md.
+  //
+  // A bare domain (`example.com`), not a URL: it is the site identifier
+  // Plausible matches on, not somewhere anything is fetched from, so
+  // `z.string().url()` would reject the value the vendor actually issues. The
+  // empty-string preprocessing is the same one `optionalSecret` needs and for
+  // the same reason — `NEXT_PUBLIC_PLAUSIBLE_DOMAIN=` in a `.env` file sets it
+  // to `""`, which is present, and `""` would otherwise mount the script with
+  // an empty `data-domain` and report every page view under no site at all.
+  NEXT_PUBLIC_PLAUSIBLE_DOMAIN: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().optional(),
+  ),
 });
 
 const skip = process.env["SKIP_ENV_VALIDATION"] === "1";
@@ -105,11 +122,17 @@ const parsed = skip
       NEXTAUTH_SECRET: "placeholder-secret-for-build-validation-only",
       NEXT_PUBLIC_APP_URL:
         process.env["NEXT_PUBLIC_APP_URL"] ?? "http://localhost:3000",
+      NEXT_PUBLIC_PLAUSIBLE_DOMAIN: process.env["NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
       ...process.env,
     })
   : server.merge(client).safeParse({
       ...process.env,
       NEXT_PUBLIC_APP_URL: process.env["NEXT_PUBLIC_APP_URL"],
+      // Spelled out for the same reason as the line above: `process.env` is not
+      // an object in a client bundle, it is a set of literals Next substitutes
+      // at build time, and only the keys written out like this survive the
+      // substitution. The spread covers the server, this covers the browser.
+      NEXT_PUBLIC_PLAUSIBLE_DOMAIN: process.env["NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
     });
 
 if (!parsed.success) {

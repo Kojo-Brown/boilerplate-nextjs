@@ -163,9 +163,17 @@ export const ROUTE_BUDGETS: readonly RouteBudget[] = [
   },
   {
     route: "/blog/[slug]",
-    gzipBudgetBytes: 262_000,
+    // Raised from 262 kB when the third-party embed facade landed: the route
+    // measured 250.9 kB and now measures 265.4 kB. The 14.5 kB is the poster
+    // image pipeline — `next/image`'s client runtime and `BlurImage` — which
+    // this route did not previously pull in. It is a deliberate trade and the
+    // arithmetic is not close: the embed it replaces is roughly 1.2 MB of
+    // JavaScript across ten requests, loaded on render rather than on the
+    // press. See docs/third-party-scripts.md.
+    gzipBudgetBytes: 277_000,
     because:
-      "a prerendered post body. Four documents are built from it and the largest is the one budgeted",
+      "a prerendered post body plus the video facade's poster. Four documents are built " +
+      "from it and the largest is the one budgeted",
   },
   {
     route: "/photos",

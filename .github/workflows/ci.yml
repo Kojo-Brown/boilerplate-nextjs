@@ -458,6 +458,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the code this build does not contain. Every gate above
+      # measures what Next emitted — chunks, documents, manifests — which is
+      # exactly why none of them can see a third-party script: it is in no
+      # chunk, in no manifest, and adds nothing to any route's first-load
+      # JavaScript, so a page that spends two seconds of main thread inside a
+      # vendor's analytics is green on all of them. What it loads is also
+      # decided after the build, by someone outside this repository, and can
+      # change without a commit here. So this checks a declaration instead:
+      # every origin is in the catalogue, every <Script> carries an explicit
+      # strategy rather than inheriting next/script's silent
+      # `afterInteractive` default, `beforeInteractive` appears only where Next
+      # honours it, the remote image hosts and the catalogue agree, and nothing
+      # preconnects an origin a facade exists to avoid contacting.
+      #
+      # Static analysis, so it needs no build output — it is in this job to
+      # keep the gates together.
+      - name: Assert third-party script policy
+        run: pnpm exec tsx scripts/assert-third-party-scripts.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:
