@@ -88,34 +88,57 @@ async function settle(page: Page): Promise<void> {
 }
 
 /**
- * Opens an article and waits for it to settle. Deliberately asserts nothing: a
- * test that waited for the play button before looking at the network would
- * report "button not found" when the facade regresses into an eager embed,
- * which is the least informative way to describe exactly that failure.
+ * Opens an article and waits for it to settle.
+ *
+ * Deliberately asserts nothing about the facade: a helper that waited for the
+ * play button before the caller looked at the network would report "button not
+ * found" when the facade regresses into an eager embed, which is the least
+ * informative way to describe exactly that failure. It waits for the article's
+ * `<h1>` instead — that renders whether or not the facade works, so a
+ * regression is still reported as the request it made.
+ *
+ * It tries the listed posts in order rather than trusting the first, because
+ * `/blog` is a cached list and a cached list can name a post that is gone.
+ * `revalidate-webhook.spec.ts` creates a post, revalidates, and deletes it; run
+ * before this file, it leaves `/blog` advertising a dead id whose page answers
+ * 200 with the not-found boundary. That is a real hazard for any reader
+ * arriving from a stale list, not something to paper over with a fixed slug —
+ * but it is not this file's subject either, so it walks past it.
  */
-async function openFirstPost(page: Page): Promise<void> {
+async function openAnArticle(page: Page): Promise<void> {
   await page.goto("/blog");
-  // The first post card. Matched by its href rather than its title, which is
-  // seeded content and not this test's to depend on.
-  await page.locator('a[href^="/blog/"]').first().click();
-  await page.waitForURL(/\/blog\/.+/);
-  // The article's own heading, waited for before anything evaluates in the
-  // page: `waitForURL` returns as soon as the address changes, which is before
-  // the document Next then requests has replaced the execution context, and an
-  // `evaluate` in that window dies with "execution context was destroyed".
-  //
-  // The heading rather than the play button on purpose — see the docblock. It
-  // renders whether or not the facade is working, so a regression is still
-  // reported as the request it made.
-  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-  await settle(page);
+
+  const hrefs = await page
+    .locator('a[href^="/blog/"]')
+    .evaluateAll((anchors) =>
+      anchors.map((anchor) => anchor.getAttribute("href") ?? ""),
+    );
+
+  expect(hrefs.length, "/blog listed no posts to open").toBeGreaterThan(0);
+
+  for (const href of hrefs) {
+    await page.goto(href);
+    const heading = page.getByRole("heading", { level: 1 });
+    try {
+      await heading.waitFor({ state: "visible", timeout: 5_000 });
+    } catch {
+      // A listed post that no longer resolves. Try the next one.
+      continue;
+    }
+    await settle(page);
+    return;
+  }
+
+  throw new Error(
+    `none of the ${hrefs.length} post(s) listed on /blog rendered an article`,
+  );
 }
 
 test.describe("Third-party embed facade", () => {
   test("loads an article without contacting the player", async ({ page }) => {
     const requested = await watchEmbedRequests(page);
 
-    await openFirstPost(page);
+    await openAnArticle(page);
 
     expect(requested).toEqual([]);
     expect(await page.locator("iframe").count()).toBe(0);
@@ -132,7 +155,7 @@ test.describe("Third-party embed facade", () => {
   }) => {
     const requested = await watchEmbedRequests(page);
 
-    await openFirstPost(page);
+    await openAnArticle(page);
     await page.getByRole("button", { name: /^Play video:/ }).click();
 
     const frame = page.locator(`iframe[src*="${EMBED_HOST}"]`);
@@ -151,7 +174,7 @@ test.describe("Third-party embed facade", () => {
 
   test("is operable from the keyboard", async ({ page }) => {
     await watchEmbedRequests(page);
-    await openFirstPost(page);
+    await openAnArticle(page);
 
     const control = page.getByRole("button", { name: /^Play video:/ });
     await control.focus();
