@@ -361,7 +361,42 @@ the factory table, the Next comparison, and these gaps.
       test-isolation hazard: `revalidate-webhook.spec.ts` leaves `/blog`
       advertising a post it deleted, whose page answers 200 with the not-found
       boundary. 80 new tests; 13 CI gates, up from 12 (PR #42)
-- [ ] Edge middleware geo/AB routing with cookie-stable bucketing
+- [x] Edge middleware geo/AB routing with cookie-stable bucketing — `/pricing` is
+      bucketed in the proxy: the canonical path is a real page rendering the
+      control arm, and only the _other_ arms are rewritten to
+      `/pricing/v/[variant]`, so the feature degrades into "everybody sees the
+      layout we already had" rather than into a 404 when the proxy does not run.
+      A rewrite, not a redirect, so the arm never reaches the address bar, a
+      shared link or a search index; both arms prerender as static documents and
+      neither ships a byte of JavaScript to choose between them. "Cookie-stable"
+      is the resolved arm being _persisted_, not the hash being deterministic:
+      the hash is stable with respect to the visitor and not the experiment, so
+      a weight change from 50/50 to 70/30 moves every boundary and silently
+      reassigns a fifth of the people already in the treatment — nothing fails,
+      the dashboard just fills in with a wrong number. Precedence is override →
+      cookie → targeting → hash; an override is never persisted and never
+      counted, and a targeting fallback is neither, so a trip abroad does not
+      pin anyone to the control for a year. The proxy strips its own headers
+      from every inbound request as a loop over the constant, because Next
+      merges proxy-set and client-sent headers with nothing marking which is
+      which. Three framework facts found by trying rather than by reading:
+      `dynamicParams = false` is rejected by `cacheComponents` (the same family
+      as the `runtime` export), `notFound()` cannot set the status under a
+      prerendered shell so an unknown arm answers 200 with the boundary (as
+      `/photos/[id]` already did), and `Vary: Cookie` is discarded — Next
+      overwrites `Vary` on every App Router response, from the proxy and from
+      `next.config.ts` alike, while other headers set in the same place arrive
+      intact, so the canonical path declares a `private` cache policy with a
+      zero max-age instead. Every failure mode here is a working
+      application, so `scripts/assert-experiment-wiring.ts` is a 9-rule gate
+      over the registry, the route files, the proxy calls, the header
+      stripping, the arm lists, the variant page, request-scoped reads in the
+      subtree, the other gates' tables and the cache policy — each rule checked
+      against the failure it names in the real tree, which caught a bug in the
+      gate itself (the `robots` rule was a regex over file text and passed on
+      `index: true`, satisfied by the doc comment quoting it; it reads the AST
+      now). 263 new tests, 1700 total; 16 e2e cases passing locally against the
+      production build; 14 CI gates, up from 13 (PR #43)
 - [ ] React Compiler enabled with a memo-removal audit
 
 ## Phase 11 — Security
