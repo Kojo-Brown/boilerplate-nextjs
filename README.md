@@ -151,6 +151,49 @@ wiring for that reason.
 [docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
 walkthrough.
 
+## Geo targeting and A/B routing
+
+`/pricing` is bucketed in the proxy. Half the traffic in six countries is
+rewritten to a layout that leads with the annual price; everyone else gets the
+one that leads with the monthly price. The URL stays `/pricing` for both.
+
+```
+GET /pricing  →  rate limit  →  session gate  →  bucket  →  rewrite
+                                                            ↓
+                                          /pricing/v/annual-first  (static)
+```
+
+Three decisions carry the feature. The canonical path is a **real page** that
+renders the control arm, so if the proxy never runs — a preview deployment, a
+matcher change, a renamed file convention — `/pricing` still answers with a
+pricing page instead of a 404. It is a **rewrite, not a redirect**, so the arm
+never reaches the address bar, the visitor's history, a shared link, or a search
+index. And the resolved arm is **written to a cookie**, which is what "stable"
+actually requires: the hash is stable with respect to the visitor but not the
+experiment, so changing a weight from 50/50 to 70/30 moves every boundary and
+silently reassigns a fifth of the people already in the treatment — no error,
+no broken page, just a number that is wrong.
+
+Both arms are prerendered static documents and neither ships a byte of
+JavaScript to choose between them, because the choosing happens before the
+render. A `headers()` read in the page would be the natural way to write this
+and would trade both prerenders for a server render on every view; the gate
+fails on it.
+
+`Vary: Cookie` would be the right way to keep a CDN from serving one visitor's
+arm to everybody, and Next overwrites `Vary` on every App Router response —
+from the proxy and from `next.config.ts` alike, while other headers set in the
+same place arrive intact. So the canonical path declares
+`Cache-Control: private, max-age=0, must-revalidate` instead, derived from the
+registry so a new experiment cannot forget it.
+
+Every failure mode here is a working application, which is why there is a gate
+at all: delete the two calls from `src/proxy.ts` and every visitor is served the
+control, silently, because that is the designed way for bucketing to fail.
+[docs/experiments.md](./docs/experiments.md) has the precedence rules, the geo
+header trust model, the cookie attributes, the two experiments behind the `Vary`
+finding, and what the gate checks.
+
 ## API routes
 
 Every handler under `src/app/api/` is built on `defineRoute` (or

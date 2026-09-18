@@ -193,6 +193,21 @@ export const ROUTE_BUDGETS: readonly RouteBudget[] = [
       "so it costs roughly what /photos/[id] does",
   },
   {
+    route: "/pricing",
+    gzipBudgetBytes: 262_000,
+    because:
+      "the canonical pricing page: static markup and the theme toggle, like the other " +
+      "public routes. The experiment adds no client JavaScript at all — the arm is " +
+      "chosen in the proxy, so neither arm ships a chooser",
+  },
+  {
+    route: "/pricing/v/[variant]",
+    gzipBudgetBytes: 262_000,
+    because:
+      "the non-canonical arms. Same component, same imports, so this tracking /pricing " +
+      "is the check that an arm has not quietly acquired a client component of its own",
+  },
+  {
     route: "/dashboard",
     gzipBudgetBytes: 268_000,
     because:

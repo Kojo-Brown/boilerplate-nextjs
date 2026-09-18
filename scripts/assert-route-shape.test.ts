@@ -44,13 +44,26 @@ function goodManifest(): PrerenderManifest {
         initialRevalidateSeconds: false,
         srcRoute: "/photos/[id]",
       },
+      "/pricing": { initialRevalidateSeconds: false, srcRoute: "/pricing" },
+      "/pricing/v/control": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/pricing/v/[variant]",
+      },
+      "/pricing/v/annual-first": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/pricing/v/[variant]",
+      },
       "/dashboard": { initialRevalidateSeconds: false, srcRoute: "/dashboard" },
       "/posts": { initialRevalidateSeconds: false, srcRoute: "/posts" },
       "/admin": { initialRevalidateSeconds: false, srcRoute: "/admin" },
       "/images": { initialRevalidateSeconds: false, srcRoute: "/images" },
       "/upload": { initialRevalidateSeconds: false, srcRoute: "/upload" },
     },
-    dynamicRoutes: { "/blog/[slug]": {}, "/photos/[id]": {} },
+    dynamicRoutes: {
+      "/blog/[slug]": {},
+      "/photos/[id]": {},
+      "/pricing/v/[variant]": {},
+    },
   };
 }
 
