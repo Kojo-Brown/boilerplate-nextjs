@@ -479,6 +479,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the experiment wiring — the one feature here whose every
+      # failure mode is a working application. The control arm is a real,
+      # prerendered page on the canonical URL, deliberately, so that bucketing
+      # can fail safe; the consequence is that deleting the two calls from
+      # `src/proxy.ts` breaks nothing visible. Every visitor is served the
+      # control, every test passes, every other gate is green, and the only
+      # symptom is a treatment arm with no traffic in it — which looks exactly
+      # like an experiment nobody has reached yet. The same is true of an arm
+      # added to the registry with no page (a 404 for that arm's share), of the
+      # header-stripping loop going missing (the application starts believing a
+      # header any client can send), and of a `headers()` read in the pricing
+      # page (both arms stop prerendering and go on rendering correctly). This
+      # reads the sources and fails on all four.
+      #
+      # Static analysis, so it needs no build output — it is in this job to
+      # keep the gates together.
+      - name: Assert experiment wiring
+        run: pnpm exec tsx scripts/assert-experiment-wiring.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

@@ -1,16 +1,25 @@
 /**
  * The first thing every request reaches.
  *
- * Two concerns, in a fixed order: the rate limit, then the session gate. The
- * order is the whole point of doing the limiting here — see
- * `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
+ * Three concerns, in a fixed order: the rate limit, the session gate, then
+ * experiment routing. The first is the whole point of doing the limiting here —
+ * see `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
  * anything else" in Next 16, which has no edge runtime to offer this file.
+ *
+ * The third is last for a reason of its own. Bucketing decides which *variant*
+ * of a page to render, which is only a question worth answering for a request
+ * that is going to be served at all: a refused request gets its cookies (so the
+ * visitor survives a login) and no rewrite. See `@/lib/experiments/edge`.
  */
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import type { NextAuthRequest } from "next-auth";
 import type { NextFetchEvent, NextMiddleware, NextRequest } from "next/server";
 import { authConfig } from "@/auth.config";
+import {
+  applyExperiments,
+  resolveExperimentContext,
+} from "@/lib/experiments/edge";
 import {
   applyRateLimitHeaders,
   enforceRateLimit,
@@ -81,9 +90,18 @@ export default async function proxy(
     return tooManyRequests(request, outcome, now);
   }
 
-  const response = isAuthEndpoint(request.nextUrl.pathname)
+  const gated = isAuthEndpoint(request.nextUrl.pathname)
     ? NextResponse.next()
     : ((await withSessionGate(request, event)) ?? NextResponse.next());
+
+  // Resolved before the response is composed and after the gate has run: the
+  // context is pure and cheap, and `applyExperiments` needs to know what the
+  // gate decided in order to leave a refusal alone. It also strips the
+  // client-supplied copies of the proxy's own headers on *every* path,
+  // including the ones that take no part in bucketing — which is why this is
+  // not inside a branch.
+  const experiments = resolveExperimentContext(request);
+  const response = applyExperiments(request, experiments, gated);
 
   return applyRateLimitHeaders(response, outcome, now);
 }

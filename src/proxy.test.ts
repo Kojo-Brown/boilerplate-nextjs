@@ -7,6 +7,7 @@ import {
   ADMIN_PREFIXES,
   AUTH_PAGES,
 } from "@/auth.config";
+import { ASSIGNMENT_COOKIE, VISITOR_COOKIE } from "@/lib/experiments/cookies";
 
 /**
  * The session gate, stubbed.
@@ -271,16 +272,35 @@ describe("authorized callback — /forbidden page", () => {
 });
 
 // ---------------------------------------------------------------------------
-// The proxy handler itself: the rate limit, the session gate, and their order.
+// The proxy handler itself: the rate limit, the session gate, experiment
+// routing, and their order.
 // ---------------------------------------------------------------------------
 
 function request(
   path: string,
-  init: { method?: string; address?: string } = {},
+  init: {
+    method?: string;
+    address?: string;
+    cookies?: Record<string, string>;
+    country?: string;
+  } = {},
 ): NextRequest {
+  const headers = new Headers({
+    "x-forwarded-for": init.address ?? "203.0.113.9",
+  });
+  if (init.country) headers.set("x-vercel-ip-country", init.country);
+
+  const cookies = Object.entries(init.cookies ?? {});
+  if (cookies.length > 0) {
+    headers.set(
+      "cookie",
+      cookies.map(([name, value]) => `${name}=${value}`).join("; "),
+    );
+  }
+
   return new NextRequest(`https://example.test${path}`, {
     method: init.method ?? "GET",
-    headers: { "x-forwarded-for": init.address ?? "203.0.113.9" },
+    headers,
   });
 }
 
@@ -418,5 +438,147 @@ describe("proxy", () => {
     } finally {
       now.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Experiment routing: the third concern, and its position relative to the
+// other two. The mechanics live in `@/lib/experiments/*` and are tested there;
+// what is asserted here is the composition.
+// ---------------------------------------------------------------------------
+
+describe("proxy — experiment routing", () => {
+  const VISITOR = "0189d0aa-4b27-4d1f-9c3e-2f7f8a1b2c3d";
+
+  it("mints both cookies on a first visit to an experiment path", async () => {
+    const cookies = (
+      await proxy(
+        request("/pricing", { address: freshAddress(), country: "US" }),
+        event,
+      )
+    ).headers.getSetCookie();
+
+    expect(cookies.some((c) => c.startsWith(`${VISITOR_COOKIE}=`))).toBe(true);
+    expect(cookies.some((c) => c.startsWith(`${ASSIGNMENT_COOKIE}=`))).toBe(
+      true,
+    );
+    // https in these tests, so the cookies must carry Secure.
+    expect(cookies.every((c) => c.includes("Secure"))).toBe(true);
+    expect(cookies.every((c) => c.includes("HttpOnly"))).toBe(true);
+  });
+
+  it("rewrites to the assigned arm without changing the URL", async () => {
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: {
+          [VISITOR_COOKIE]: VISITOR,
+          [ASSIGNMENT_COOKIE]: "pricing-cta:annual-first",
+        },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/pricing/v/annual-first",
+    );
+    // A rewrite, not a redirect: the arm must not reach the address bar.
+    expect(response.status).toBe(200);
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("serves the canonical page for the control arm", async () => {
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: {
+          [VISITOR_COOKIE]: VISITOR,
+          [ASSIGNMENT_COOKIE]: "pricing-cta:control",
+        },
+      }),
+      event,
+    );
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+
+  it("reports the exposure on the canonical path", async () => {
+    const response = await proxy(
+      request("/pricing", { address: freshAddress(), country: "US" }),
+      event,
+    );
+    expect(response.headers.get("x-experiment-exposure")).toMatch(
+      /^pricing-cta:(control|annual-first)$/u,
+    );
+  });
+
+  it("leaves other pages untouched", async () => {
+    const response = await proxy(
+      request("/blog", { address: freshAddress(), country: "US" }),
+      event,
+    );
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.headers.get("x-experiment-exposure")).toBeNull();
+  });
+
+  it("does not put cookies on a route handler's response", async () => {
+    // No browser to keep them in: a polled endpoint would mint a new visitor
+    // per call and carry Set-Cookie on responses meant to be cacheable.
+    const response = await proxy(
+      request("/api/health", { address: freshAddress() }),
+      event,
+    );
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("does not bucket a request the rate limiter refused", async () => {
+    // Ordering: the limit is still first. A refusal must cost nothing beyond
+    // the counter — no cookie minted, no assignment computed.
+    // A POST to a page path is a Server Action as far as the limiter is
+    // concerned, which is the 120/minute budget.
+    const address = freshAddress();
+    for (let index = 0; index < 120; index += 1) {
+      await proxy(request("/pricing", { method: "POST", address }), event);
+    }
+
+    const refused = await proxy(
+      request("/pricing", { method: "POST", address }),
+      event,
+    );
+
+    expect(refused.status).toBe(429);
+    expect(refused.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("keeps the cookies on a response the session gate refused", async () => {
+    // Otherwise everyone who signs in comes back as a brand new visitor and is
+    // bucketed afresh on the other side of the login.
+    const redirect = NextResponse.redirect("https://example.test/login");
+    sessionGate.mockImplementation(() => redirect);
+
+    const response = await proxy(
+      request("/pricing", { address: freshAddress(), country: "US" }),
+      event,
+    );
+
+    expect(response.headers.get("location")).toBe("https://example.test/login");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.headers.getSetCookie().length).toBe(2);
+  });
+
+  it("still reports the rate-limit budget on a bucketed response", async () => {
+    // The rewrite rebuilds the response, so the headers the limiter adds have
+    // to be applied to the one that is actually returned.
+    const response = await proxy(
+      request("/pricing", {
+        method: "POST",
+        address: freshAddress(),
+        country: "US",
+      }),
+      event,
+    );
+    expect(response.headers.get("RateLimit-Limit")).toBe("120");
+    expect(response.headers.get("RateLimit-Remaining")).toBe("119");
   });
 });

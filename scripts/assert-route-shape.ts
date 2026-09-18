@@ -130,6 +130,24 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
     because:
       "the shareable half of the intercepting-routes pair; a shared link must hit a prebuilt page, not an on-demand render",
   },
+  {
+    route: "/pricing",
+    kind: "static",
+    because:
+      "the canonical pricing page and the control arm of `pricing-cta`. The proxy varies " +
+      "which arm renders, which is the whole reason this page must not vary itself: a " +
+      "`headers()` read here to look at the assignment would trade two prerendered " +
+      "documents for a server render on every page view",
+  },
+  {
+    route: "/pricing/v/[variant]",
+    kind: "prebuilt",
+    // No window: the arms come from a module, not a database, so there is
+    // nothing to revalidate against — the same reasoning as `/photos/[id]`.
+    because:
+      "every non-canonical arm must be a prebuilt page. A rewrite that lands on an " +
+      "on-demand render puts the cost of the experiment on every visitor in it",
+  },
 
   // The Partial Prerendering routes. Each reads the session — that is the hole
   // — but the dashboard chrome around it must prerender. "Sign out" is
