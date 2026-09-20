@@ -35,13 +35,17 @@ export function Dialog({
   const isControlled = controlledOpen !== undefined;
   const open = isControlled ? Boolean(controlledOpen) : uncontrolledOpen;
 
-  const handleOpenChange = React.useCallback(
-    (next: boolean) => {
-      if (!isControlled) setUncontrolledOpen(next);
-      onOpenChange?.(next);
-    },
-    [isControlled, onOpenChange],
-  );
+  // Plain function, not `useCallback`. The identity still has to be stable —
+  // `<DialogContent>` lists `onOpenChange` in an effect's dependencies, so a
+  // fresh one per render would tear down and re-attach the Escape listener and
+  // re-run the body scroll lock on every render of every open dialog. React
+  // Compiler is what keeps it stable now, along with the context value below,
+  // which was never memoized by hand and so was invalidating all of that
+  // anyway. See docs/react-compiler.md.
+  function handleOpenChange(next: boolean): void {
+    if (!isControlled) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  }
 
   return (
     <DialogContext.Provider value={{ open, onOpenChange: handleOpenChange }}>

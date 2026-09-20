@@ -500,6 +500,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for React Compiler — a transform whose every failure mode is
+      # a working application. The compiler skips what it cannot compile
+      # (`panicThreshold` defaults to `"none"`), so a component using an
+      # unsupported construct ships with no memoization at all and the build
+      # says nothing: `ImageUpload` was in that state, bailed out by one
+      # optional call inside a `try` block. That is worse here than it sounds,
+      # because enabling the compiler is what justified deleting the manual
+      # `useCallback`s — a silent bail-out leaves a component with neither.
+      # This runs the real `babel-plugin-react-compiler` over every
+      # `"use client"` entry point and everything it imports and fails on a
+      # bail-out, checks the config Next actually resolved rather than the one
+      # the source declares, and fails on a manual memo or a `"use no memo"`
+      # directive with no reason written against it.
+      #
+      # It reads `.next/required-server-files.json`, so it belongs to this job
+      # rather than `lint`.
+      - name: Assert React Compiler
+        run: pnpm exec tsx scripts/assert-react-compiler.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

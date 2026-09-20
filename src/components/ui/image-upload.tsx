@@ -22,6 +22,66 @@ type UploadState =
 const MAX_MB = MAX_FILE_SIZE_BYTES / (1024 * 1024);
 const ACCEPTED = ALLOWED_MIME_TYPES.join(",");
 
+/**
+ * PUTs a file to a presigned URL, reporting progress.
+ *
+ * Lives outside the component, and that is load-bearing rather than tidiness.
+ * React Compiler does not support a value block — a conditional, a logical
+ * operator, an optional call — inside a `try`/`catch`, and it fails the *whole
+ * enclosing component*, not the statement: with this body inlined, the
+ * `onUploadComplete?.(publicUrl)` after the `await` bailed `ImageUpload` out
+ * entirely, and `panicThreshold: "none"` meant the build said nothing about
+ * it. A module-scope async function is not a component or a hook, so the
+ * compiler skips it by design and the bail-out has nowhere to propagate to.
+ *
+ * `XMLHttpRequest` rather than `fetch` because upload progress is the point,
+ * and `fetch` still has no request-body progress in any shipping browser.
+ *
+ * See docs/react-compiler.md.
+ */
+async function putToPresignedUrl({
+  file,
+  uploadUrl,
+  onProgress,
+}: {
+  file: File;
+  uploadUrl: string;
+  onProgress: (percent: number) => void;
+}): Promise<{ success: true } | { success: false; error: string }> {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.upload.addEventListener("progress", (ev) => {
+      if (ev.lengthComputable) {
+        onProgress(Math.round((ev.loaded / ev.total) * 100));
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+        } else {
+          reject(new Error(`Upload failed with status ${xhr.status}`));
+        }
+      });
+      xhr.addEventListener("error", () =>
+        reject(new Error("Network error during upload")),
+      );
+      xhr.open("PUT", uploadUrl);
+      xhr.setRequestHeader("Content-Type", file.type);
+      xhr.setRequestHeader("x-amz-content-sha256", "UNSIGNED-PAYLOAD");
+      xhr.send(file);
+    });
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Upload failed",
+    };
+  }
+}
+
 export function ImageUpload({
   onUploadComplete,
   onUploadError,
@@ -46,7 +106,11 @@ export function ImageUpload({
     if (!file) return;
 
     // Client-side validation
-    if (!ALLOWED_MIME_TYPES.includes(file.type as (typeof ALLOWED_MIME_TYPES)[number])) {
+    if (
+      !ALLOWED_MIME_TYPES.includes(
+        file.type as (typeof ALLOWED_MIME_TYPES)[number],
+      )
+    ) {
       const msg = `File type not allowed. Accepted: JPEG, PNG, WebP, GIF, SVG.`;
       setState({ status: "error", message: msg });
       onUploadError?.(msg);
@@ -80,37 +144,21 @@ export function ImageUpload({
     const { uploadUrl, publicUrl } = result.data;
 
     // 2. PUT the file directly to S3 using the presigned URL
-    try {
-      const xhr = new XMLHttpRequest();
-      xhr.upload.addEventListener("progress", (ev) => {
-        if (ev.lengthComputable) {
-          setState({ status: "uploading", progress: Math.round((ev.loaded / ev.total) * 100) });
-        }
-      });
+    const upload = await putToPresignedUrl({
+      file,
+      uploadUrl,
+      onProgress: (progress) => setState({ status: "uploading", progress }),
+    });
 
-      await new Promise<void>((resolve, reject) => {
-        xhr.addEventListener("load", () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve();
-          } else {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
-          }
-        });
-        xhr.addEventListener("error", () => reject(new Error("Network error during upload")));
-        xhr.open("PUT", uploadUrl);
-        xhr.setRequestHeader("Content-Type", file.type);
-        xhr.setRequestHeader("x-amz-content-sha256", "UNSIGNED-PAYLOAD");
-        xhr.send(file);
-      });
-
-      setState({ status: "done", publicUrl, previewUrl });
-      onUploadComplete?.(publicUrl);
-    } catch (error) {
+    if (!upload.success) {
       URL.revokeObjectURL(previewUrl);
-      const msg = error instanceof Error ? error.message : "Upload failed";
-      setState({ status: "error", message: msg });
-      onUploadError?.(msg);
+      setState({ status: "error", message: upload.error });
+      onUploadError?.(upload.error);
+      return;
     }
+
+    setState({ status: "done", publicUrl, previewUrl });
+    onUploadComplete?.(publicUrl);
   }
 
   const isUploading = state.status === "uploading";
@@ -138,7 +186,9 @@ export function ImageUpload({
             className="h-48 w-full rounded-lg border object-cover"
           />
           <div className="flex w-full items-center justify-between gap-2 text-sm">
-            <span className="text-[var(--muted-foreground)] truncate">{state.publicUrl}</span>
+            <span className="text-[var(--muted-foreground)] truncate">
+              {state.publicUrl}
+            </span>
             <button
               type="button"
               onClick={handleReset}
@@ -165,7 +215,9 @@ export function ImageUpload({
           {isUploading ? (
             <>
               <UploadIcon className="h-8 w-8 animate-bounce text-[var(--primary)]" />
-              <span className="text-sm font-medium">Uploading… {state.progress}%</span>
+              <span className="text-sm font-medium">
+                Uploading… {state.progress}%
+              </span>
               <ProgressBar value={state.progress} />
             </>
           ) : (
@@ -179,13 +231,22 @@ export function ImageUpload({
               <span
                 className={cn(
                   "text-sm font-medium",
-                  isError ? "text-red-600 dark:text-red-400" : "text-[var(--foreground)]",
+                  isError
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-[var(--foreground)]",
                 )}
               >
                 {isError ? "Try again" : "Click to upload"}
               </span>
-              <span className={cn("text-xs", isError ? "text-red-500" : "text-[var(--muted-foreground)]")}>
-                {isError ? state.message : `JPEG, PNG, WebP, GIF, SVG — max ${MAX_MB} MB`}
+              <span
+                className={cn(
+                  "text-xs",
+                  isError ? "text-red-500" : "text-[var(--muted-foreground)]",
+                )}
+              >
+                {isError
+                  ? state.message
+                  : `JPEG, PNG, WebP, GIF, SVG — max ${MAX_MB} MB`}
               </span>
             </>
           )}

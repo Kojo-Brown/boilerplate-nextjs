@@ -483,6 +483,45 @@ routes over budget, which is the failure it is for.
 [docs/bundle-budget.md](./docs/bundle-budget.md) has the measurement rules and
 what to do when it fails.
 
+## React Compiler
+
+`reactCompiler: true` in `next.config.ts`, so every client component is
+memoized by the compiler rather than by hand. The four manual `useCallback`
+calls that existed were audited one by one when it was turned on: three came
+out, one stayed.
+
+The one that stayed is in the Web Vitals reporter, and it stayed because it is
+load-bearing for _correctness_. `useReportWebVitals` subscribes in an effect
+keyed on the callback and `web-vitals` returns no teardown, so a new identity
+adds a subscription instead of replacing one — an unstable callback reports a
+single layout shift once per render the page has ever done. React guarantees
+`useCallback`'s memoization; the compiler only offers its own, and is free to
+drop it. So the distinction that matters is "correctness or speed", and it is
+written down at the call site in a `@memo-keep` tag that CI requires.
+
+The failure mode to know about is that the compiler _skips_ what it cannot
+compile — `panicThreshold` defaults to `"none"`, so a bail-out is not a build
+error, not a warning, and not visible in the output. A component in that state
+ships with no memoization at all, including whatever was deleted from it on the
+understanding that the compiler had taken over. `ImageUpload` was exactly
+there: one `onUploadComplete?.(publicUrl)` inside a `try` block bailed out the
+whole component, because React Compiler does not support a value block inside
+`try`/`catch`. The XHR body moved to a module-scope helper, which is not a
+component and so cannot propagate a bail-out.
+
+`pnpm exec tsx scripts/assert-react-compiler.ts` runs in CI after the build. It
+drives the real `babel-plugin-react-compiler` over every `"use client"` entry
+point and everything it imports and fails on a bail-out, checks the config Next
+actually resolved against `.next/required-server-files.json` rather than
+trusting the source, and fails on a manual memo or a `"use no memo"` directive
+with no reason written against it.
+
+Measured cost, gzipped first load, same tree with the flag off and on:
+`+0.4 kB` on `/_not-found`, `+0.8 kB` on `/`, `+6.5 kB` on `/posts/[id]` — the
+cache arrays the transform emits. Every route stays inside its budget above.
+[docs/react-compiler.md](./docs/react-compiler.md) has the audit table, the
+compiled before/after for `<Dialog>`, and what to do when the gate fails.
+
 ## Styling
 
 TailwindCSS 4 compiled through PostCSS. Design tokens live in `:root` / `.dark`

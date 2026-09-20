@@ -96,6 +96,15 @@ export function WebVitalsReporter({ transport }: WebVitalsReporterProps): null {
    * single layout shift would be reported once per render the page has ever
    * done. Depending only on `queue` (itself stable) is what keeps the
    * subscription to exactly one.
+   *
+   * @memo-keep Correctness, not performance. React Compiler would very likely
+   * memoize this too, but its memoization is an optimization the compiler is
+   * free to drop — a bail-out anywhere in this component silently removes it,
+   * and the symptom would be duplicate metrics in a dashboard nobody reads
+   * per-commit rather than a failing test. `useCallback` is the only form of
+   * this that React guarantees, so it stays. Every other manual memo in this
+   * repository was removed when the compiler was enabled; see
+   * docs/react-compiler.md.
    */
   const report = useCallback(
     (metric: unknown) => {
