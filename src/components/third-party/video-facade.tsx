@@ -117,9 +117,13 @@ export function VideoFacade({
 
   // Hover and focus both count as intent; `preconnect` is idempotent, so no
   // "have we already warmed it" flag is needed here.
-  const warm = React.useCallback(() => {
+  //
+  // Plain function, not `useCallback`: it is only ever a DOM event handler, so
+  // its identity buys nothing beyond skipping a re-render of the host element,
+  // which React Compiler now decides. See docs/react-compiler.md.
+  function warm(): void {
     preconnect(YOUTUBE_EMBED_ORIGIN);
-  }, []);
+  }
 
   if (activated) {
     return (

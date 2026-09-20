@@ -48,12 +48,12 @@ export function PhotoModal({ title, description, children }: PhotoModalProps) {
     if (hydrated) contentRef.current?.focus();
   }, [hydrated]);
 
-  const handleOpenChange = React.useCallback(
-    (open: boolean) => {
-      if (!open) router.back();
-    },
-    [router],
-  );
+  // Plain function, not `useCallback`. It reaches `<DialogContent>`'s effect
+  // dependencies through `<Dialog>`, so the stability still matters and React
+  // Compiler is what provides it. See docs/react-compiler.md.
+  function handleOpenChange(open: boolean): void {
+    if (!open) router.back();
+  }
 
   return (
     <Dialog open onOpenChange={handleOpenChange}>

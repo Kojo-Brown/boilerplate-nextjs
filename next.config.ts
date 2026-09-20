@@ -9,6 +9,33 @@ const config: NextConfig = {
   // Promoted out of `experimental` in Next 16.
   typedRoutes: true,
   /**
+   * React Compiler, on for every client component.
+   *
+   * Next runs the compiler through Babel, but only over the client graph and
+   * only over the files its own SWC pass says contain a component or a hook —
+   * the server build never sees the plugin at all. So "enabled" here means
+   * *client* components are memoized automatically, and the manual
+   * `useMemo`/`useCallback`/`memo()` that existed to do that by hand are dead
+   * weight. `docs/react-compiler.md` records which ones were removed and which
+   * one was kept, and `scripts/assert-react-compiler.ts` holds that audit to
+   * the tree.
+   *
+   * `true` rather than `{ compilationMode: "annotation" }`: opt-in mode would
+   * mean every new component ships unmemoized until someone remembers to add
+   * `"use memo"`, which is the same failure mode as the manual memoization
+   * this replaces.
+   *
+   * The failure mode worth knowing about is that the compiler *skips* what it
+   * cannot compile. `panicThreshold` defaults to `"none"`, so a component
+   * using a construct the compiler does not support is silently left alone —
+   * a green build, a correct page, and no memoization on the one component
+   * someone deleted a `useCallback` from. `ImageUpload` was exactly that: an
+   * optional call inside a `try` block bailed the whole component out. The
+   * gate runs the real compiler over the client graph and fails on a bail-out,
+   * which is the only way that shows up.
+   */
+  reactCompiler: true,
+  /**
    * `Cache-Control` for the canonical path of every routed experiment.
    *
    * ## What this is protecting against
