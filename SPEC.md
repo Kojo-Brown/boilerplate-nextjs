@@ -397,7 +397,31 @@ the factory table, the Next comparison, and these gaps.
       `index: true`, satisfied by the doc comment quoting it; it reads the AST
       now). 263 new tests, 1700 total; 16 e2e cases passing locally against the
       production build; 14 CI gates, up from 13 (PR #43)
-- [ ] React Compiler enabled with a memo-removal audit
+- [x] React Compiler enabled with a memo-removal audit — `reactCompiler: true`;
+      of the four manual memos (all `useCallback`, no `useMemo`, no `memo()`)
+      three were removed and one kept, the Web Vitals reporter's, where the
+      stability is a correctness requirement React guarantees and the compiler
+      only offers. Deleting the other three is safe only while the compiler is
+      actually compiling what they came out of, and it stops silently:
+      `panicThreshold` defaults to `"none"`, so an unsupported construct is
+      skipped with no error, no warning and no observable difference in the
+      build — leaving a component with neither the compiler's memoization nor
+      the memo that was deleted. `ImageUpload` was exactly that, bailed out
+      entirely by one `onUploadComplete?.(publicUrl)` inside a `try` block, and
+      only the compiler could say so; the XHR body moved to a module-scope
+      helper, which has nowhere to propagate a bail-out to.
+      `scripts/assert-react-compiler.ts` is a 6-rule gate that drives the real
+      `babel-plugin-react-compiler` over every `"use client"` entry point and
+      everything it imports, reads the config Next resolved out of
+      `required-server-files.json` rather than trusting the source, and
+      requires a `@memo-keep` reason on any surviving memo or `"use no memo"`.
+      Each rule checked against the failure it names, which caught a bug in the
+      gate itself (a `VariableDeclarationList` and the `VariableStatement`
+      around it start at the same offset, so every comment was collected twice
+      and a one-word reason cleared the length check on prose borrowed from the
+      comment above). Measured cost, gzipped first load: +0.4 kB on
+      `/_not-found` to +6.5 kB on `/posts/[id]`, every route inside budget.
+      41 new tests, 1741 total; 15 CI gates, up from 14 (PR #44)
 
 ## Phase 11 — Security
 
