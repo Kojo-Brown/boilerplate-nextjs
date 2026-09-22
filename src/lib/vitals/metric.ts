@@ -28,6 +28,23 @@
  * cast, and which is the same schema the server applies.
  */
 import { z } from "zod";
+import { disableZodJitInBrowser } from "@/lib/security/zod-jitless";
+
+/**
+ * Above the schemas, and that position is the point.
+ *
+ * `web-vitals-reporter.tsx` validates each metric in the browser with the schema
+ * below, so this module's `z.object()` calls build Zod's JIT object validator
+ * there — and building one probes for `eval` with `new Function("")`. The
+ * Content Security Policy refuses that; Zod catches the throw and falls back, so
+ * the reporter keeps working, but the browser reports a `script-src` violation
+ * on every page load that is indistinguishable from a real one. This was the
+ * measured source of the only violation the enforced policy produced. Zod reads
+ * the capability when the schema is constructed and memoises it, so a call below
+ * the schemas would configure nothing. See `@/lib/security/zod-jitless` and
+ * docs/csp.md; `scripts/assert-csp.ts` checks both the call and its position.
+ */
+disableZodJitInBrowser();
 
 /**
  * The Core Web Vitals the bundled `web-vitals` build can emit.

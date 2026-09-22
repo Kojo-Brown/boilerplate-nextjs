@@ -1,4 +1,21 @@
 import { z } from "zod";
+import { disableZodJitInBrowser } from "@/lib/security/zod-jitless";
+
+/**
+ * Before any schema below it, and that position is the point.
+ *
+ * This module is in the client graph — `NEXT_PUBLIC_*` is validated in the
+ * browser too — so the `z.object()` calls below construct Zod's JIT object
+ * validator there, and constructing one probes for `eval` with
+ * `new Function("")`. Under the Content Security Policy that throw is refused;
+ * Zod catches it and falls back, so nothing breaks, but the browser reports a
+ * `script-src` violation on every page load that is indistinguishable from a real
+ * one. Zod reads the capability when the schema is built and memoises it, so a
+ * call below the schemas would configure nothing. See
+ * `@/lib/security/zod-jitless` and docs/csp.md; `scripts/assert-csp.ts` checks
+ * both the call and its position.
+ */
+disableZodJitInBrowser();
 
 /**
  * An optional secret, as it actually arrives from a `.env` file.

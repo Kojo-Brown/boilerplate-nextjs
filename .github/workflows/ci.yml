@@ -500,6 +500,28 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the Content Security Policy — the one gate here whose
+      # subject is what a *browser* refuses. Whether the policy is well-formed is
+      # readable from the header; whether the application still runs under it is
+      # not. A policy that refuses the bundle produces a build that exits 0, unit
+      # tests that all pass, HTML that paints, and a page where nothing hydrates,
+      # with no error anywhere a CI job looks. Worse, the edit that causes it
+      # reads *stricter* afterwards: `'strict-dynamic'` added to `script-src`
+      # makes a browser ignore `'self'`, which refuses the 451 parser-inserted
+      # `/_next/static/…` script tags in the prerendered documents, because a
+      # document written at build time carries no nonce.
+      #
+      # So this does what a browser does: it reads every document the build wrote,
+      # builds the policy the proxy would send for that document's path, and
+      # checks each script in it — inline against the digests `pnpm build` emitted,
+      # external against `'self'`. It also re-derives which routes Next re-renders
+      # at runtime from the prerender manifest, since those are the paths a nonce
+      # would be baked into a shared cache entry for. See docs/csp.md.
+      - name: Assert Content Security Policy
+        run: pnpm exec tsx scripts/assert-csp.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # And again, for React Compiler — a transform whose every failure mode is
       # a working application. The compiler skips what it cannot compile
       # (`panicThreshold` defaults to `"none"`), so a component using an

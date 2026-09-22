@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+    "build": "next build && tsx scripts/emit-csp-hashes.ts",
     "start": "next start",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "strict": "tsx scripts/fail-on-warnings.ts",
+    "csp:hashes": "tsx scripts/emit-csp-hashes.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:seed": "tsx prisma/seed.ts"

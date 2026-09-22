@@ -41,6 +41,15 @@ RUN mkdir .next && chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# The Content Security Policy's hashes of the prerendered documents' inline
+# scripts, written by `pnpm build`. Copied explicitly because `output:
+# "standalone"` only carries the files Next's own trace knows about, and this one
+# is read at request time by src/proxy.ts. Without it the proxy finds no manifest,
+# logs that it has not, and degrades the policy to report-only — the application
+# still serves, with no enforcement, which is exactly the state this line exists
+# to prevent. See docs/csp.md.
+COPY --from=builder --chown=nextjs:nodejs /app/.next/csp-shell-hashes.json ./.next/csp-shell-hashes.json
+
 # Prisma schema needed at runtime for migrations
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 

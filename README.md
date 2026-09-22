@@ -578,6 +578,47 @@ built, preloaded and declared while the whole application silently renders in
 monospace face uses Courier New as its donor rather than the Arial Next picks,
 and the one gap the gate deliberately does not assert.
 
+## Content Security Policy
+
+`src/proxy.ts` sets a policy on every response, with a nonce minted per request,
+no `'unsafe-inline'` in `script-src`, and `object-src`, `base-uri`,
+`frame-ancestors` and `form-action` locked down. Two measurements decided the
+shape of it, and both are worth knowing before changing a directive.
+
+**A nonce only reaches markup Next renders during the request.** Next reads it
+from the request's own `Content-Security-Policy` header and stamps it on the
+scripts it writes — so a prerendered document, written at build time when no
+request existed, carries none. On a production build of this application that is
+every public page: `/` came back with 18 script tags and 0 nonces, while
+`/dashboard` nonced the 24 scripts of its streamed half and none of its shell's.
+The same policy in `next dev` nonces all 36, which is why the mistake is easy to
+ship. The inline scripts of a prerendered document are therefore authorised by
+`'sha256-…'` instead: `pnpm build` runs `scripts/emit-csp-hashes.ts`, which hashes
+them out of the HTML the build just wrote. `'strict-dynamic'` is deliberately
+absent — it makes a browser ignore `'self'`, which refuses the 451 parser-inserted
+`/_next/static/…` tags in those documents, a number the gate measures rather than
+asserts.
+
+**A nonce present during an ISR revalidation is baked into the cache.**
+`.next/server/app/blog.html` was rewritten seven minutes after the build that
+produced it, carrying one request's nonce on all 24 of its script tags, and two
+later requests with different nonces of their own were both answered with it.
+Under enforcement every visitor after the one that repopulated the cache gets a
+page whose scripts are refused. So a path with a revalidation window gets no
+nonce and no digests — `script-src 'self' 'unsafe-inline'`, with every other
+directive still enforced — and which paths those are is derived from
+`initialRevalidateSeconds` in the prerender manifest, not from a list anyone
+maintains.
+
+`pnpm exec tsx scripts/assert-csp.ts` runs in CI after the build and does what a
+browser does: it reads every document the build wrote and checks each script in it
+against the policy the proxy would have sent for that path.
+`e2e/csp.spec.ts` confirms the same in Chromium — zero violations across the
+public routes, a 404, the rewritten `/pricing` and the signed-in dashboard, with
+the theme toggle still proving the bundle ran.
+[docs/csp.md](./docs/csp.md) has both measurements in full, the Zod `eval` probe
+the enforced policy surfaced, and why `style-src` keeps `'unsafe-inline'`.
+
 ## CI
 
 Every gate is warning-fatal — a warning fails the job rather than scrolling past:

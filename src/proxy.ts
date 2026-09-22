@@ -1,15 +1,24 @@
 /**
  * The first thing every request reaches.
  *
- * Three concerns, in a fixed order: the rate limit, the session gate, then
- * experiment routing. The first is the whole point of doing the limiting here —
- * see `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
- * anything else" in Next 16, which has no edge runtime to offer this file.
+ * Four concerns, in a fixed order: the rate limit, the session gate, experiment
+ * routing, then the Content Security Policy. The first is the whole point of
+ * doing the limiting here — see `@/lib/rate-limit/enforce` for why "at the edge"
+ * is delivered as "before anything else" in Next 16, which has no edge runtime
+ * to offer this file.
  *
- * The third is last for a reason of its own. Bucketing decides which *variant*
+ * The third is third for a reason of its own. Bucketing decides which *variant*
  * of a page to render, which is only a question worth answering for a request
  * that is going to be served at all: a refused request gets its cookies (so the
  * visitor survives a login) and no rewrite. See `@/lib/experiments/edge`.
+ *
+ * The fourth is last because it needs the third's answer: the policy carries the
+ * hashes of the document that will actually be rendered, and for a rewritten
+ * request that is the variant's path rather than the one in the address bar. It
+ * is also the only one of the four that has to reach the *render* — Next takes
+ * the nonce from the request's policy header — so it is applied to the request
+ * headers the rewrite carries, not only to the response. See
+ * `@/lib/security/apply`.
  */
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
@@ -19,12 +28,18 @@ import { authConfig } from "@/auth.config";
 import {
   applyExperiments,
   resolveExperimentContext,
+  sanitisedRequestHeaders,
 } from "@/lib/experiments/edge";
 import {
   applyRateLimitHeaders,
   enforceRateLimit,
   tooManyRequests,
 } from "@/lib/rate-limit/enforce";
+import {
+  applyCspHeaders,
+  applyCspRequestHeaders,
+  decideCsp,
+} from "@/lib/security/apply";
 
 // Next 16 renamed the `middleware` file convention to `proxy`; keeping the old
 // name builds, but emits a deprecation warning, and CI fails on warnings. The
@@ -87,7 +102,14 @@ export default async function proxy(
   const outcome = await enforceRateLimit(request, { now });
 
   if (outcome && !outcome.decision.allowed) {
-    return tooManyRequests(request, outcome, now);
+    // A refusal renders no document, so there is nothing here for a nonce to
+    // stamp — but the policy still goes on the response. One policy on every
+    // response is a property a reader can check; "on the responses that happen
+    // to carry markup" is a rule someone has to re-derive at each caller.
+    return applyCspHeaders(
+      tooManyRequests(request, outcome, now),
+      decideCsp(request),
+    );
   }
 
   const gated = isAuthEndpoint(request.nextUrl.pathname)
@@ -101,9 +123,25 @@ export default async function proxy(
   // including the ones that take no part in bucketing — which is why this is
   // not inside a branch.
   const experiments = resolveExperimentContext(request);
-  const response = applyExperiments(request, experiments, gated);
 
-  return applyRateLimitHeaders(response, outcome, now);
+  // The policy is decided here rather than inside `applyExperiments` because it
+  // needs the rewrite target: `/pricing` renders `/pricing/v/control`, and it is
+  // the *rendered* document whose inline scripts have to be authorised.
+  const csp = decideCsp(request, { served: experiments.rewrite?.to });
+
+  // The request headers the rewrite (or the pass-through) carries. Built here so
+  // the policy can be added to them before the render reads it; `applyExperiments`
+  // would otherwise build its own copy and the nonce would never reach Next.
+  const requestHeaders = applyCspRequestHeaders(
+    sanitisedRequestHeaders(request, experiments),
+    csp,
+  );
+
+  const response = applyExperiments(request, experiments, gated, {
+    requestHeaders,
+  });
+
+  return applyCspHeaders(applyRateLimitHeaders(response, outcome, now), csp);
 }
 
 export const config = {
