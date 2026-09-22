@@ -286,10 +286,26 @@ export function carryOverHeaders(from: Response, to: Response): void {
  * instruction is the response. `carryOverHeaders` is what keeps whatever the
  * gate set, a rotated session cookie above all.
  */
+export interface ApplyExperimentsOptions {
+  /**
+   * The request headers the pass-through or rewrite should carry.
+   *
+   * Defaults to `sanitisedRequestHeaders(request, context)`, which is all this
+   * module needs. The proxy passes its own copy because the Content Security
+   * Policy has to be on the request Next renders — Next reads the nonce out of
+   * it — and that header belongs to `@/lib/security/apply`, not here. Passing
+   * the headers in keeps this module's list of internal headers its own, and
+   * keeps the proxy from having to rebuild a response that has already been
+   * turned into a rewrite.
+   */
+  readonly requestHeaders?: Headers;
+}
+
 export function applyExperiments(
   request: NextRequest,
   context: ExperimentContext,
   gateResponse: Response,
+  options: ApplyExperimentsOptions = {},
 ): Response {
   const secure = isSecureRequest(request.nextUrl, request.headers);
   const attributes = cookieAttributes(secure);
@@ -314,7 +330,8 @@ export function applyExperiments(
     return gateResponse;
   }
 
-  const headers = sanitisedRequestHeaders(request, context);
+  const headers =
+    options.requestHeaders ?? sanitisedRequestHeaders(request, context);
 
   const response = context.rewrite
     ? NextResponse.rewrite(rewriteUrl(request, context.rewrite), {

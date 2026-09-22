@@ -8,6 +8,8 @@ import {
   AUTH_PAGES,
 } from "@/auth.config";
 import { ASSIGNMENT_COOKIE, VISITOR_COOKIE } from "@/lib/experiments/cookies";
+import { GEO_HEADER } from "@/lib/experiments/edge";
+import { CSP_HEADER, NONCE_HEADER } from "@/lib/security/csp";
 
 /**
  * The session gate, stubbed.
@@ -276,6 +278,31 @@ describe("authorized callback — /forbidden page", () => {
 // routing, and their order.
 // ---------------------------------------------------------------------------
 
+/**
+ * The request headers a proxy response tells Next to render with.
+ *
+ * `NextResponse.next({ request: { headers } })` does not carry a request — it
+ * carries instructions, as `x-middleware-override-headers` plus one
+ * `x-middleware-request-<name>` per header. Reading them back is the only way a
+ * test can see what the render will actually receive, and what the render
+ * receives is where the nonce has to be.
+ */
+function overriddenRequestHeaders(
+  response: Response,
+): Record<string, string | null> {
+  const names = (response.headers.get("x-middleware-override-headers") ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+
+  return Object.fromEntries(
+    names.map((name) => [
+      name,
+      response.headers.get(`x-middleware-request-${name}`),
+    ]),
+  );
+}
+
 function request(
   path: string,
   init: {
@@ -283,10 +310,12 @@ function request(
     address?: string;
     cookies?: Record<string, string>;
     country?: string;
+    headers?: Record<string, string>;
   } = {},
 ): NextRequest {
   const headers = new Headers({
     "x-forwarded-for": init.address ?? "203.0.113.9",
+    ...init.headers,
   });
   if (init.country) headers.set("x-vercel-ip-country", init.country);
 
@@ -580,5 +609,135 @@ describe("proxy — experiment routing", () => {
     );
     expect(response.headers.get("RateLimit-Limit")).toBe("120");
     expect(response.headers.get("RateLimit-Remaining")).toBe("119");
+  });
+});
+
+describe("proxy — the Content Security Policy", () => {
+  it("puts an enforcing policy on an ordinary response", async () => {
+    const response = await proxy(
+      request("/", { address: freshAddress() }),
+      event,
+    );
+
+    const policy = response.headers.get(CSP_HEADER);
+    expect(policy).toContain("'nonce-");
+    expect(policy).toContain("object-src 'none'");
+  });
+
+  it("mints a fresh nonce per request", async () => {
+    const nonceOf = async (): Promise<string | undefined> => {
+      const response = await proxy(
+        request("/", { address: freshAddress() }),
+        event,
+      );
+      return /'nonce-([^']+)'/.exec(
+        response.headers.get(CSP_HEADER) ?? "",
+      )?.[1];
+    };
+
+    const first = await nonceOf();
+    expect(first).toBeTruthy();
+    expect(first).not.toBe(await nonceOf());
+  });
+
+  it("forwards the policy on the request, which is what nonces the render", async () => {
+    // Next reads the nonce out of the *request's* policy header
+    // (`parseRequestHeaders` in app-render) and stamps it on every script it
+    // writes. A policy set only on the response nonces nothing.
+    const response = await proxy(
+      request("/", { address: freshAddress() }),
+      event,
+    );
+
+    const forwarded = overriddenRequestHeaders(response);
+    expect(forwarded[CSP_HEADER]).toBe(response.headers.get(CSP_HEADER));
+    expect(forwarded[NONCE_HEADER]).toBeTruthy();
+    expect(forwarded[CSP_HEADER]).toContain(
+      `'nonce-${forwarded[NONCE_HEADER]}'`,
+    );
+  });
+
+  it("replaces a client-supplied policy rather than forwarding it", async () => {
+    // Otherwise the caller picks the nonce the document is stamped with, which is
+    // the injection the policy exists to prevent — see @/lib/security/apply.
+    const response = await proxy(
+      request("/", {
+        address: freshAddress(),
+        headers: {
+          [CSP_HEADER]: "script-src 'nonce-attackerChosen'",
+          [NONCE_HEADER]: "attackerChosen",
+        },
+      }),
+      event,
+    );
+
+    const forwarded = overriddenRequestHeaders(response);
+    expect(forwarded[CSP_HEADER]).not.toContain("attackerChosen");
+    expect(forwarded[NONCE_HEADER]).not.toBe("attackerChosen");
+  });
+
+  it("puts the policy on a refusal too", async () => {
+    // A 429 renders no document, so there is nothing for a nonce to stamp — but
+    // one policy on every response is a property a reader can check.
+    const address = freshAddress();
+    const attempt = () =>
+      proxy(request("/login", { method: "POST", address }), event);
+
+    // The auth rule's budget is 10, as `still counts those endpoints` above.
+    for (let index = 0; index < 10; index += 1) await attempt();
+    const response = await attempt();
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get(CSP_HEADER)).toContain("object-src 'none'");
+  });
+
+  it("puts the policy on the gate's redirect", async () => {
+    sessionGate.mockImplementation(() =>
+      NextResponse.redirect("https://example.test/login"),
+    );
+
+    const response = await proxy(
+      request("/dashboard", { address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get("location")).toBe("https://example.test/login");
+    expect(response.headers.get(CSP_HEADER)).toContain("object-src 'none'");
+  });
+
+  it("keeps the policy on a bucketed rewrite, and forwards it there too", async () => {
+    // The rewrite rebuilds the response, so both halves have to survive it.
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: {
+          [VISITOR_COOKIE]: "0189d0aa-4b27-4d1f-9c3e-2f7f8a1b2c3d",
+          [ASSIGNMENT_COOKIE]: "pricing-cta:annual-first",
+        },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/pricing/v/annual-first",
+    );
+    expect(response.headers.get(CSP_HEADER)).toContain("'nonce-");
+    expect(overriddenRequestHeaders(response)[CSP_HEADER]).toBe(
+      response.headers.get(CSP_HEADER),
+    );
+  });
+
+  it("keeps the experiment headers it forwards", async () => {
+    // The CSP is added to the same `Headers` copy the experiment module fills in,
+    // so the two must not overwrite each other.
+    const response = await proxy(
+      request("/pricing", { address: freshAddress(), country: "US" }),
+      event,
+    );
+
+    const forwarded = overriddenRequestHeaders(response);
+    expect(forwarded[GEO_HEADER]).toBe("US");
+    expect(forwarded[CSP_HEADER]).toBeTruthy();
   });
 });
