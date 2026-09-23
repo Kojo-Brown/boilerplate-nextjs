@@ -543,6 +543,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for session hardening — six properties whose loss leaves a
+      # working application. A session that never rotates serves every page
+      # correctly; a cookie that loses `Secure` is invisible until somebody is
+      # on a hostile network; a proxy that drops the hardened callback logs
+      # nothing, because the callback it falls back to is Auth.js's own and it
+      # returns the token. The sharpest of the six is the claim name: Auth.js's
+      # `encode` ends `.setJti(crypto.randomUUID())`, so a token id stored under
+      # `jti` is overwritten after the callback returns and never reaches the
+      # cookie — every request then presents an id the registry has never seen,
+      # reuse detection fires, and signing in revokes the session on the first
+      # page load. That is not a thought experiment: it is what the first draft
+      # did, and no unit test could have caught it, because a test that mocks
+      # the encoder never encodes. This reads the sources and fails on all six.
+      #
+      # Static analysis, so it needs no build output — it is in this job to
+      # keep the gates together.
+      - name: Assert session hardening
+        run: pnpm exec tsx scripts/assert-session-hardening.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

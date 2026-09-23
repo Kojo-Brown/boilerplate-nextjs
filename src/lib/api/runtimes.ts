@@ -123,7 +123,7 @@ export const API_ROUTES: readonly ApiRouteDeclaration[] = [
     runtime: "nodejs",
     portable: false,
     because:
-      "NextAuth's handler resolves through the Prisma adapter; the edge-safe half of that split is `src/auth.config.ts`, used by the proxy",
+      "NextAuth's handler resolves through the Prisma adapter. `src/auth.config.ts` remains the import-light half of that split — constants, the `authorized` callback and the cookie policy, no `next-auth` runtime — but the proxy is no longer portable either: session rotation and reuse detection read `session_families`, which is a database this side of the edge. See docs/session-hardening.md",
   },
 ];
 
