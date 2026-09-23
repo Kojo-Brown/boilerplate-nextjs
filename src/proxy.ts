@@ -25,6 +25,8 @@ import { NextResponse } from "next/server";
 import type { NextAuthRequest } from "next-auth";
 import type { NextFetchEvent, NextMiddleware, NextRequest } from "next/server";
 import { authConfig } from "@/auth.config";
+import { hardenSessionToken, reportSessionEvent } from "@/lib/auth/harden";
+import { sessionRegistry } from "@/lib/auth/registry";
 import {
   applyExperiments,
   resolveExperimentContext,
@@ -48,7 +50,38 @@ import {
 // Next 16 statically verifies that this file exports a function. A destructured
 // re-export (`export const { auth: proxy } = NextAuth(...)`) is not recognised
 // as one, so the handler is bound to a plain const and exported.
-const { auth } = NextAuth(authConfig);
+/**
+ * The proxy's own NextAuth instance, and the only one allowed to rotate.
+ *
+ * `authConfig` deliberately carries no `jwt` callback: it is the import-light
+ * half of the split, and the registry it would need reaches Prisma. The
+ * callback is composed here instead, which puts the database dependency in the
+ * file whose job is to touch every request, where a reader will see it.
+ *
+ * `mayRotate: true` is true here and nowhere else because this is the one place
+ * the token returned from the callback actually reaches the browser. Auth.js
+ * re-encrypts it and pushes a `Set-Cookie` onto the session response, and
+ * `handleAuth` copies those headers onto the response this function returns —
+ * which `applyExperiments`, `applyRateLimitHeaders` and `applyCspHeaders` all
+ * preserve. Verified against a running production build rather than read off
+ * the source: every proxied response carries a fresh `authjs.session-token`.
+ */
+const { auth } = NextAuth({
+  ...authConfig,
+  callbacks: {
+    ...authConfig.callbacks,
+    jwt: ({ token, user }) =>
+      hardenSessionToken(
+        { token, user, mayRotate: true },
+        {
+          registry: sessionRegistry,
+          now: () => new Date(),
+          newId: () => crypto.randomUUID(),
+          report: reportSessionEvent,
+        },
+      ),
+  },
+});
 
 /**
  * The session gate, as a callable.

@@ -18,9 +18,10 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts Account[]
-  sessions Session[]
-  posts    Post[]
+  accounts        Account[]
+  sessions        Session[]
+  posts           Post[]
+  sessionFamilies SessionFamily[]
 
   @@map("users")
 }
@@ -237,6 +238,103 @@ enum OutboxStatus {
   PENDING
   PROCESSED
   FAILED
+}
+
+/// One sign-in, and the chain of session tokens it has been carried by.
+///
+/// ## Why a row exists at all under a JWT strategy
+///
+/// A JWT session cookie is a bearer token with no server-side counterpart: it
+/// is valid because it decrypts, and nothing else is consulted. That is the
+/// property that makes it cheap, and it costs two things that matter. A stolen
+/// cookie cannot be revoked — signing out clears the thief's victim's browser
+/// and leaves the copy working — and a theft cannot be *noticed*, because a
+/// replayed cookie is byte-identical to a legitimate one.
+///
+/// This table buys both back at the price of one indexed read per request. It
+/// holds no session *data* — the claims still travel in the cookie — only the
+/// identity of the token that is currently allowed to speak for this sign-in.
+///
+/// ## Rotation, and why `previousTokenId` has a deadline
+///
+/// `id` is the `sid` claim and is stable for the life of the sign-in;
+/// `currentTokenId` is the `tid` claim and changes every
+/// `SESSION_ROTATION_INTERVAL_S`. Presenting a `tid` that is neither the
+/// current one nor the one it just replaced means two parties hold cookies for
+/// this sign-in, which is the signal this table exists to produce.
+///
+/// `previousTokenId` is what keeps that signal from firing on ordinary
+/// concurrency. A rotation is a `Set-Cookie` on one response, and every request
+/// already in flight when it was sent still carries the old token — a browser
+/// loading a page with four parallel route segments issues one request and
+/// several sub-requests, and a prefetch can be older still. So the replaced
+/// token stays acceptable until `previousValidUntil`, a few seconds later.
+/// After that it is reuse. The window is deliberately short and deliberately
+/// not infinite: an attacker replaying a cookie they captured minutes ago is
+/// exactly the case that must not be excused as concurrency.
+///
+/// ## Why the previous token is not simply deleted
+///
+/// Because "this token was retired a moment ago" and "this token was never
+/// ours" are different findings and only one of them is an incident. Keeping
+/// the retired id is what lets the difference be measured instead of guessed.
+///
+/// ## `revokedAt`, and why rows are kept after revocation
+///
+/// Revocation is a write to this row, not a delete: an operator looking at a
+/// user's complaint needs to see *why* a session ended, and `TOKEN_REUSE` is a
+/// materially different answer from `SIGNED_OUT`. `expiresAt` is what removes
+/// rows eventually — it is the absolute deadline, so a row past it can decide
+/// nothing that the `sat` claim would not already have decided on its own.
+model SessionFamily {
+  /// The `sid` claim. Generated at sign-in and never reissued.
+  id                 String                   @id
+  userId             String
+  /// The `tid` claim of the only token currently allowed to speak for this
+  /// sign-in.
+  currentTokenId     String
+  /// The `tid` this one replaced, still accepted until `previousValidUntil`.
+  previousTokenId    String?
+  previousValidUntil DateTime?
+  /// How many times the token has been rotated. Operational signal only:
+  /// a session with an implausible count is worth looking at.
+  rotations          Int                      @default(0)
+  startedAt          DateTime                 @default(now())
+  /// The absolute deadline, fixed at sign-in and never extended by activity.
+  /// Mirrors the `sat` claim, which enforces the same bound without a read —
+  /// this copy is the sweep key, not the authority.
+  expiresAt          DateTime
+  /// When this session last rotated its token, which is the closest thing to
+  /// "last seen" that does not cost a write per request. Not an authorisation
+  /// input: the idle bound is the JWT's own `exp`, which a browser cannot
+  /// extend, and the absolute bound is the `sat` claim.
+  lastSeenAt         DateTime                 @default(now())
+  revokedAt          DateTime?
+  revokedReason      SessionRevocationReason?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// "Revoke every session for this user", which is what a password change and
+  /// a support request both need.
+  @@index([userId])
+  /// The sweep of rows past their absolute deadline.
+  @@index([expiresAt])
+  @@map("session_families")
+}
+
+enum SessionRevocationReason {
+  /// The user signed out. The only one of these that is not an incident.
+  SIGNED_OUT
+  /// A token outside the current/previous pair was presented: two parties hold
+  /// cookies for this sign-in.
+  TOKEN_REUSE
+  /// Past `expiresAt` — the bound that activity does not extend.
+  ABSOLUTE_TIMEOUT
+  /// Ended deliberately from outside the session: a password change, an
+  /// administrator, a "sign out everywhere".
+  REVOKED_BY_USER
 }
 
 model VerificationToken {

@@ -160,4 +160,37 @@ if (!parsed.success) {
   throw new Error("Invalid environment variables");
 }
 
+/**
+ * `NEXTAUTH_URL` has a default, and in production a default is worse than a
+ * failure.
+ *
+ * The schema above falls back to `http://localhost:3000`, which is right for a
+ * fresh clone and wrong for every deployment. It is wrong in a way that does
+ * not announce itself, because `@/lib/auth/deployment` pins Auth.js's origin to
+ * this value and derives the cookie's `Secure` flag and `__Host-` prefix from
+ * its scheme: an unset variable in production would mean session cookies issued
+ * without `Secure`, for an origin nobody is browsing, and a sign-in that
+ * redirects to localhost. Refusing to boot is the only outcome an operator
+ * cannot fail to notice.
+ *
+ * Checked here rather than as a schema refinement so that it applies only at a
+ * real boot. `SKIP_ENV_VALIDATION=1` is how the Dockerfile compiles the app
+ * without a runtime environment at all, and a build has no deployment URL to
+ * know yet — the container it produces does, and reaches this line when it
+ * starts. `AUTH_URL` satisfies it too, since that is Auth.js's own name for the
+ * same setting and `@/lib/auth/deployment` honours it first.
+ */
+if (
+  !skip &&
+  parsed.data.NODE_ENV === "production" &&
+  process.env["NEXTAUTH_URL"] === undefined &&
+  process.env["AUTH_URL"] === undefined
+) {
+  throw new Error(
+    "NEXTAUTH_URL (or AUTH_URL) must be set in production: it is the origin " +
+      "session cookies, callbacks and redirects are issued for, and its " +
+      "scheme decides whether those cookies are marked Secure.",
+  );
+}
+
 export const env = parsed.data;
