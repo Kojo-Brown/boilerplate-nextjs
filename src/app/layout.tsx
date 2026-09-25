@@ -5,7 +5,7 @@ import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ThirdPartyScripts } from "@/components/third-party/third-party-scripts";
 import { WebVitalsReporter } from "@/components/vitals/web-vitals-reporter";
-import { env } from "@/lib/env";
+import { clientEnv } from "@/lib/env/client";
 import { fontVariables } from "@/styles/fonts";
 import "@/styles/globals.css";
 
@@ -103,7 +103,7 @@ export default function RootLayout({
               <WebVitalsReporter />
               <ThirdPartyScripts
                 config={{
-                  plausibleDomain: env.NEXT_PUBLIC_PLAUSIBLE_DOMAIN,
+                  plausibleDomain: clientEnv.NEXT_PUBLIC_PLAUSIBLE_DOMAIN,
                 }}
               />
             </QueryProvider>

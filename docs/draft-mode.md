@@ -143,9 +143,11 @@ auth-secret rotation, or when the preview signer is to be handed to a CMS
 without handing over the session signer.
 
 The key is derived once per process into a non-extractable `CryptoKey`. Nothing
-in `src/lib/preview/token.ts` is importable from a client component: it reads
-`@/lib/env`, whose server-only variables are undefined in the browser, so such
-an import fails loudly at module evaluation rather than shipping a secret.
+in `src/lib/preview/token.ts` is importable from a client component: the module
+declares `import "server-only"`, so an import from the client graph fails
+`next build` rather than failing in a browser — which is what this paragraph used
+to describe, and the difference between a check and an accident. See
+`docs/server-only.md`.
 
 ## What `exp` bounds, and what it does not
 

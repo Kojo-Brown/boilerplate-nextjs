@@ -7,7 +7,7 @@ import {
 } from "@/lib/actions/origin";
 import { ActionError } from "@/lib/actions/result";
 import { setRequestHeaders } from "@/test/request-headers";
-import { env } from "@/lib/env";
+import { serverEnv } from "@/lib/env/server";
 
 /**
  * The origin leg, as a decision table.
@@ -240,7 +240,7 @@ describe("parseAllowedOrigins", () => {
 });
 
 describe("assertSameOrigin", () => {
-  const mutableEnv = env as unknown as Record<string, unknown>;
+  const mutableEnv = serverEnv as unknown as Record<string, unknown>;
 
   beforeEach(() => {
     vi.spyOn(console, "error").mockImplementation(() => {});

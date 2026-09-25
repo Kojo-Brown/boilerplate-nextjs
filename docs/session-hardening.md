@@ -37,7 +37,7 @@ production build at all.**
 
 Auth.js decides `trustHost` from `AUTH_URL ?? AUTH_TRUST_HOST ?? VERCEL ??
 CF_PAGES ?? NODE_ENV !== "production"`. This repository uses the v4 name,
-`NEXTAUTH_URL` — in `.env.example`, in `src/lib/env.ts`, in the CI workflow and
+`NEXTAUTH_URL` — in `.env.example`, in `src/lib/env/server.ts`, in the CI workflow and
 in the Dockerfile — and that name is not in the list. So a production build
 anywhere but Vercel or Cloudflare Pages got `trustHost: false`, and
 `assertConfig` refused every request into `@auth/core`.

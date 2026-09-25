@@ -1,21 +1,27 @@
-import { z } from "zod";
-import { disableZodJitInBrowser } from "@/lib/security/zod-jitless";
-
 /**
- * Before any schema below it, and that position is the point.
+ * Every secret this application reads, validated once, behind a marker that
+ * makes importing it from a browser a build error.
  *
- * This module is in the client graph — `NEXT_PUBLIC_*` is validated in the
- * browser too — so the `z.object()` calls below construct Zod's JIT object
- * validator there, and constructing one probes for `eval` with
- * `new Function("")`. Under the Content Security Policy that throw is refused;
- * Zod catches it and falls back, so nothing breaks, but the browser reports a
- * `script-src` violation on every page load that is indistinguishable from a real
- * one. Zod reads the capability when the schema is built and memoises it, so a
- * call below the schemas would configure nothing. See
- * `@/lib/security/zod-jitless` and docs/csp.md; `scripts/assert-csp.ts` checks
- * both the call and its position.
+ * `server-only` is a package with no exports and one job: Next aliases it to a
+ * module that throws when it is compiled into a *client* bundle, and to an empty
+ * module everywhere else. So the import below is not a hint or a convention —
+ * it is the enforcement. Any `"use client"` module that reaches this file, at
+ * any depth, fails `next build` with the chain that got it there.
+ *
+ * It replaces a runtime failure with a build failure, and that is the whole
+ * value. Without it such an import compiles and ships, and what stops the secret
+ * being readable is only that it was never there: Next substitutes literals for
+ * `NEXT_PUBLIC_*` names and nothing else, so the schema below would find the
+ * secrets missing and throw in the visitor's browser instead — which is the
+ * mechanism `docs/draft-mode.md` was relying on before this import existed.
+ * Nothing leaks that way, and nothing is checked either.
+ *
+ * `docs/server-only.md` has the reasoning, the measurement, and the two holes the
+ * marker cannot see.
  */
-disableZodJitInBrowser();
+import "server-only";
+
+import { z } from "zod";
 
 /**
  * An optional secret, as it actually arrives from a `.env` file.
@@ -109,48 +115,45 @@ const server = z.object({
   S3_BUCKET_NAME: z.string().optional(),
 });
 
-const client = z.object({
-  NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
-  // The site domain registered with Plausible, and the switch that decides
-  // whether any analytics script is mounted at all. Absent — which is every
-  // fresh clone, every CI build and every preview deployment — nothing is
-  // loaded and no request leaves the browser for a vendor. See
-  // src/lib/third-party/catalogue.ts and docs/third-party-scripts.md.
-  //
-  // A bare domain (`example.com`), not a URL: it is the site identifier
-  // Plausible matches on, not somewhere anything is fetched from, so
-  // `z.string().url()` would reject the value the vendor actually issues. The
-  // empty-string preprocessing is the same one `optionalSecret` needs and for
-  // the same reason — `NEXT_PUBLIC_PLAUSIBLE_DOMAIN=` in a `.env` file sets it
-  // to `""`, which is present, and `""` would otherwise mount the script with
-  // an empty `data-domain` and report every page view under no site at all.
-  NEXT_PUBLIC_PLAUSIBLE_DOMAIN: z.preprocess(
-    (value) => (value === "" ? undefined : value),
-    z.string().optional(),
-  ),
-});
+/**
+ * The keys above whose value is key material or a credential, as opposed to
+ * configuration that merely happens to be server-side.
+ *
+ * Both enforcement paths read this list — `scripts/assert-server-only.ts` off
+ * the source text, the `server-only/no-secret-env-access` ESLint rule off the
+ * same literal — and neither can read a judgement that only exists in someone's
+ * head, which is why the distinction is written down here rather than inferred
+ * from the name. `AWS_REGION` is server-side and public; `AWS_SECRET_ACCESS_KEY`
+ * is neither.
+ *
+ * `DATABASE_URL` is in the list because a Postgres URL carries its password in
+ * the authority. `NEXTAUTH_URL` is not: it is an origin, published on every
+ * response.
+ *
+ * `src/lib/env/server.test.ts` asserts every name here is a key of the schema
+ * above, so a rename cannot quietly empty the list the two gates work from.
+ */
+export const SECRET_KEYS = [
+  "DATABASE_URL",
+  "NEXTAUTH_SECRET",
+  "PREVIEW_SECRET",
+  "REVALIDATE_SECRET",
+  "VITALS_API_KEY",
+  "GOOGLE_CLIENT_SECRET",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+] as const;
 
 const skip = process.env["SKIP_ENV_VALIDATION"] === "1";
 
 const parsed = skip
-  ? server.merge(client).safeParse({
+  ? server.safeParse({
       DATABASE_URL:
         "postgresql://placeholder:placeholder@localhost:5432/placeholder",
       NEXTAUTH_SECRET: "placeholder-secret-for-build-validation-only",
-      NEXT_PUBLIC_APP_URL:
-        process.env["NEXT_PUBLIC_APP_URL"] ?? "http://localhost:3000",
-      NEXT_PUBLIC_PLAUSIBLE_DOMAIN: process.env["NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
       ...process.env,
     })
-  : server.merge(client).safeParse({
-      ...process.env,
-      NEXT_PUBLIC_APP_URL: process.env["NEXT_PUBLIC_APP_URL"],
-      // Spelled out for the same reason as the line above: `process.env` is not
-      // an object in a client bundle, it is a set of literals Next substitutes
-      // at build time, and only the keys written out like this survive the
-      // substitution. The spread covers the server, this covers the browser.
-      NEXT_PUBLIC_PLAUSIBLE_DOMAIN: process.env["NEXT_PUBLIC_PLAUSIBLE_DOMAIN"],
-    });
+  : server.safeParse(process.env);
 
 if (!parsed.success) {
   console.error(
@@ -193,4 +196,4 @@ if (
   );
 }
 
-export const env = parsed.data;
+export const serverEnv = parsed.data;

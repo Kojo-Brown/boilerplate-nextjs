@@ -61,8 +61,12 @@
  * Web Crypto only, so `/api/revalidate` can declare `portable: true` in
  * `@/lib/api/runtimes`.
  */
+// Holds the webhook signing key, and `verifyWebhookSignature` is a function
+// whose whole value is that a caller cannot run it. See docs/server-only.md.
+import "server-only";
+
 import { deriveHmacKey, fromHex, toHex } from "@/lib/crypto/hmac";
-import { env } from "@/lib/env";
+import { serverEnv } from "@/lib/env/server";
 
 /** The header a signed request carries. Lowercase — header names are case-insensitive, lookups here are not. */
 export const SIGNATURE_HEADER = "x-revalidate-signature";
@@ -256,7 +260,7 @@ function webhookKey(): Promise<CryptoKey> {
   // committed. The fallback shares no key material with the session signer or
   // the preview signer — HKDF's `info` is what separates them.
   cachedKey ??= deriveHmacKey({
-    secret: env.REVALIDATE_SECRET ?? env.NEXTAUTH_SECRET,
+    secret: serverEnv.REVALIDATE_SECRET ?? serverEnv.NEXTAUTH_SECRET,
     salt: HKDF_SALT,
     info: HKDF_INFO,
   });

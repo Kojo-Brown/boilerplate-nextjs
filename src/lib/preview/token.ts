@@ -45,8 +45,13 @@
  * claim `scripts/assert-api-runtimes.ts` checks against the build's dependency
  * trace on every CI run.
  */
+// Mints capabilities with the preview signing key. A browser that could import
+// this could sign its own preview links for any path. See docs/server-only.md.
+import "server-only";
+
 import { deriveHmacKey } from "@/lib/crypto/hmac";
-import { env } from "@/lib/env";
+import { clientEnv } from "@/lib/env/client";
+import { serverEnv } from "@/lib/env/server";
 
 /**
  * How long a freshly minted link stays redeemable.
@@ -251,7 +256,7 @@ export async function createPreviewLink(
   options: SignPreviewTokenOptions = {},
 ): Promise<{ url: string; expiresAt: Date }> {
   const token = await signPreviewToken(path, options);
-  const url = new URL(PREVIEW_ENTER_PATH, env.NEXT_PUBLIC_APP_URL);
+  const url = new URL(PREVIEW_ENTER_PATH, clientEnv.NEXT_PUBLIC_APP_URL);
   url.searchParams.set("token", token);
 
   const ttlSeconds = options.ttlSeconds ?? PREVIEW_TOKEN_TTL_SECONDS;
@@ -321,7 +326,7 @@ function deriveKey(): Promise<CryptoKey> {
   // revalidation webhook's signer. `HKDF_INFO` is what keeps the two keys
   // unrelated despite the shared fallback secret — see the note there.
   return deriveHmacKey({
-    secret: env.PREVIEW_SECRET ?? env.NEXTAUTH_SECRET,
+    secret: serverEnv.PREVIEW_SECRET ?? serverEnv.NEXTAUTH_SECRET,
     salt: HKDF_SALT,
     info: HKDF_INFO,
   });

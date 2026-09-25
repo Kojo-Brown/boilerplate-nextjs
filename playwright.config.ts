@@ -6,6 +6,16 @@ const BASE_URL =
 
 export default defineConfig({
   testDir: "./e2e",
+  // Points at `e2e/tsconfig.json`, which exists for one mapping: `server-only`
+  // resolves to the marker package's own empty module rather than to the entry
+  // that throws. Playwright runs these specs in plain Node, which sets neither
+  // export condition, so `revalidate-webhook.spec.ts` — which imports
+  // `@/lib/prisma` to seed a post and `@/lib/webhooks/signature` to sign the
+  // request — would otherwise fail at import on the marker that is there to stop
+  // a *browser bundle* importing it. Same reasoning as the alias in
+  // `vitest.config.ts`; `scripts/assert-server-only.ts` is what checks the
+  // boundary neither runner can see.
+  tsconfig: "./e2e/tsconfig.json",
   fullyParallel: false,
   forbidOnly: !!process.env["CI"],
   retries: process.env["CI"] ? 1 : 0,
