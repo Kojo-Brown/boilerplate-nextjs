@@ -51,8 +51,12 @@
  * `x-forwarded-host` set `ALLOWED_ACTION_ORIGINS` instead — one list, read at
  * runtime, testable.
  */
+// Reads the allow-list a Server Action's origin check is decided against, and
+// `next/headers` besides. See docs/server-only.md.
+import "server-only";
+
 import { headers } from "next/headers";
-import { env } from "@/lib/env";
+import { serverEnv } from "@/lib/env/server";
 import { ActionError } from "@/lib/actions/result";
 
 /**
@@ -211,7 +215,7 @@ export async function assertSameOrigin(): Promise<void> {
     origin: headerList.get("origin"),
     host: headerList.get("host"),
     forwardedHost: headerList.get("x-forwarded-host"),
-    allowedHosts: parseAllowedOrigins(env.ALLOWED_ACTION_ORIGINS),
+    allowedHosts: parseAllowedOrigins(serverEnv.ALLOWED_ACTION_ORIGINS),
   });
 
   if (result.allowed) return;

@@ -9,7 +9,7 @@ import {
   MAX_FILE_SIZE_BYTES,
 } from "@/lib/s3";
 import type { AllowedMimeType, PresignedUploadResult } from "@/lib/s3";
-import { env } from "@/lib/env";
+import { serverEnv } from "@/lib/env/server";
 
 /**
  * Mints a presigned PUT URL for one image.
@@ -89,9 +89,9 @@ export const getPresignedUploadUrlAction = defineAuthedAction({
   unauthenticatedMessage: "You must be signed in to upload files.",
   handler: async ({ input, user }): Promise<PresignedUploadResult> => {
     if (
-      !env.AWS_ACCESS_KEY_ID ||
-      !env.AWS_SECRET_ACCESS_KEY ||
-      !env.S3_BUCKET_NAME
+      !serverEnv.AWS_ACCESS_KEY_ID ||
+      !serverEnv.AWS_SECRET_ACCESS_KEY ||
+      !serverEnv.S3_BUCKET_NAME
     ) {
       throw new ActionError("File uploads are not configured on this server.");
     }
@@ -100,11 +100,11 @@ export const getPresignedUploadUrlAction = defineAuthedAction({
     const key = `uploads/${user.id}/${Date.now()}-${crypto.randomUUID()}.${extension}`;
 
     return createPresignedUploadUrl({
-      bucket: env.S3_BUCKET_NAME,
+      bucket: serverEnv.S3_BUCKET_NAME,
       key,
-      region: env.AWS_REGION,
-      accessKeyId: env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+      region: serverEnv.AWS_REGION,
+      accessKeyId: serverEnv.AWS_ACCESS_KEY_ID,
+      secretAccessKey: serverEnv.AWS_SECRET_ACCESS_KEY,
       contentType: input.contentType,
     });
   },

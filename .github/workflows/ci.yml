@@ -564,6 +564,32 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the server-only boundary — the one gate here whose subject
+      # is a module *graph* rather than a file. `import "server-only"` already
+      # fails the build when a client component reaches a secret-reading module,
+      # so this is not that: it is the five things the marker cannot check. That
+      # the marker is still on the env module at all (deleting the line fails
+      # nothing else — the unit suite has to alias it away, and a build with no
+      # client component importing the module is green either way). That the
+      # SECRET_KEYS list two enforcement paths read still parses and still names
+      # keys the schema declares, since a name left behind by a rename is a
+      # secret nothing matches on. That every reader of the server env is marked,
+      # rather than only the ones someone remembered. That `@/lib/env/client`
+      # reaches nothing marked, which no client component importing it today
+      # means nothing would catch. And that no module reads a secret out of
+      # `process.env` directly — the one path with no import to mark, which
+      # `src/auth.ts` was on: `process.env["GOOGLE_CLIENT_SECRET"] ?? ""`, an
+      # OAuth client configured with an empty secret whenever the variable is
+      # absent. The ESLint rule of the same name is the editor-time copy of that
+      # last check; this is the copy an `eslint-disable` cannot reach.
+      #
+      # Static analysis, so it needs no build output — it is in this job to keep
+      # the gates together.
+      - name: Assert server-only boundary
+        run: pnpm exec tsx scripts/assert-server-only.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

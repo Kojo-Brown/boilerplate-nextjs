@@ -4,8 +4,8 @@ import type * as S3Module from "@/lib/s3";
 
 // Mocks must be defined before importing the module under test
 vi.mock("@/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/lib/env", () => ({
-  env: {
+vi.mock("@/lib/env/server", () => ({
+  serverEnv: {
     AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
     AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
     AWS_REGION: "us-east-1",
@@ -25,7 +25,7 @@ const { ORIGIN_REJECTED_MESSAGE } = await import("@/lib/actions/origin");
 const { getPresignedUploadUrlAction } = await import("@/actions/upload");
 const { auth } = await import("@/auth");
 const { createPresignedUploadUrl } = await import("@/lib/s3");
-const { env } = await import("@/lib/env");
+const { serverEnv: env } = await import("@/lib/env/server");
 
 // NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
 // `typeof AuthModule.auth` keeps all the overloads, and vi.mocked binds to the

@@ -1,9 +1,14 @@
+// The provider client secret, the credentials verifier and the Prisma adapter
+// are all in this module. See docs/server-only.md.
+import "server-only";
+
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { z } from "zod";
 import type { DefaultSession } from "next-auth";
+import { serverEnv } from "@/lib/env/server";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/auth.config";
 import { verifyPassword } from "@/lib/password";
@@ -66,8 +71,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
   providers: [
     Google({
-      clientId: process.env["GOOGLE_CLIENT_ID"] ?? "",
-      clientSecret: process.env["GOOGLE_CLIENT_SECRET"] ?? "",
+      // Read through the schema rather than from `process.env` directly, which
+      // is what this did until the server-only gate found it. A raw read is the
+      // one way a secret reaches a module without importing anything marked
+      // server-only, so it is the hole the marker cannot see: in a browser Next
+      // substitutes nothing for a name that is not `NEXT_PUBLIC_*`, and the
+      // expression evaluates to `undefined` with no error anywhere.
+      // `scripts/assert-server-only.ts` and the `no-secret-env-access` lint rule
+      // now both refuse it. See docs/server-only.md.
+      clientId: serverEnv.GOOGLE_CLIENT_ID ?? "",
+      clientSecret: serverEnv.GOOGLE_CLIENT_SECRET ?? "",
       allowDangerousEmailAccountLinking: true,
     }),
     Credentials({

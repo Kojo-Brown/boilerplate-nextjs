@@ -7,6 +7,7 @@ import {
   FORBIDDEN_SCRIPT_SOURCES,
   REQUIRED_DIRECTIVES,
   browserModules,
+  withoutTypeOnlyImports,
   checkCatalogueAgreement,
   checkCsp,
   checkDocuments,
@@ -416,6 +417,53 @@ describe("browserModules", () => {
     ];
 
     expect(browserModules(files)).toHaveLength(2);
+  });
+});
+
+describe("withoutTypeOnlyImports", () => {
+  it("blanks a type-only import, keeping every offset", () => {
+    const source = 'import type { A } from "@/a";\nimport "@/b";';
+    const blanked = withoutTypeOnlyImports(source);
+
+    expect(blanked).toHaveLength(source.length);
+    expect(blanked).not.toContain("@/a");
+    expect(blanked).toContain('import "@/b"');
+  });
+
+  it("keeps an inline type specifier, because TypeScript keeps the statement", () => {
+    // Under `verbatimModuleSyntax` this is the whole difference between the two
+    // spellings: `import { type A } from "@/a"` still emits `import "@/a"`, so the
+    // module's side effects — and its own imports — are still in the graph.
+    expect(withoutTypeOnlyImports('import { type A } from "@/a";')).toContain(
+      "@/a",
+    );
+  });
+
+  it("blanks a type-only re-export", () => {
+    expect(
+      withoutTypeOnlyImports('export type { A } from "@/a";'),
+    ).not.toContain("@/a");
+  });
+});
+
+describe("browserModules and type-only imports", () => {
+  it("does not follow one", () => {
+    // `src/hooks/use-posts.ts` is a `"use client"` module whose only link to the
+    // data layer is `import type { PostSummary } from "@/lib/dal/posts"`. Following
+    // it put `@/lib/prisma` three imports inside the client graph on a build that
+    // is entirely correct — a false positive the CSP gate never happened to
+    // report, and the server-only gate reported on its first run.
+    const files = [
+      {
+        relativePath: "src/a.tsx",
+        text: '"use client";\nimport type { T } from "@/types";',
+      },
+      { relativePath: "src/types.ts", text: "export type T = 1;" },
+    ];
+
+    expect(browserModules(files).map((file) => file.relativePath)).toEqual([
+      "src/a.tsx",
+    ]);
   });
 });
 

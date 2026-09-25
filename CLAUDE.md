@@ -53,5 +53,9 @@ component is public — keep secrets behind `server-only`. Scan
 - `error.tsx` — error boundary for every route segment
 - Server Components by default; add `"use client"` only when needed
 - Server Actions in `src/actions/` with `ActionResult<T>` return type from `@/lib/actions`
+- Secrets only via `serverEnv` from `@/lib/env/server`, which is `server-only`;
+  `NEXT_PUBLIC_*` via `clientEnv` from `@/lib/env/client`. Never
+  `process.env.<SECRET>` — a raw read is invisible to the marker and evaluates to
+  `undefined` in a browser. See `docs/server-only.md`
 - Prisma accessed via `@/lib/prisma` singleton — never `new PrismaClient()`
 - Typed routes enabled — use `href` type from `next/navigation`

@@ -597,16 +597,47 @@ function hasDirective(text: string, directive: string): boolean {
 export function browserModules(
   files: readonly SourceFile[],
 ): readonly SourceFile[] {
+  const reached = browserReachability(files);
+
+  return files
+    .filter((file) => reached.has(file.relativePath))
+    .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+}
+
+/**
+ * The same walk, keeping the edge each module was reached by.
+ *
+ * Every module in the client graph, mapped to the module that imported it —
+ * `null` for a `"use client"` entry point, which is reached by being one. That is
+ * enough to reconstruct a chain from any browser module back to the component
+ * that pulls it in, which is the difference between "this module is in the client
+ * graph" and a report someone can act on.
+ *
+ * `scripts/assert-server-only.ts` is the caller that needs the edges;
+ * `browserModules` above is the same answer with them thrown away. One walk
+ * rather than two, because the subtlety it encodes — stopping at a `"use server"`
+ * module — is the kind of thing that gets fixed in one copy.
+ *
+ * The recorded parent is whichever edge arrived first, not the shortest path: the
+ * walk is a depth-first pop, and a module imported from two places has two true
+ * answers.
+ */
+export function browserReachability(
+  files: readonly SourceFile[],
+): Map<string, string | null> {
   const byPath = new Map(files.map((file) => [file.relativePath, file]));
   const known = new Set(byPath.keys());
 
-  const reached = new Set<string>();
-  const queue = files
+  const reached = new Map<string, string | null>();
+  const queue: { path: string; from: string | null }[] = files
     .filter((file) => hasDirective(file.text, "use client"))
-    .map((file) => file.relativePath);
+    .map((file) => ({ path: file.relativePath, from: null }));
 
   while (queue.length > 0) {
-    const current = queue.pop() as string;
+    const { path: current, from } = queue.pop() as {
+      path: string;
+      from: string | null;
+    };
     if (reached.has(current)) continue;
 
     const file = byPath.get(current);
@@ -614,21 +645,20 @@ export function browserModules(
     // A server boundary: reachable by name, never evaluated in a browser.
     if (hasDirective(file.text, "use server")) continue;
 
-    reached.add(current);
+    reached.set(current, from);
 
-    for (const match of file.text.matchAll(
+    for (const match of withoutTypeOnlyImports(file.text).matchAll(
       /(?:from\s*|import\s*)["']([^"']+)["']/g,
     )) {
       const specifier = match[1];
       if (specifier === undefined) continue;
       const resolved = resolveSpecifier(current, specifier, known);
-      if (resolved !== null && !reached.has(resolved)) queue.push(resolved);
+      if (resolved !== null && !reached.has(resolved))
+        queue.push({ path: resolved, from: current });
     }
   }
 
-  return files
-    .filter((file) => reached.has(file.relativePath))
-    .sort((a, b) => a.relativePath.localeCompare(b.relativePath));
+  return reached;
 }
 
 /**
@@ -752,6 +782,33 @@ export function withoutComments(text: string): string {
   }
 
   return out;
+}
+
+/**
+ * Source with type-only import and export statements blanked out, positions
+ * preserved.
+ *
+ * `import type { PostSummary } from "@/lib/dal/posts"` is erased by TypeScript in
+ * its entirety — under `verbatimModuleSyntax` that is the whole difference
+ * between it and `import { type PostSummary }`, which keeps the statement and so
+ * keeps the module's side effects — and a bundler therefore never follows it. A
+ * walk that does is not describing what runs in a browser: `src/hooks/use-posts.ts`
+ * is a `"use client"` module whose only link to the data layer is a type, and
+ * following it put `@/lib/prisma` and the server env module in the client graph,
+ * three imports deep, on a build that is entirely correct.
+ *
+ * Blanked rather than removed, for the same reason `withoutComments` does it: the
+ * offsets in the result still refer to the same characters of the original, which
+ * is what lets the two passes compose.
+ *
+ * Terminated at the specifier's closing quote rather than at a `;`, so a
+ * statement without one is still handled.
+ */
+export function withoutTypeOnlyImports(text: string): string {
+  return text.replace(
+    /\b(?:import|export)\s+type\b[^;]*?["'][^"']*["']/g,
+    (statement) => statement.replace(/[^\n]/g, " "),
+  );
 }
 
 /** The module that owns the browser-only Zod configuration, and its export. */

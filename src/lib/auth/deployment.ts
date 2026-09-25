@@ -7,8 +7,8 @@
  *
  * Auth.js decides `trustHost` from `AUTH_URL ?? AUTH_TRUST_HOST ?? VERCEL ??
  * CF_PAGES ?? NODE_ENV !== "production"`. This repository uses the v4 name,
- * `NEXTAUTH_URL` — in `.env.example`, in `src/lib/env.ts`, in the CI workflow
- * and in the Dockerfile — and that name is **not** in the list. So a production
+ * `NEXTAUTH_URL` — in `.env.example`, in `src/lib/env/server.ts`, in the CI
+ * workflow and in the Dockerfile — and that name is **not** in the list. So a production
  * build that is not on Vercel or Cloudflare Pages gets `trustHost: false`, and
  * `assertConfig` then refuses every request into `@auth/core` with
  * `UntrustedHost`.
@@ -41,14 +41,19 @@
  *
  * Because `createActionURL` reads `process.env.AUTH_URL ?? process.env.
  * NEXTAUTH_URL` directly, not the config object, and there is no configuration
- * field that can reach it. `src/lib/env.ts` gives `NEXTAUTH_URL` a default,
+ * field that can reach it. `src/lib/env/server.ts` gives `NEXTAUTH_URL` a default,
  * which means the value this repository validated and the value Auth.js sees
  * can differ: the schema says `http://localhost:3000`, `process.env` says
  * nothing, and Auth.js quietly goes back to reading headers. Copying the
  * resolved value across is what makes one setting mean one thing. The write is
  * conditional and never overrides an `AUTH_URL` an operator set themselves.
  */
-import { env } from "@/lib/env";
+// Reads `AUTH_URL`/`NEXTAUTH_URL` and writes the first one back into
+// `process.env`, neither of which means anything in a browser. See
+// docs/server-only.md.
+import "server-only";
+
+import { serverEnv } from "@/lib/env/server";
 
 /**
  * The origin every absolute URL Auth.js builds is anchored to.
@@ -111,7 +116,7 @@ function resolveAuthOrigin(): string {
   // throw for a value that got past it. `AUTH_URL` is Auth.js's own name and is
   // not in the schema, so an operator who set it directly is honoured first and
   // nothing is written back over it.
-  const configured = process.env["AUTH_URL"] ?? env.NEXTAUTH_URL;
+  const configured = process.env["AUTH_URL"] ?? serverEnv.NEXTAUTH_URL;
   const origin = new URL(configured).origin;
 
   process.env["AUTH_URL"] ??= origin;
