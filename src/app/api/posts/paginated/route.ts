@@ -1,4 +1,6 @@
 import { defineAuthedRoute } from "@/lib/api/define-authed-route";
+import { ApiError } from "@/lib/api/errors";
+import { getActiveTenant } from "@/lib/tenancy/active";
 import { getPaginatedPostsByUser } from "@/lib/dal/posts";
 import { parseCursorParams } from "@/lib/pagination";
 import type { PostSummary } from "@/lib/dal/posts";
@@ -17,9 +19,16 @@ import type { CursorPage } from "@/lib/pagination";
  * breaking change to an existing client smuggled in under a refactor.
  */
 export const GET = defineAuthedRoute<CursorPage<PostSummary>>({
-  handler: ({ request, user }) =>
-    getPaginatedPostsByUser(
+  handler: async ({ request, user }) => {
+    // See `/api/posts` for why this is a 403 rather than a redirect.
+    const tenant = await getActiveTenant();
+    if (!tenant) {
+      throw new ApiError("forbidden", "No workspace is open for this request");
+    }
+    return getPaginatedPostsByUser(
+      tenant.tenantId,
       user.id,
       parseCursorParams(request.nextUrl.searchParams),
-    ),
+    );
+  },
 });

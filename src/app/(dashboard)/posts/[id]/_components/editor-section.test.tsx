@@ -14,6 +14,14 @@ vi.mock("@/lib/dal/posts", () => ({
 // The editor is a Client Component with two Server Actions behind it. What
 // matters here is the row `<EditorSection>` hands it, so it is replaced by
 // something that reports its props.
+
+// The workspace the section reads in. `src/lib/tenancy/active.test.ts` covers
+// how one is chosen; here it only has to exist, so that the scoped read below
+// has a tenant to be scoped to.
+vi.mock("@/lib/tenancy/active", () => ({
+  getRequiredTenant: vi.fn(),
+}));
+
 vi.mock("./post-editor", () => ({
   PostEditor: ({ post }: { post: EditablePost }) => (
     <div data-testid="post-editor" data-post-id={post.id} />
@@ -22,12 +30,22 @@ vi.mock("./post-editor", () => ({
 
 import { getRequiredSession } from "@/lib/session";
 import { getEditablePost } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import type { AuthSession } from "@/lib/session";
 import type { EditablePost } from "@/lib/dal/posts";
 import { EditorSection, EditorSectionFallback } from "./editor-section";
 
 const mockGetRequiredSession = vi.mocked(getRequiredSession);
 const mockGetEditablePost = vi.mocked(getEditablePost);
+const mockGetRequiredTenant = vi.mocked(getRequiredTenant);
+
+const tenant = {
+  tenantId: "tenant-1",
+  slug: "acme",
+  name: "Acme",
+  role: "OWNER" as const,
+  scope: { tenantId: "tenant-1", userId: "user-1" },
+};
 
 const post: EditablePost = {
   id: "post-1",
@@ -40,6 +58,7 @@ const post: EditablePost = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockGetRequiredTenant.mockResolvedValue(tenant);
   mockGetRequiredSession.mockResolvedValue({
     user: {
       id: "user-1",
@@ -69,18 +88,21 @@ describe("EditorSection", () => {
 
     await EditorSection({ params: Promise.resolve({ id: "post-1" }) });
 
-    // The ownership filter is an argument to the query. If this ever collapses
-    // to `getEditablePost(id)`, every author can open every draft by id.
+    // Both filters are arguments to the query. If this ever collapses to
+    // `getEditablePost(id)`, every author can open every draft by id — and
+    // without the first argument, every workspace can too.
     expect(mockGetEditablePost).toHaveBeenCalledExactlyOnceWith(
+      "tenant-1",
       "post-1",
       "user-1",
     );
   });
 
   it("404s when the post is missing or belongs to somebody else", async () => {
-    // One `null` covers both cases by construction — the DAL filters on
-    // `authorId`, so a post the caller does not own is indistinguishable here
-    // from one that does not exist. That is the intended answer: a 403 would
+    // One `null` covers all three cases by construction — the DAL filters on
+    // `authorId` and reads on a connection scoped to the workspace, so a post
+    // the caller does not own, and one belonging to another workspace, are
+    // both indistinguishable here from one that does not exist. That is the intended answer: a 403 would
     // confirm which ids are real.
     mockGetEditablePost.mockResolvedValue(null);
 

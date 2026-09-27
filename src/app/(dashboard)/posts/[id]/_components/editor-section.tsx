@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { getRequiredSession } from "@/lib/session";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import { getEditablePost } from "@/lib/dal/posts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostEditor } from "./post-editor";
@@ -14,18 +15,23 @@ import { PostEditor } from "./post-editor";
  * sequence and produce a single component, so splitting them would buy nothing
  * but a second set of streaming markers.
  *
- * `getEditablePost` filters on `authorId` in the query, so a post belonging to
- * somebody else comes back `null` and lands on the same `notFound()` as an id
- * that never existed. That is the intended answer rather than a 403 — see the
- * note on the DAL function.
+ * `getEditablePost` filters on `authorId` in the query *and* runs on a
+ * connection scoped to this workspace, so a post belonging to somebody else —
+ * or to another workspace — comes back `null` and lands on the same
+ * `notFound()` as an id that never existed. That is the intended answer rather
+ * than a 403 — see the note on the DAL function.
  */
 export async function EditorSection({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const [{ id }, session] = await Promise.all([params, getRequiredSession()]);
-  const post = await getEditablePost(id, session.user.id);
+  const [{ id }, session, tenant] = await Promise.all([
+    params,
+    getRequiredSession(),
+    getRequiredTenant(),
+  ]);
+  const post = await getEditablePost(tenant.tenantId, id, session.user.id);
 
   if (!post) notFound();
 

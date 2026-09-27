@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getRecentPostsByAuthor } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 
 type RecentPostsProps = {
   userId: string;
@@ -9,7 +10,12 @@ type RecentPostsProps = {
 const RECENT_POST_LIMIT = 5;
 
 export async function RecentPosts({ userId }: RecentPostsProps) {
-  const posts = await getRecentPostsByAuthor(userId, RECENT_POST_LIMIT);
+  const tenant = await getRequiredTenant();
+  const posts = await getRecentPostsByAuthor(
+    tenant.tenantId,
+    userId,
+    RECENT_POST_LIMIT,
+  );
 
   return (
     <div

@@ -1,13 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/prisma", () => ({
+/**
+ * The tenancy client, because that is what the loaders read through now: the
+ * user loader on the unscoped client, the post loader inside the preview
+ * transaction that lets it see a draft. `withPreviewRead` is modelled as a
+ * plain call-through rather than a no-op so that a loader which stopped using
+ * it would stop reaching `post.findMany` at all.
+ */
+const { prisma } = vi.hoisted(() => ({
   prisma: {
     user: { findMany: vi.fn() },
     post: { findMany: vi.fn() },
   },
 }));
 
-import { prisma } from "@/lib/prisma";
+vi.mock("@/lib/tenancy/client", () => ({
+  unscopedPrisma: prisma,
+  withPreviewRead: (fn: (tx: typeof prisma) => unknown) => fn(prisma),
+}));
+
 import { createPostLoader, createUserLoader } from "./loaders";
 
 const mockUser = {

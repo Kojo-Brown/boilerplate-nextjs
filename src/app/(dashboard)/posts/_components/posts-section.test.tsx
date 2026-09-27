@@ -13,6 +13,14 @@ vi.mock("@/lib/dal/posts", () => ({
 // The manager is a Client Component driven by TanStack Query. What matters
 // here is the data `<PostsSection>` hands it, so it is replaced by something
 // that reports its props.
+
+// The workspace the section reads in. `src/lib/tenancy/active.test.ts` covers
+// how one is chosen; here it only has to exist, so that the scoped read below
+// has a tenant to be scoped to.
+vi.mock("@/lib/tenancy/active", () => ({
+  getRequiredTenant: vi.fn(),
+}));
+
 vi.mock("./posts-manager", () => ({
   PostsManager: ({ userId, initialPosts }: PostsManagerProps) => (
     <div
@@ -25,6 +33,7 @@ vi.mock("./posts-manager", () => ({
 
 import { getRequiredSession } from "@/lib/session";
 import { getPostsByUser } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import type { AuthSession } from "@/lib/session";
 import type { PostSummary } from "@/lib/dal/posts";
 import { PostsSection, PostsSectionFallback } from "./posts-section";
@@ -33,6 +42,15 @@ type PostsManagerProps = { userId: string; initialPosts: PostSummary[] };
 
 const mockGetRequiredSession = vi.mocked(getRequiredSession);
 const mockGetPostsByUser = vi.mocked(getPostsByUser);
+const mockGetRequiredTenant = vi.mocked(getRequiredTenant);
+
+const tenant = {
+  tenantId: "tenant-1",
+  slug: "acme",
+  name: "Acme",
+  role: "OWNER" as const,
+  scope: { tenantId: "tenant-1", userId: "user-1" },
+};
 
 function post(id: string): PostSummary {
   return {
@@ -52,6 +70,7 @@ beforeEach(() => {
     expires: "2099-01-01",
   } as AuthSession);
   mockGetPostsByUser.mockResolvedValue([post("a"), post("b")]);
+  mockGetRequiredTenant.mockResolvedValue(tenant);
 });
 
 describe("PostsSection", () => {
@@ -109,4 +128,13 @@ describe("PostsSectionFallback", () => {
       "h-5",
     );
   });
+});
+
+it("scopes the list to the open workspace as well as the caller", async () => {
+  // Both arguments, and the order matters: with them swapped the query is
+  // scoped to a workspace named after a user, which matches nothing and
+  // renders an empty dashboard rather than an error.
+  await PostsSection();
+
+  expect(mockGetPostsByUser).toHaveBeenCalledWith("tenant-1", "user-1");
 });

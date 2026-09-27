@@ -9,6 +9,14 @@ vi.mock("@/lib/dal/posts", () => ({
   getPostsByUser: vi.fn(),
 }));
 
+// The page resolves a workspace as well as a session, and the real resolver
+// reads `memberships`. Which tenant it picks is `active.test.ts`'s subject;
+// here it only has to be a tenant, so that the session assertion below is
+// measuring the session check rather than a database connection.
+vi.mock("@/lib/tenancy/active", () => ({
+  getRequiredTenant: vi.fn(),
+}));
+
 // The Server Actions these pages reach transitively import `@/auth`, and
 // next-auth's `lib/env.js` does a bare `next/server` import that Vitest's node
 // resolver rejects. Neither action is what is under test here.
@@ -33,10 +41,20 @@ vi.mock("./posts/_components/posts-manager", () => ({
 import { authConfig, PROTECTED_PREFIXES } from "@/auth.config";
 import { getRequiredSession } from "@/lib/session";
 import { getPostsByUser } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import type { AuthSession } from "@/lib/session";
 
 const mockGetRequiredSession = vi.mocked(getRequiredSession);
 const mockGetPostsByUser = vi.mocked(getPostsByUser);
+const mockGetRequiredTenant = vi.mocked(getRequiredTenant);
+
+const tenant = {
+  tenantId: "tenant-1",
+  slug: "acme",
+  name: "Acme",
+  role: "OWNER" as const,
+  scope: { tenantId: "tenant-1", userId: "user-1" },
+};
 
 const session = {
   user: { id: "user-1", role: "USER", email: "grace@example.com" },
@@ -47,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetRequiredSession.mockResolvedValue(session);
   mockGetPostsByUser.mockResolvedValue([]);
+  mockGetRequiredTenant.mockResolvedValue(tenant);
 });
 
 type AuthorizedParams = Parameters<
@@ -135,9 +154,15 @@ describe("/posts", () => {
 
     expect(mockGetRequiredSession).toHaveBeenCalled();
     // The check that matters is not that a session was read but that the query
-    // was fenced by it. A `getPostsByUser` call with anything else here is one
-    // user's dashboard showing another user's drafts.
-    expect(mockGetPostsByUser).toHaveBeenCalledWith(session.user.id);
+    // was fenced by it — now by both halves. A `getPostsByUser` call with
+    // anything else in the first argument is one workspace's dashboard showing
+    // another workspace's posts; anything else in the second is one user's
+    // showing another user's drafts.
+    expect(mockGetRequiredTenant).toHaveBeenCalled();
+    expect(mockGetPostsByUser).toHaveBeenCalledWith(
+      tenant.tenantId,
+      session.user.id,
+    );
   });
 
   it("propagates the redirect when there is no session", async () => {

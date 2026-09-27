@@ -1,5 +1,9 @@
 import { cache } from "react";
-import { prisma } from "@/lib/prisma";
+// Unscoped on purpose, and only for the two reads below. `createUserLoader`
+// reads `users`, which has no tenant column and no policy — a person is not
+// owned by a workspace. `createPostLoader` is the draft-mode read, which is a
+// whole-site preview and runs inside `withPreviewRead`.
+import { unscopedPrisma, withPreviewRead } from "@/lib/tenancy/client";
 import { createBatchLoader } from "@/lib/dal/batch";
 import type { BatchLoader } from "@/lib/dal/batch";
 import type { PostWithAuthor } from "@/lib/dal/posts";
@@ -70,22 +74,34 @@ export function createUserLoader(): BatchLoader<string, UserProfile> {
     name: "userById",
     keyOf: (user) => user.id,
     fetch: (ids) =>
-      prisma.user.findMany({
+      unscopedPrisma.user.findMany({
         where: { id: { in: [...ids] } },
         select: USER_PROFILE_SELECT,
       }),
   });
 }
 
+/**
+ * The unfiltered post read, which is the draft-mode one.
+ *
+ * `loadPost` is documented below as having no access filter, and under
+ * row-level security that is now a statement about a *capability* rather than
+ * about the absence of one: an unscoped connection can see published posts and
+ * nothing else, so reading a draft takes the preview transaction this batch
+ * runs in. Its only callers are `getPostById` and the preview branch of
+ * `getBlogPost`. See `withPreviewRead`.
+ */
 export function createPostLoader(): BatchLoader<string, PostWithAuthor> {
   return createBatchLoader<string, PostWithAuthor>({
     name: "postById",
     keyOf: (post) => post.id,
     fetch: (ids) =>
-      prisma.post.findMany({
-        where: { id: { in: [...ids] } },
-        include: { author: { select: POST_AUTHOR_SELECT } },
-      }),
+      withPreviewRead((tx) =>
+        tx.post.findMany({
+          where: { id: { in: [...ids] } },
+          include: { author: { select: POST_AUTHOR_SELECT } },
+        }),
+      ),
   });
 }
 

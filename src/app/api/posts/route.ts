@@ -1,4 +1,6 @@
 import { defineAuthedRoute } from "@/lib/api/define-authed-route";
+import { ApiError } from "@/lib/api/errors";
+import { getActiveTenant } from "@/lib/tenancy/active";
 import { getPostsByUser } from "@/lib/dal/posts";
 import type { PostSummary } from "@/lib/dal/posts";
 
@@ -15,5 +17,15 @@ import type { PostSummary } from "@/lib/dal/posts";
  * every other route, rather than this file's own `{ error: "Unauthorized" }`.
  */
 export const GET = defineAuthedRoute<PostSummary[]>({
-  handler: ({ user }) => getPostsByUser(user.id),
+  handler: async ({ user }) => {
+    // `getActiveTenant` and not `getRequiredTenant`: the latter redirects,
+    // which is the right answer for a page and the wrong one for a JSON
+    // endpoint — a client asking for data would be handed a 307 to an HTML
+    // page. The error body is the same shape as every other failure here.
+    const tenant = await getActiveTenant();
+    if (!tenant) {
+      throw new ApiError("forbidden", "No workspace is open for this request");
+    }
+    return getPostsByUser(tenant.tenantId, user.id);
+  },
 });

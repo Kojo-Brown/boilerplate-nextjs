@@ -69,6 +69,16 @@ not run a handler until they have one.
   - **Test** `src/proxy.test.ts` › "ignores a %s callbackUrl, which a leading-slash check accepts"
 - **Mitigation** — the preview capability authorises one path, signed, rather than entering draft mode for whatever the caller appended. `src/lib/preview/token.ts` puts the destination inside the signature, so it is an output of verification rather than an input to it.
   - **Test** `src/lib/preview/token.test.ts` › "refuses to sign a path it would not redirect to"
+- **Mitigation** — tenant isolation is enforced by the database, not by the query: `prisma/rls.sql` puts row-level security on every table with a `tenantId`, and `src/lib/tenancy/client.ts` scopes each statement to one workspace. This is the layer the `authorId` filter above cannot be: that filter protects the queries written with it in mind, and the next `findMany` somebody adds to a dashboard passes review, passes its test and passes CI, because in every environment it will be run in there is only one tenant's data to return. Under a policy it returns nothing instead.
+  - **Test** `src/lib/dal/posts.test.ts` › "the dashboard list is scoped to the workspace it was asked for"
+  - **Test** `src/lib/tenancy/client.test.ts` › "makes the setting transaction-local"
+- **Mitigation** — the active workspace arrives in a cookie and is checked against `memberships` on every request, in `src/lib/tenancy/active.ts`. A cookie is a request rather than evidence, and signing one would only prove this server issued it — not that the membership still exists. A cookie naming a workspace the user is not in is refused rather than falling back to one they are, because answering a request for workspace B with workspace A's data shows a page on which every value is real and none of it is what the reader believes they are looking at.
+  - **Test** `src/lib/tenancy/active.test.ts` › "refuses a cookie naming a tenant the user is not a member of"
+  - **Test** `src/lib/tenancy/active.test.ts` › "consults the membership table on every call, not the cookie alone"
+- **Mitigation** — whether the policies are enforced _at all_ is measured rather than assumed. Row-level security is skipped for a superuser and for a role with BYPASSRLS, with no error anywhere, so `scripts/assert-tenant-isolation.ts` creates two tenants against CI's Postgres and probes what a connection scoped to one can reach — and refuses to report on anything else until it has established that the connecting role cannot bypass what it is measuring. `docs/multi-tenancy.md` is the argument; **Gap** below records what it does not cover.
+  - **Test** `scripts/assert-tenant-isolation.test.ts` › "T1 — reports a bypassing role and stops there"
+  - **Test** `scripts/assert-tenant-isolation.test.ts` › "T8 — fires when the scope outlives its transaction"
+- **Gap** — draft mode is a whole-site preview, so a preview token minted inside one workspace opens every workspace's unpublished posts. That is what draft mode has always done here; row-level security made it visible by requiring the access rule to be written down, as `posts_preview_read` in `prisma/rls.sql`. SPEC: Scope draft-mode preview to the tenant that minted the token
 
 ### A02:2021 — Cryptographic Failures
 
@@ -96,8 +106,11 @@ No string-built queries and no HTML sink. The claim worth making here is
 therefore an absence, and an absence across a repository is not something a unit
 test can assert — so the gate checks it directly.
 
-- **Mitigation** — every query goes through Prisma's builder, which parameterises. Nothing in the tree calls `$queryRaw`, `$executeRaw` or either `Unsafe` variant, and `scripts/assert-owasp-checklist.ts` fails the build on the first one that does.
+- **Mitigation** — every query goes through Prisma's builder, which parameterises. Two modules are exempt and both are enumerated in `RAW_SQL_CALL_SITES` with the reason: `src/lib/tenancy/client.ts` issues `SELECT set_config(<name>, <value>, TRUE)` to open a tenant scope, and `src/lib/tenancy/enforcement.ts` issues one constant, parameterless catalogue query. Prisma's builder models rows, not session state, so neither has a non-raw spelling. Both use tagged templates, so every interpolated value is a bind parameter; neither uses an `Unsafe` variant, and `scripts/assert-owasp-checklist.ts` fails the build on any other module that issues a raw query — and on a stale entry in the list.
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "finds a raw query anywhere in the source"
+  - **Test** `scripts/assert-owasp-checklist.test.ts` › "fires on a stale allowlist entry"
+  - **Test** `scripts/assert-owasp-checklist.test.ts` › "still fires on an unlisted module that uses the unsafe form"
+  - **Test** `src/lib/tenancy/client.test.ts` › "passes the values as bind parameters, not as SQL text"
 - **Mitigation** — input is parsed at the edge by Zod and handlers receive parsed values, in `src/lib/api/define-route.ts`. A schema failure is a 422 naming the offending field, not a handler defending itself.
   - **Test** `src/lib/api/define-route.test.ts` › "answers 422 with the offending field prefixed by its source"
   - **Test** `src/lib/api/define-route.test.ts` › "answers 422 when a dynamic segment is missing or renamed"

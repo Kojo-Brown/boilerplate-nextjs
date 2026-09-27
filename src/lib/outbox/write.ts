@@ -62,10 +62,11 @@
  * must be idempotent. Dropping a cache tag twice is dropping a cache tag.
  */
 import { randomUUID } from "node:crypto";
-import { prisma } from "@/lib/prisma";
+import { unscopedPrisma, withTenantTransaction } from "@/lib/tenancy/client";
 import { dispatchOutboxEvent } from "@/lib/outbox/dispatch";
 import type { DispatchContext } from "@/lib/outbox/dispatch";
 import type { OutboxEvent } from "@/lib/outbox/events";
+import type { TenantScope } from "@/lib/tenancy/scope";
 import type { Prisma } from "@prisma/client";
 
 /**
@@ -110,6 +111,24 @@ export class OutboxSealedError extends Error {
 
 export interface WriteWithOutboxOptions {
   /**
+   * The workspace this write happens in.
+   *
+   * Required for anything touching a tenant-scoped table, which today is every
+   * caller: the row-level security policies in `prisma/rls.sql` give an
+   * unscoped connection no INSERT, UPDATE or DELETE policy at all, so a
+   * mutation that omits this does not write to the wrong tenant — it is
+   * refused by the database. That is the intended failure and it is why this
+   * is not defaulted to something.
+   *
+   * It is optional in the type because the outbox table itself is not
+   * tenant-scoped, and a future caller writing only outbox rows — a relay
+   * compaction, an administrative backfill — has no tenant to name. Every
+   * caller that writes a domain row has one, and
+   * `scripts/assert-tenant-isolation.ts` rule R4 is what keeps a Server Action
+   * from quietly becoming the exception.
+   */
+  scope?: TenantScope;
+  /**
    * Where the inline dispatch is running. Defaults to `"server-action"`,
    * because that is what every caller is today and a wrong default here throws
    * on the first call rather than failing quietly. See `@/lib/outbox/dispatch`.
@@ -148,11 +167,27 @@ export async function writeWithOutbox<T>(
 ): Promise<T> {
   const {
     context = "server-action",
+    scope,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxWaitMs = DEFAULT_MAX_WAIT_MS,
   } = options;
 
-  const committed = await prisma.$transaction(
+  // One transaction either way; the scoped form adds the two `set_config`
+  // statements that open the tenant, as the first statements inside it. It
+  // cannot be layered on top — Postgres has no nested transaction for a second
+  // `$transaction` to use, which is also why the scoped *client* is no use in
+  // here. See `@/lib/tenancy/client`.
+  const runInTransaction = scope
+    ? <T>(
+        body: (tx: OutboxTransaction) => Promise<T>,
+        transactionOptions: { timeout: number; maxWait: number },
+      ) => withTenantTransaction(scope, body, transactionOptions)
+    : <T>(
+        body: (tx: OutboxTransaction) => Promise<T>,
+        transactionOptions: { timeout: number; maxWait: number },
+      ) => unscopedPrisma.$transaction(body, transactionOptions);
+
+  const committed = await runInTransaction(
     async (tx) => {
       const events: OutboxEvent[] = [];
       let sealed = false;
@@ -248,7 +283,10 @@ async function dispatchCommitted(
   if (dispatched.length === 0) return;
 
   try {
-    await prisma.outboxEvent.updateMany({
+    // Unscoped: `outbox_events` carries no tenant and has no policy — a row
+    // there describes a write that has already committed, and the relay that
+    // picks it up has no session to be scoped by.
+    await unscopedPrisma.outboxEvent.updateMany({
       where: { id: { in: dispatched }, status: "PENDING" },
       data: {
         status: "PROCESSED",

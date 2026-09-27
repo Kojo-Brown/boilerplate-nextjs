@@ -161,6 +161,43 @@ export const FETCH_CALL_SITES: readonly { file: string; why: string }[] = [
  */
 const RAW_SQL = /\$(?:query|execute)Raw(?:Unsafe)?\b/g;
 
+/**
+ * Prisma's builder has no `SET`, which is the whole reason this list exists.
+ *
+ * T1's original claim was absolute: no raw SQL anywhere. That was true, and it
+ * stopped being true for a reason the rule's own message anticipated — a raw
+ * query that is "genuinely needed" and "behind a reviewed module". Row-level
+ * security is scoped by `set_config('app.tenant_id', …, TRUE)`, and there is
+ * no Prisma API that emits it: the builder models rows, not session state. So
+ * the rule becomes an allowlist, shaped exactly like `FETCH_CALL_SITES`,
+ * rather than a claim nobody can keep.
+ *
+ * What the `why` has to establish is the property A03 actually cares about,
+ * which is not "no raw SQL" but "no SQL assembled from a value". Every entry
+ * below uses a tagged template, so every interpolation is a bind parameter —
+ * and `$queryRawUnsafe`/`$executeRawUnsafe`, which are the string-concatenation
+ * forms, are matched by the same pattern and are in no entry's reason. A file
+ * added here that uses one is a finding this gate cannot make for you.
+ */
+export const RAW_SQL_CALL_SITES: readonly { file: string; why: string }[] = [
+  {
+    file: "src/lib/tenancy/client.ts",
+    why:
+      "`SELECT set_config(<name>, <value>, TRUE)`, the statement that opens a " +
+      "tenant scope. The setting names are module constants and the values " +
+      "are bind parameters in a tagged template; Prisma's builder has no way " +
+      "to express a session setting at all",
+  },
+  {
+    file: "src/lib/tenancy/enforcement.ts",
+    why:
+      "`SELECT reason FROM app.rls_bypass_reasons()`, a constant query with " +
+      "no parameters. It asks the database whether its own policies bind this " +
+      "connection, which is a question about the catalogue rather than about " +
+      "rows, so there is nothing for the builder to model",
+  },
+];
+
 interface TestCitation {
   file: string;
   title: string;
@@ -473,22 +510,40 @@ export function looksLikePath(span: string): boolean {
 export function rawSqlUses(root: string): Finding[] {
   const findings: Finding[] = [];
   const files = [...collectSources(root), ...prismaSources(root)];
+  const allowed = new Set(RAW_SQL_CALL_SITES.map((entry) => entry.file));
+  const found = new Set<string>();
 
   for (const file of files) {
     const code = withoutComments(file.text);
     const methods = [...new Set(code.match(RAW_SQL) ?? [])];
-    if (methods.length > 0) {
-      findings.push({
-        rule: "T1",
-        file: file.relativePath,
-        message:
-          `calls \`${methods.join("`, `")}\`. Every query in this application goes through ` +
-          "Prisma's builder, which parameterises; that is A03's whole claim " +
-          "here, and one raw call is the way it stops being true. If a raw " +
-          "query is genuinely needed, it belongs behind a reviewed module and " +
-          `in ${CHECKLIST_FILE}'s A03 row, not in a route handler.`,
-      });
-    }
+    if (methods.length === 0) continue;
+
+    found.add(file.relativePath);
+    if (allowed.has(file.relativePath)) continue;
+
+    findings.push({
+      rule: "T1",
+      file: file.relativePath,
+      message:
+        `calls \`${methods.join("`, `")}\`. Every query in this application goes through ` +
+        "Prisma's builder, which parameterises; that is A03's whole claim " +
+        "here, and one raw call is the way it stops being true. If a raw " +
+        "query is genuinely needed, it belongs behind a reviewed module, in " +
+        `\`RAW_SQL_CALL_SITES\` with the reason it is safe, and in ${CHECKLIST_FILE}'s ` +
+        "A03 row — not in a route handler.",
+    });
+  }
+
+  for (const entry of RAW_SQL_CALL_SITES) {
+    if (found.has(entry.file)) continue;
+
+    findings.push({
+      rule: "T1",
+      file: entry.file,
+      message:
+        "is listed in `RAW_SQL_CALL_SITES` and no longer issues a raw query. " +
+        "A stale allowlist entry is a hole waiting for a file of that name.",
+    });
   }
 
   return findings;

@@ -1,4 +1,5 @@
 import { getRequiredSession } from "@/lib/session";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import { getPostsByUser } from "@/lib/dal/posts";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PostsManager } from "./posts-manager";
@@ -15,7 +16,12 @@ import { PostsManager } from "./posts-manager";
  */
 export async function PostsSection() {
   const session = await getRequiredSession();
-  const initialPosts = await getPostsByUser(session.user.id);
+  // The workspace is read here rather than passed down, for the same reason
+  // the session is: it is a property of the request, and a component that
+  // reads tenant-scoped data should say which tenant it is reading. Both are
+  // memoised per request, so the read costs nothing after the first.
+  const tenant = await getRequiredTenant();
+  const initialPosts = await getPostsByUser(tenant.tenantId, session.user.id);
 
   return (
     <div className="flex flex-col gap-6">

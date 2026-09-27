@@ -9,6 +9,7 @@ import {
 import { writeWithOutbox } from "@/lib/outbox/write";
 import { idempotencyKeySchema } from "@/lib/actions/idempotency-key";
 import { getEditablePost } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import type { PostSummary } from "@/lib/dal/posts";
 import type { SavePostOutcome } from "@/lib/concurrency/post-conflict";
 
@@ -206,23 +207,34 @@ export const createPostAction = defineAuthedAction({
     key: (input) => input.idempotencyKey,
     output: postSummaryOutput,
   },
-  handler: async ({ input, user }): Promise<PostSummary> =>
-    writeWithOutbox(async ({ tx, emit }) => {
-      const post = await tx.post.create({
-        data: {
-          title: input.title,
-          ...(input.content !== undefined && { content: input.content }),
-          authorId: user.id,
-        },
-        select: postSummarySelect,
-      });
+  handler: async ({ input, user }): Promise<PostSummary> => {
+    const tenant = await getRequiredTenant();
 
-      emit({
-        type: "post.created",
-        payload: { postId: post.id, published: post.published },
-      });
-      return post;
-    }),
+    return writeWithOutbox(
+      async ({ tx, emit }) => {
+        const post = await tx.post.create({
+          data: {
+            title: input.title,
+            ...(input.content !== undefined && { content: input.content }),
+            authorId: user.id,
+            // Written explicitly and also enforced: the `WITH CHECK` half of
+            // `posts_tenant_scope` refuses an insert whose `tenantId` is not the
+            // open scope's, so this column cannot disagree with the connection
+            // it is written on. Omitting it would fail the `NOT NULL` first.
+            tenantId: tenant.tenantId,
+          },
+          select: postSummarySelect,
+        });
+
+        emit({
+          type: "post.created",
+          payload: { postId: post.id, published: post.published },
+        });
+        return post;
+      },
+      { scope: tenant.scope },
+    );
+  },
 });
 
 /** The fields `/posts/[id]` reads, so the editor's read and write agree. */
@@ -296,6 +308,8 @@ export const updatePostAction = defineAuthedFormAction({
   input: updatePostSchema,
   unauthenticatedMessage: "You must be signed in to edit a post.",
   handler: async ({ input, user }): Promise<SavePostOutcome> => {
+    const tenant = await getRequiredTenant();
+
     // The transaction covers the ownership read and the conditional write, so
     // the two see one snapshot. The conflict re-read below is deliberately
     // *outside* it: it exists to report what the row looks like now, which is
@@ -303,57 +317,60 @@ export const updatePostAction = defineAuthedFormAction({
     // answer — and it runs through the DAL, on the pooled client, which inside
     // a transaction callback would be a second connection pretending to be the
     // same one.
-    const outcome = await writeWithOutbox(async ({ tx, emit }) => {
-      const existing = await tx.post.findUnique({
-        where: { id: input.postId },
-        select: { authorId: true, published: true },
-      });
+    const outcome = await writeWithOutbox(
+      async ({ tx, emit }) => {
+        const existing = await tx.post.findUnique({
+          where: { id: input.postId },
+          select: { authorId: true, published: true },
+        });
 
-      if (!existing) {
-        throw new ActionError("Post not found.");
-      }
+        if (!existing) {
+          throw new ActionError("Post not found.");
+        }
 
-      if (existing.authorId !== user.id) {
-        throw new ActionError("You can only edit your own posts.");
-      }
+        if (existing.authorId !== user.id) {
+          throw new ActionError("You can only edit your own posts.");
+        }
 
-      const [updated] = await tx.post.updateManyAndReturn({
-        where: {
-          id: input.postId,
-          // Belt and braces beside the ownership check above. That check is a
-          // separate statement, so it is a claim about a moment that has passed;
-          // this one is part of the write itself and cannot be outrun.
-          authorId: user.id,
-          version: input.expectedVersion,
-        },
-        data: {
-          title: input.title,
-          content: input.content,
-          // The increment is what makes the token move, and it is in the same
-          // statement as the write for the same reason the check is: `version + 1`
-          // computed in JavaScript from a value read earlier is two writers
-          // agreeing on the same next number.
-          version: { increment: 1 },
-        },
-        select: editablePostSelect,
-      });
+        const [updated] = await tx.post.updateManyAndReturn({
+          where: {
+            id: input.postId,
+            // Belt and braces beside the ownership check above. That check is a
+            // separate statement, so it is a claim about a moment that has passed;
+            // this one is part of the write itself and cannot be outrun.
+            authorId: user.id,
+            version: input.expectedVersion,
+          },
+          data: {
+            title: input.title,
+            content: input.content,
+            // The increment is what makes the token move, and it is in the same
+            // statement as the write for the same reason the check is: `version + 1`
+            // computed in JavaScript from a value read earlier is two writers
+            // agreeing on the same next number.
+            version: { increment: 1 },
+          },
+          select: editablePostSelect,
+        });
 
-      // Nothing written, so nothing emitted: an event for a save that matched
-      // no rows would be an announcement of a change that did not happen, and
-      // the outbox would deliver it faithfully.
-      if (!updated) return { status: "stale" } as const;
+        // Nothing written, so nothing emitted: an event for a save that matched
+        // no rows would be an announcement of a change that did not happen, and
+        // the outbox would deliver it faithfully.
+        if (!updated) return { status: "stale" } as const;
 
-      emit({
-        type: "post.updated",
-        payload: {
-          postId: updated.id,
-          wasPublished: existing.published,
-          isPublished: updated.published,
-        },
-      });
+        emit({
+          type: "post.updated",
+          payload: {
+            postId: updated.id,
+            wasPublished: existing.published,
+            isPublished: updated.published,
+          },
+        });
 
-      return { status: "saved", post: updated } as const;
-    });
+        return { status: "saved", post: updated } as const;
+      },
+      { scope: tenant.scope },
+    );
 
     if (outcome.status === "stale") {
       // Nothing matched. Ownership was established above and does not change,
@@ -369,7 +386,11 @@ export const updatePostAction = defineAuthedFormAction({
       // cache, it is the wrong answer to "did somebody else change this?",
       // which decides whether the author is shown a conflict panel. See
       // `@/lib/request-memo`.
-      const current = await getEditablePost.uncached(input.postId, user.id);
+      const current = await getEditablePost.uncached(
+        tenant.tenantId,
+        input.postId,
+        user.id,
+      );
 
       if (!current) {
         throw new ActionError("Post not found.");
@@ -404,78 +425,90 @@ export const deletePostAction = defineAuthedAction({
   name: "deletePost",
   input: postIdSchema,
   unauthenticatedMessage: "You must be signed in to delete a post.",
-  handler: async ({ input: postId, user }): Promise<void> =>
-    writeWithOutbox(async ({ tx, emit }) => {
-      // `published` is selected alongside the ownership check because it is not
-      // recoverable afterwards: once the row is deleted there is no way to ask
-      // whether the page being dropped was ever public, and a delete that guesses
-      // would either leave a 404'd post cached or purge the blog on every draft.
-      //
-      // In one transaction with the delete, that read is also no longer a claim
-      // about a moment that has passed — a publish landing between the two would
-      // otherwise decide the invalidation from a value that was already stale.
-      const post = await tx.post.findUnique({
-        where: { id: postId },
-        select: { authorId: true, published: true },
-      });
+  handler: async ({ input: postId, user }): Promise<void> => {
+    const tenant = await getRequiredTenant();
 
-      if (!post) {
-        throw new ActionError("Post not found.");
-      }
+    return writeWithOutbox(
+      async ({ tx, emit }) => {
+        // `published` is selected alongside the ownership check because it is not
+        // recoverable afterwards: once the row is deleted there is no way to ask
+        // whether the page being dropped was ever public, and a delete that guesses
+        // would either leave a 404'd post cached or purge the blog on every draft.
+        //
+        // In one transaction with the delete, that read is also no longer a claim
+        // about a moment that has passed — a publish landing between the two would
+        // otherwise decide the invalidation from a value that was already stale.
+        const post = await tx.post.findUnique({
+          where: { id: postId },
+          select: { authorId: true, published: true },
+        });
 
-      if (post.authorId !== user.id) {
-        throw new ActionError("You can only delete your own posts.");
-      }
+        if (!post) {
+          throw new ActionError("Post not found.");
+        }
 
-      await tx.post.delete({ where: { id: postId } });
+        if (post.authorId !== user.id) {
+          throw new ActionError("You can only delete your own posts.");
+        }
 
-      emit({
-        type: "post.deleted",
-        payload: { postId, wasPublished: post.published },
-      });
-    }),
+        await tx.post.delete({ where: { id: postId } });
+
+        emit({
+          type: "post.deleted",
+          payload: { postId, wasPublished: post.published },
+        });
+      },
+      { scope: tenant.scope },
+    );
+  },
 });
 
 export const togglePublishAction = defineAuthedAction({
   name: "togglePublish",
   input: postIdSchema,
   unauthenticatedMessage: "You must be signed in to update a post.",
-  handler: async ({ input: postId, user }): Promise<PostSummary> =>
-    writeWithOutbox(async ({ tx, emit }) => {
-      const post = await tx.post.findUnique({
-        where: { id: postId },
-        select: { authorId: true, published: true },
-      });
+  handler: async ({ input: postId, user }): Promise<PostSummary> => {
+    const tenant = await getRequiredTenant();
 
-      if (!post) {
-        throw new ActionError("Post not found.");
-      }
+    return writeWithOutbox(
+      async ({ tx, emit }) => {
+        const post = await tx.post.findUnique({
+          where: { id: postId },
+          select: { authorId: true, published: true },
+        });
 
-      if (post.authorId !== user.id) {
-        throw new ActionError("You can only update your own posts.");
-      }
+        if (!post) {
+          throw new ActionError("Post not found.");
+        }
 
-      // Still read-then-write rather than a conditional update on `published`,
-      // and the transaction does not change that: two rapid toggles can still
-      // both read `false` and both write `true` under the default isolation
-      // level. What the transaction does fix is the *invalidation* — the
-      // before/after pair now comes from one snapshot, so it cannot describe a
-      // transition that never happened. See `docs/optimistic-concurrency.md`
-      // for why `published` is deliberately outside the version token.
-      const updated = await tx.post.update({
-        where: { id: postId },
-        data: { published: !post.published },
-        select: postSummarySelect,
-      });
+        if (post.authorId !== user.id) {
+          throw new ActionError("You can only update your own posts.");
+        }
 
-      emit({
-        type: "post.updated",
-        payload: {
-          postId,
-          wasPublished: post.published,
-          isPublished: updated.published,
-        },
-      });
-      return updated;
-    }),
+        // Still read-then-write rather than a conditional update on `published`,
+        // and the transaction does not change that: two rapid toggles can still
+        // both read `false` and both write `true` under the default isolation
+        // level. What the transaction does fix is the *invalidation* — the
+        // before/after pair now comes from one snapshot, so it cannot describe a
+        // transition that never happened. See `docs/optimistic-concurrency.md`
+        // for why `published` is deliberately outside the version token.
+        const updated = await tx.post.update({
+          where: { id: postId },
+          data: { published: !post.published },
+          select: postSummarySelect,
+        });
+
+        emit({
+          type: "post.updated",
+          payload: {
+            postId,
+            wasPublished: post.published,
+            isPublished: updated.published,
+          },
+        });
+        return updated;
+      },
+      { scope: tenant.scope },
+    );
+  },
 });

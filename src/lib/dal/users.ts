@@ -1,4 +1,9 @@
-import { prisma } from "@/lib/prisma";
+// Unscoped on purpose: `users` has no tenant column and no policy. A person
+// is not owned by a workspace — they are a member of several — so scoping this
+// table would make "who wrote this" unanswerable across a tenant boundary that
+// the posts themselves already enforce. What a tenant may *learn* about a user
+// is bounded by which rows it can read, not by this table.
+import { unscopedPrisma } from "@/lib/tenancy/client";
 import { requestMemo } from "@/lib/request-memo";
 import { loadUser } from "@/lib/dal/loaders";
 import type { User } from "@prisma/client";
@@ -39,14 +44,14 @@ export function getUserById(id: string): Promise<UserProfile | null> {
  */
 export const getUserByEmail = requestMemo(
   async (email: string): Promise<UserProfile | null> =>
-    prisma.user.findUnique({
+    unscopedPrisma.user.findUnique({
       where: { email },
       select: USER_PROFILE_SELECT,
     }),
 );
 
 export const getAllUsers = requestMemo(async (): Promise<UserProfile[]> =>
-  prisma.user.findMany({
+  unscopedPrisma.user.findMany({
     select: USER_PROFILE_SELECT,
     orderBy: { createdAt: "desc" },
   }),

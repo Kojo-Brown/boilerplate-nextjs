@@ -34,6 +34,7 @@ const TITLE = `E2E webhook post ${Date.now()}`;
 
 let postId: string | undefined;
 let authorId: string | undefined;
+let tenantId: string | undefined;
 
 test.beforeAll(async () => {
   // The signer in this process and the one in the server must derive the same
@@ -48,6 +49,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   if (postId) await prisma.post.delete({ where: { id: postId } });
+  if (tenantId) await prisma.tenant.delete({ where: { id: tenantId } });
   if (authorId) await prisma.user.delete({ where: { id: authorId } });
   await prisma.$disconnect();
 });
@@ -129,12 +131,26 @@ test.describe("On-demand revalidation webhook", () => {
     });
     authorId = author.id;
 
+    // A workspace of its own, because `posts.tenantId` is required and this
+    // row is deliberately written behind the application's back — the point
+    // of the test is that nothing in the app knows about it until the webhook
+    // arrives. Reusing a seeded tenant would make the fixture depend on the
+    // seed having run.
+    const tenant = await prisma.tenant.create({
+      data: {
+        slug: `e2e-webhook-${Date.now()}`,
+        name: "E2E Webhook Workspace",
+      },
+    });
+    tenantId = tenant.id;
+
     const created = await prisma.post.create({
       data: {
         title: TITLE,
         content: "Inserted without going through a Server Action.",
         published: true,
         authorId: author.id,
+        tenantId: tenant.id,
       },
     });
     postId = created.id;
