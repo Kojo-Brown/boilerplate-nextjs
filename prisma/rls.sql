@@ -66,6 +66,35 @@ $$;
 COMMENT ON FUNCTION app.current_tenant_id() IS
   'The tenant the current transaction is scoped to, or NULL. Set by @/lib/tenancy/client via set_config(..., true), which is transaction-local.';
 
+-- The user the current transaction is acting for, or NULL.
+--
+-- A separate setting rather than something derived from the session: the
+-- database connection is pooled and shared, so it has no user of its own.
+--
+-- Defined here, beside the tenant accessor, rather than next to the
+-- `memberships` policies that were its first caller. That is not tidiness — it
+-- is the fix for a broken build. This file is sent to Postgres as one
+-- multi-statement query, so a policy referencing a function the file has not
+-- defined *yet* fails with `function app.current_user_id() does not exist`.
+-- It failed only on a *fresh* database: every re-apply to a database that
+-- already had the function succeeded, which is precisely the "a file that can
+-- only be applied to a database that already has the previous version" trap
+-- this file's header warns about, arriving from the other direction. Both
+-- accessors now live in this section, so the ordering cannot rot again, and
+-- rule R6 in `scripts/assert-tenant-isolation.ts` fails on any `app.*`
+-- function used above its own definition.
+CREATE OR REPLACE FUNCTION app.current_user_id()
+  RETURNS text
+  LANGUAGE sql
+  STABLE
+  SET search_path = ''
+AS $$
+  SELECT NULLIF(pg_catalog.current_setting('app.user_id', true), '')
+$$;
+
+COMMENT ON FUNCTION app.current_user_id() IS
+  'The user the current transaction is acting for, or NULL. Set alongside app.tenant_id by @/lib/tenancy/client.';
+
 -- ---------------------------------------------------------------------------
 -- The application role
 -- ---------------------------------------------------------------------------
@@ -101,6 +130,7 @@ ALTER ROLE app_rls NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION
 GRANT USAGE ON SCHEMA public TO app_rls;
 GRANT USAGE ON SCHEMA app TO app_rls;
 GRANT EXECUTE ON FUNCTION app.current_tenant_id() TO app_rls;
+GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_rls;
 
 -- DML only. The application never issues DDL: `prisma db push` and this file
 -- are applied by an administrative connection, which is what keeps a
@@ -280,28 +310,13 @@ CREATE POLICY tenants_self_update ON public.tenants
 -- This table is also read *outside* any tenant scope, by
 -- `@/lib/tenancy/active`, which has to answer "which tenants may this user
 -- open" before a scope exists to ask it in. That read goes through
--- `withoutTenantScope`, is the only unscoped read of this table in the
+-- `withUserTransaction`, is the only unscoped read of this table in the
 -- application, and is why the policy below has an explicit user branch rather
 -- than being tenant-only: the alternative is an unscoped connection that can
 -- read every membership row in the installation.
 --
--- `app.current_user_id()` is set by the same mechanism as the tenant, and is
--- deliberately a *separate* GUC rather than being derived from the session:
--- the database connection is pooled and shared, so it has no user of its own.
-
-CREATE OR REPLACE FUNCTION app.current_user_id()
-  RETURNS text
-  LANGUAGE sql
-  STABLE
-  SET search_path = ''
-AS $$
-  SELECT NULLIF(pg_catalog.current_setting('app.user_id', true), '')
-$$;
-
-COMMENT ON FUNCTION app.current_user_id() IS
-  'The user the current transaction is acting for, or NULL. Set alongside app.tenant_id by @/lib/tenancy/client.';
-
-GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_rls;
+-- `app.current_user_id()` is defined at the top of this file, with the tenant
+-- accessor; see the note there for why both live in one place.
 
 ALTER TABLE public.memberships ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.memberships FORCE ROW LEVEL SECURITY;

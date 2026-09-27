@@ -451,6 +451,92 @@ export function scopedActionWrites(root: string): Finding[] {
   return findings;
 }
 
+/**
+ * R6 — no `app.*` function is used above its own definition.
+ *
+ * `prisma/rls.sql` is sent to Postgres as one multi-statement query, so a
+ * policy whose predicate calls a function the file has not defined yet fails
+ * outright: `function app.current_user_id() does not exist`.
+ *
+ * The reason this needs a rule rather than care is that it is invisible on
+ * every database that matters to the person making the mistake. Re-applying
+ * the file to a database that already has the function succeeds, every time —
+ * so the author sees green locally and the build breaks on the one database
+ * that was fresh, which is CI's. That is exactly what happened when
+ * `tenants_member_read` was added: it referenced `app.current_user_id()`
+ * thirty lines above the `CREATE OR REPLACE FUNCTION` that defines it.
+ *
+ * The check is positional and deliberately crude — first definition versus
+ * first use, by character offset. A file that defines everything up front,
+ * which is now the convention here, passes trivially.
+ */
+export function functionsDefinedBeforeUse(root: string): Finding[] {
+  const findings: Finding[] = [];
+  const rlsPath = path.join(root, RLS_FILE);
+  if (!existsSync(rlsPath)) return findings;
+
+  // Comments are stripped first: this file explains itself at length, and a
+  // function named in a paragraph above its definition is prose, not a call.
+  const sql = readFileSync(rlsPath, "utf8")
+    .split("\n")
+    .filter((line) => !line.trimStart().startsWith("--"))
+    .join("\n");
+
+  const defined = new Map<string, number>();
+  for (const match of sql.matchAll(
+    /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+app\.(\w+)\s*\(/gi,
+  )) {
+    if (!defined.has(match[1] ?? "")) {
+      defined.set(match[1] ?? "", match.index ?? 0);
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const match of sql.matchAll(/\bapp\.(\w+)\s*\(/g)) {
+    const name = match[1] ?? "";
+    const at = match.index ?? 0;
+    if (seen.has(name)) continue;
+
+    const definedAt = defined.get(name);
+
+    // A definition is itself a use by this regex; skip the one that *is* the
+    // definition, and only then record that we have seen this name.
+    if (definedAt === at) {
+      seen.add(name);
+      continue;
+    }
+
+    seen.add(name);
+
+    if (definedAt === undefined) {
+      findings.push({
+        rule: "R6",
+        where: `${RLS_FILE}:app.${name}`,
+        message:
+          "is called by a policy and never defined in this file. The whole " +
+          "file is one multi-statement query, so this fails on apply.",
+      });
+      continue;
+    }
+
+    if (at < definedAt) {
+      findings.push({
+        rule: "R6",
+        where: `${RLS_FILE}:app.${name}`,
+        message:
+          "is used before it is defined. The file is applied as one " +
+          "multi-statement query, so this fails with `function app." +
+          `${name}() does not exist\` — but only on a database that does not ` +
+          "already have it, which means every local re-apply passes and CI's " +
+          "fresh database is the one that breaks. Define it in the accessor " +
+          "section at the top.",
+      });
+    }
+  }
+
+  return findings;
+}
+
 export function staticFindings(root: string): Finding[] {
   return [
     ...policiesCoverSchema(root),
@@ -458,6 +544,7 @@ export function staticFindings(root: string): Finding[] {
     ...directPrismaImports(root),
     ...unscopedReaders(root),
     ...scopedActionWrites(root),
+    ...functionsDefinedBeforeUse(root),
   ];
 }
 

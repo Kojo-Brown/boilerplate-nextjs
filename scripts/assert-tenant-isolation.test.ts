@@ -8,6 +8,7 @@ import {
   FIXTURE,
   UNSCOPED_READERS,
   directPrismaImports,
+  functionsDefinedBeforeUse,
   gucNamesAgree,
   policiesCoverSchema,
   runtimeFindings,
@@ -40,6 +41,8 @@ model Tenant {
 `;
 
 const GOOD_RLS = `
+CREATE OR REPLACE FUNCTION app.current_tenant_id() RETURNS text AS $$ SELECT '' $$;
+CREATE OR REPLACE FUNCTION app.current_user_id() RETURNS text AS $$ SELECT '' $$;
 ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.posts FORCE ROW LEVEL SECURITY;
 CREATE POLICY posts_tenant_scope ON public.posts
@@ -370,6 +373,74 @@ describe("R5 — actions pass a scope to writeWithOutbox", () => {
     write("src/actions/preview.ts", `export const x = 1;`);
 
     expect(scopedActionWrites(root)).toEqual([]);
+    cleanup();
+  });
+});
+
+describe("R6 — app.* functions are defined before they are used", () => {
+  it("passes on a file that defines its accessors first", () => {
+    write(
+      "prisma/rls.sql",
+      `CREATE FUNCTION app.current_user_id() RETURNS text AS $$ SELECT '' $$;
+CREATE POLICY p ON public.tenants USING (app.current_user_id() IS NOT NULL);`,
+    );
+
+    expect(functionsDefinedBeforeUse(root)).toEqual([]);
+    cleanup();
+  });
+
+  it("fires on the regression that broke the build", () => {
+    // `tenants_member_read` referenced `app.current_user_id()` thirty lines
+    // above the `CREATE OR REPLACE FUNCTION` defining it. The file is one
+    // multi-statement query, so it failed on apply — but only against a
+    // database that did not already have the function, which meant every
+    // local re-apply passed and CI's fresh Postgres was the one that broke.
+    write(
+      "prisma/rls.sql",
+      `CREATE POLICY p ON public.tenants USING (app.current_user_id() IS NOT NULL);
+CREATE OR REPLACE FUNCTION app.current_user_id() RETURNS text AS $$ SELECT '' $$;`,
+    );
+
+    const findings = functionsDefinedBeforeUse(root);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      rule: "R6",
+      where: "prisma/rls.sql:app.current_user_id",
+    });
+    expect(findings[0]?.message).toContain("used before it is defined");
+    cleanup();
+  });
+
+  it("fires on a function that is called and never defined", () => {
+    write("prisma/rls.sql", `CREATE POLICY p ON t USING (app.nope());`);
+
+    expect(functionsDefinedBeforeUse(root)[0]?.message).toContain(
+      "never defined",
+    );
+    cleanup();
+  });
+
+  it("does not read a function named in a comment as a call", () => {
+    // This file explains itself at length, and several paragraphs name an
+    // accessor above the statement that defines it.
+    write(
+      "prisma/rls.sql",
+      `-- app.current_user_id() is defined below, with the tenant accessor.
+CREATE FUNCTION app.current_user_id() RETURNS text AS $$ SELECT '' $$;`,
+    );
+
+    expect(functionsDefinedBeforeUse(root)).toEqual([]);
+    cleanup();
+  });
+
+  it("does not report a definition as a use of itself", () => {
+    write(
+      "prisma/rls.sql",
+      `CREATE OR REPLACE FUNCTION app.only() RETURNS text AS $$ SELECT '' $$;`,
+    );
+
+    expect(functionsDefinedBeforeUse(root)).toEqual([]);
     cleanup();
   });
 });

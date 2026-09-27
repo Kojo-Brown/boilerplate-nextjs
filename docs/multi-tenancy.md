@@ -173,6 +173,12 @@ Static, over the tree:
 - **R3** nothing imports `@/lib/prisma` outside the enumerated modules.
 - **R4** every unscoped or preview read is enumerated, with its reason.
 - **R5** every `writeWithOutbox` in `src/actions/` passes a scope.
+- **R6** no `app.*` function in `rls.sql` is used above its own definition. The
+  file is applied as one multi-statement query, so a policy calling a function
+  the file has not defined yet fails outright — and only on a database that
+  does not already have it, which means every local re-apply passes and a fresh
+  CI database is the one that breaks. This rule exists because that is exactly
+  how it broke.
 
 Live, against CI's Postgres, with two tenants and four posts:
 
