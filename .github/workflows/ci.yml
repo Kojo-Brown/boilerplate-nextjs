@@ -226,7 +226,7 @@ jobs:
       # on, so a source edit reuses the previous run's cache instead of starting
       # cold. Per Node major, since the two produce different artefacts.
       - name: Restore Next.js build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .next/cache
           key: ${{ runner.os }}-node${{ matrix.node-version }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('src/**/*.[jt]s', 'src/**/*.[jt]sx') }}
