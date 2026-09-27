@@ -1,5 +1,6 @@
 import { SESSION_COOKIE_NAME, USE_SECURE_COOKIES } from "@/lib/auth/deployment";
 import { SESSION_IDLE_MAX_AGE_S } from "@/lib/auth/policy";
+import { safeRedirectPath } from "@/lib/security/safe-redirect";
 import type { NextAuthConfig } from "next-auth";
 
 /**
@@ -30,6 +31,31 @@ export const PROTECTED_PREFIXES = [
 ];
 export const ADMIN_PREFIXES = ["/admin"];
 export const AUTH_PAGES = ["/login", "/register"];
+
+/** Where a signed-in visitor lands when no usable `callbackUrl` says otherwise. */
+export const POST_LOGIN_PATH = "/dashboard";
+
+/**
+ * The URL an anonymous request to a gated route is sent to.
+ *
+ * Both refusals below build the same thing, and building it twice is how the two
+ * copies drift — one of them gaining a `safeRedirectPath` the other does not.
+ *
+ * `callbackUrl` is passed through the same predicate that reads it back, which
+ * is belt-and-braces rather than a fix: a `nextUrl.pathname` beginning `//` is
+ * possible (a request to `https://app.example//evil.example/x` has exactly
+ * that), but such a path matches no prefix in either list, so it never reaches
+ * here. Writing the check on both sides means that argument does not have to be
+ * re-derived by whoever adds the next prefix.
+ */
+function loginRedirect(nextUrl: URL): Response {
+  const loginUrl = new URL("/login", nextUrl);
+  loginUrl.searchParams.set(
+    "callbackUrl",
+    safeRedirectPath(nextUrl.pathname + nextUrl.search, POST_LOGIN_PATH),
+  );
+  return Response.redirect(loginUrl);
+}
 
 export const authConfig = {
   pages: {
@@ -105,36 +131,35 @@ export const authConfig = {
 
       // Admin routes: must be authenticated AND have ADMIN role.
       if (isAdminRoute) {
-        if (!isLoggedIn) {
-          const loginUrl = new URL("/login", nextUrl);
-          loginUrl.searchParams.set(
-            "callbackUrl",
-            nextUrl.pathname + nextUrl.search,
-          );
-          return Response.redirect(loginUrl);
-        }
+        if (!isLoggedIn) return loginRedirect(nextUrl);
         if (!isAdmin) {
           return Response.redirect(new URL("/forbidden", nextUrl));
         }
       }
 
       // Regular protected routes: must be authenticated.
-      if (isProtected && !isLoggedIn) {
-        const loginUrl = new URL("/login", nextUrl);
-        loginUrl.searchParams.set(
-          "callbackUrl",
-          nextUrl.pathname + nextUrl.search,
-        );
-        return Response.redirect(loginUrl);
-      }
+      if (isProtected && !isLoggedIn) return loginRedirect(nextUrl);
 
-      // Authenticated users are redirected away from auth pages.
+      // Authenticated users are redirected away from auth pages, to wherever
+      // the gate above said they were going.
+      //
+      // `safeRedirectPath` and not `callbackUrl.startsWith("/")`, which is what
+      // this was and which was an open redirect: `//evil.example` starts with a
+      // slash and `new URL("//evil.example", nextUrl)` is
+      // `https://evil.example/`, so `/login?callbackUrl=//evil.example` bounced
+      // any signed-in visitor straight off the origin — from a link that begins
+      // with this application's own hostname, which is the entire value of the
+      // technique to whoever sends it. `//` on its own was worse in a smaller
+      // way: `new URL("//", nextUrl)` throws, so the proxy answered 500.
+      //
+      // The parameter is one this file writes, a few lines up. That is not a
+      // reason to trust it — it arrives back over the network like anything else
+      // in a URL, and nothing stops a caller from putting their own value there.
       if (isLoggedIn && isAuthPage) {
-        const callbackUrl = nextUrl.searchParams.get("callbackUrl");
-        const destination =
-          callbackUrl && callbackUrl.startsWith("/")
-            ? callbackUrl
-            : "/dashboard";
+        const destination = safeRedirectPath(
+          nextUrl.searchParams.get("callbackUrl"),
+          POST_LOGIN_PATH,
+        );
         return Response.redirect(new URL(destination, nextUrl));
       }
 

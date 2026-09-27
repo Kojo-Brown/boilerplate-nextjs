@@ -590,6 +590,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # Holds docs/owasp-top-10.md to this tree. Two rule families: the
+      # checklist's own citations must resolve (every module it names exists,
+      # every test it cites is declared and is collected by Vitest, every
+      # acknowledged gap tracks an open SPEC item), and the four claims it makes
+      # about the whole repository — no raw SQL, no outbound `fetch` outside the
+      # enumerated call sites, an https-anchored image allowlist, a frozen
+      # supply chain — must hold.
+      #
+      # The second family is why this is a gate and not a document review: an
+      # absence across a repository is not something a unit test can assert. The
+      # first is why it exists at all — a security checklist is the file most
+      # likely to be wrong and least likely to be noticed being wrong, and
+      # binding it to the tree makes its decay a build failure.
+      #
+      # Static analysis, so it needs no build output; it sits here with the
+      # other gates.
+      - name: Assert OWASP checklist
+        run: pnpm exec tsx scripts/assert-owasp-checklist.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:

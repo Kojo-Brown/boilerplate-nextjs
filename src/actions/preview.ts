@@ -31,7 +31,8 @@ import { defineNavigationAction } from "@/lib/actions/define-action";
 import { defineAuthedAction } from "@/lib/actions/define-authed-action";
 import { ActionError } from "@/lib/actions/result";
 import { getPostById } from "@/lib/dal/posts";
-import { createPreviewLink, isSafePreviewPath } from "@/lib/preview/token";
+import { createPreviewLink } from "@/lib/preview/token";
+import { isSiteRelativePath } from "@/lib/security/safe-redirect";
 import type { Route } from "next";
 
 /** Where the banner's "Exit preview" lands when it is given nowhere to go. */
@@ -87,7 +88,7 @@ export const createPreviewLinkAction = defineAuthedAction({
  *
  * `returnTo` is attacker-controllable — it arrives in a form post like anything
  * else — so it is validated rather than trusted, even though the only thing on
- * the other side of it is a redirect to our own origin. `isSafePreviewPath`
+ * the other side of it is a redirect to our own origin. `isSiteRelativePath`
  * rejects the protocol-relative and absolute forms that would make it someone
  * else's origin.
  *
@@ -103,7 +104,7 @@ export const exitPreviewAction = defineNavigationAction({
   input: z.object({
     returnTo: z
       .string()
-      .refine(isSafePreviewPath, "Not a safe in-app path")
+      .refine(isSiteRelativePath, "Not a safe in-app path")
       .catch(EXIT_FALLBACK_PATH),
   }),
   handler: async ({ input }): Promise<void> => {

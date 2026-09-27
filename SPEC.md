@@ -431,6 +431,18 @@ the factory table, the Next comparison, and these gaps.
 - [ ] OWASP Top 10 checklist with a test per mitigation
 - [ ] Multi-tenancy with row-level security and a tenant-scoped Prisma client
 - [ ] File-upload validation: content sniffing, size caps, and antivirus hook
+- [ ] Password hashing that records its own cost parameters, with verify-then-rehash on sign-in
+- [ ] Sign out everywhere: a password-change action that revokes every session for a user
+- [ ] Log redaction: a serialiser that refuses to print a secret-shaped value
+- [ ] Pin every GitHub Action to a commit digest, with Dependabot digest updates
+- [ ] A scheduled dependency-advisory audit that opens an issue rather than failing a pull request
+
+_The five items above came out of the OWASP checklist item rather than being
+invented for it: each is a gap `docs/owasp-top-10.md` records against a category,
+and `scripts/assert-owasp-checklist.ts` rule C5 requires every such gap to name an
+open item here — so ticking one of them fails the gate until that document is
+revisited. They are deliberately last in this phase, so the order the scheduled
+agent reads is unchanged._
 
 ## Phase 12 — Accessibility & TDD
 
