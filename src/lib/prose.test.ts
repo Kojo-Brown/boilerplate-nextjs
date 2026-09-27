@@ -61,6 +61,27 @@ describe("toParagraphs", () => {
     expect(toParagraphs("   \n\n \t \n")).toEqual([]);
   });
 
+  it("keeps text that looks like markup as text", () => {
+    // The decision this module's header states, asserted rather than only
+    // written down: `toParagraphs` splits and trims and does nothing else, so a
+    // post body containing a tag, an entity or markdown syntax comes out as the
+    // characters the author typed. React escapes them at render, and there is no
+    // sanitiser here because there is nothing to sanitise — adding a markdown
+    // renderer later is what would need one, and this is the test that would
+    // then fail rather than a review catching it.
+    const hostile = "<script>alert(1)</script>";
+
+    expect(toParagraphs(hostile)).toEqual([hostile]);
+    expect(toParagraphs("<b>bold</b>\n\n&lt;img&gt;")).toEqual([
+      "<b>bold</b>",
+      "&lt;img&gt;",
+    ]);
+    expect(toParagraphs("# Heading\n\n*not emphasis*")).toEqual([
+      "# Heading",
+      "*not emphasis*",
+    ]);
+  });
+
   it("never yields an empty or untrimmed paragraph, whatever the input", () => {
     const inputs = [
       "a\n\nb\n\n\nc",

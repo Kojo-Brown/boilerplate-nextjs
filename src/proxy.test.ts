@@ -10,6 +10,11 @@ import {
 import { ASSIGNMENT_COOKIE, VISITOR_COOKIE } from "@/lib/experiments/cookies";
 import { GEO_HEADER } from "@/lib/experiments/edge";
 import { CSP_HEADER, NONCE_HEADER } from "@/lib/security/csp";
+import {
+  HSTS_HEADER,
+  STATIC_HARDENING_HEADERS,
+  hstsValue,
+} from "@/lib/security/headers";
 
 /**
  * The session gate, stubbed.
@@ -173,6 +178,57 @@ describe("authorized callback — authenticated user", () => {
     const location = (result as Response).headers.get("location")!;
     expect(location).toContain("/dashboard");
     expect(location).not.toContain("evil.com");
+  });
+
+  /**
+   * The shapes the `startsWith("/")` check this replaced let through.
+   *
+   * The test above passed for as long as the hole was open, because an absolute
+   * URL is the one shape a leading-slash check does catch. These are the ones it
+   * does not: a protocol-relative URL and its backslash and tab spellings all
+   * begin with `/` and all resolve to another origin — so
+   * `/login?callbackUrl=//evil.example` bounced a signed-in visitor off the
+   * origin from a link starting with this application's own hostname.
+   */
+  it.each([
+    ["protocol-relative", "//evil.example/phish"],
+    ["backslash", "/\\evil.example/phish"],
+    ["tab-hidden", "/\t/evil.example/phish"],
+  ])(
+    "ignores a %s callbackUrl, which a leading-slash check accepts",
+    (_shape, callbackUrl) => {
+      const result = authorized({
+        auth: makeSession(),
+        request: makeRequest(
+          `/login?callbackUrl=${encodeURIComponent(callbackUrl)}`,
+        ),
+      });
+      const location = (result as Response).headers.get("location")!;
+      expect(new URL(location).origin).toBe("http://localhost:3000");
+      expect(location).toContain("/dashboard");
+    },
+  );
+
+  it("answers a bare // callbackUrl rather than throwing on it", () => {
+    // `new URL("//", nextUrl)` throws `TypeError: Invalid URL`, and this
+    // callback runs inside the proxy — so the previous check turned
+    // `/login?callbackUrl=//` into a 500 on a URL any caller can type.
+    expect(() =>
+      authorized({
+        auth: makeSession(),
+        request: makeRequest("/login?callbackUrl=%2F%2F"),
+      }),
+    ).not.toThrow();
+  });
+
+  it("keeps a query string and fragment on a safe callbackUrl", () => {
+    const result = authorized({
+      auth: makeSession(),
+      request: makeRequest("/login?callbackUrl=%2Fposts%3Ftab%3Ddrafts"),
+    });
+    const location = (result as Response).headers.get("location")!;
+    expect(new URL(location).pathname).toBe("/posts");
+    expect(new URL(location).searchParams.get("tab")).toBe("drafts");
   });
 
   it("allows access to the home page", () => {
@@ -739,5 +795,85 @@ describe("proxy — the Content Security Policy", () => {
     const forwarded = overriddenRequestHeaders(response);
     expect(forwarded[GEO_HEADER]).toBe("US");
     expect(forwarded[CSP_HEADER]).toBeTruthy();
+  });
+});
+
+describe("proxy — the hardening headers", () => {
+  /**
+   * The point of these is that there is no return path without them.
+   *
+   * `@/lib/security/headers` owns the values and its own tests pin them; what
+   * this block is for is the composition — every `return` in `src/proxy.ts`,
+   * including the two that rebuild the response (the rewrite) and the two that
+   * never render a document (a 429, the gate's redirect). A header set on "the
+   * normal path" is a header absent from exactly the responses an attacker is
+   * most interested in.
+   */
+  function expectHardened(response: Response): void {
+    for (const [name, value] of Object.entries(STATIC_HARDENING_HEADERS)) {
+      expect(response.headers.get(name), name).toBe(value);
+    }
+    // The test requests are https://example.test, so HSTS applies.
+    expect(response.headers.get(HSTS_HEADER)).toBe(hstsValue());
+  }
+
+  it("hardens an ordinary response", async () => {
+    expectHardened(
+      await proxy(request("/", { address: freshAddress() }), event),
+    );
+  });
+
+  it("hardens a rate-limit refusal", async () => {
+    const address = freshAddress();
+    const attempt = () =>
+      proxy(request("/login", { method: "POST", address }), event);
+
+    for (let index = 0; index < 10; index += 1) await attempt();
+    const response = await attempt();
+
+    expect(response.status).toBe(429);
+    expectHardened(response);
+  });
+
+  it("hardens the gate's redirect", async () => {
+    sessionGate.mockImplementation(() =>
+      NextResponse.redirect("https://example.test/login"),
+    );
+
+    expectHardened(
+      await proxy(request("/dashboard", { address: freshAddress() }), event),
+    );
+  });
+
+  it("hardens a bucketed rewrite, which rebuilds the response", async () => {
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: {
+          [VISITOR_COOKIE]: "0189d0aa-4b27-4d1f-9c3e-2f7f8a1b2c3d",
+          [ASSIGNMENT_COOKIE]: "pricing-cta:annual-first",
+        },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/pricing/v/annual-first",
+    );
+    expectHardened(response);
+  });
+
+  it("leaves the CSP and the rate-limit budget alone", async () => {
+    // These run last, so the one thing they could plausibly break is an earlier
+    // step's header. `/api/posts` rather than `/` because it is a path the
+    // limiter has a rule for, so there is a budget header to preserve at all.
+    const response = await proxy(
+      request("/api/posts", { address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get(CSP_HEADER)).toContain("'nonce-");
+    expect(response.headers.get("ratelimit-remaining")).toBeTruthy();
   });
 });

@@ -1,0 +1,64 @@
+# Dependency updates, which are the only mitigation A06 actually has.
+#
+# A vulnerable dependency is not a thing you write a test against — the
+# vulnerability is in somebody else's code and did not exist when the version was
+# pinned. What you can have is a process that notices, and `pnpm audit` in CI is
+# the wrong shape for one: a new advisory published against a transitive package
+# turns every unrelated pull request red, on a repository whose rule is that a
+# red check is never merged. That trains people to merge red. A pull request per
+# update does the same job with the failure pointed at the thing that changed.
+#
+# `scripts/assert-owasp-checklist.ts` reads this file, so deleting it or dropping
+# an ecosystem fails a CI gate rather than quietly ending the updates.
+version: 2
+updates:
+  # Application dependencies. pnpm's lockfile is understood natively, so the
+  # pull requests carry a resolved `pnpm-lock.yaml` and CI's
+  # `--frozen-lockfile` install is what proves it.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    # Batched by risk rather than by package, so the weekly volume is two or
+    # three reviewable pull requests instead of thirty.
+    #
+    # Patch and minor updates of the dev toolchain are the ones nobody needs to
+    # read individually; a major of anything, and any update to a runtime
+    # dependency, arrives on its own. The version pins in CLAUDE.md are
+    # deliberate, so a major is a decision rather than a merge.
+    groups:
+      dev-minor-and-patch:
+        dependency-type: development
+        update-types:
+          - minor
+          - patch
+      prod-patch:
+        dependency-type: production
+        update-types:
+          - patch
+    ignore:
+      # The framework majors are pinned on purpose — see the version list in
+      # CLAUDE.md, which every gate in this repository is written against.
+      # Security patches still arrive, because those are minors and patches.
+      - dependency-name: next
+        update-types: ["version-update:semver-major"]
+      - dependency-name: react
+        update-types: ["version-update:semver-major"]
+      - dependency-name: react-dom
+        update-types: ["version-update:semver-major"]
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+
+  # The workflows themselves, which are code that runs with this repository's
+  # secrets. An action pinned to a moving major tag is a supply-chain dependency
+  # whose contents can change without a commit here — updating the pins is how
+  # that window closes, and A08's row in docs/owasp-top-10.md is honest about
+  # what tag-pinning does and does not buy.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5

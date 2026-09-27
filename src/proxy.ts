@@ -1,24 +1,31 @@
 /**
  * The first thing every request reaches.
  *
- * Four concerns, in a fixed order: the rate limit, the session gate, experiment
- * routing, then the Content Security Policy. The first is the whole point of
- * doing the limiting here — see `@/lib/rate-limit/enforce` for why "at the edge"
- * is delivered as "before anything else" in Next 16, which has no edge runtime
- * to offer this file.
+ * Five concerns, in a fixed order: the rate limit, the session gate, experiment
+ * routing, the Content Security Policy, then the fixed hardening headers. The
+ * first is the whole point of doing the limiting here — see
+ * `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
+ * anything else" in Next 16, which has no edge runtime to offer this file.
  *
  * The third is third for a reason of its own. Bucketing decides which *variant*
  * of a page to render, which is only a question worth answering for a request
  * that is going to be served at all: a refused request gets its cookies (so the
  * visitor survives a login) and no rewrite. See `@/lib/experiments/edge`.
  *
- * The fourth is last because it needs the third's answer: the policy carries the
+ * The fourth needs the third's answer: the policy carries the
  * hashes of the document that will actually be rendered, and for a rewritten
  * request that is the variant's path rather than the one in the address bar. It
- * is also the only one of the four that has to reach the *render* — Next takes
+ * is also the only one of the five that has to reach the *render* — Next takes
  * the nonce from the request's policy header — so it is applied to the request
  * headers the rewrite carries, not only to the response. See
  * `@/lib/security/apply`.
+ *
+ * The fifth is last because it depends on nothing and must not be depended on:
+ * `@/lib/security/headers` is five single-valued headers with fixed answers, and
+ * running it after everything else is what makes "this value is the one that
+ * ships" true without a reader having to check whether an earlier step set the
+ * same name. Every return path goes through it, refusals included — a 429 that
+ * is missing `nosniff` is still a response a browser will sniff.
  */
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
@@ -42,6 +49,7 @@ import {
   applyCspRequestHeaders,
   decideCsp,
 } from "@/lib/security/apply";
+import { applyHardeningHeaders } from "@/lib/security/headers";
 
 // Next 16 renamed the `middleware` file convention to `proxy`; keeping the old
 // name builds, but emits a deprecation warning, and CI fails on warnings. The
@@ -139,9 +147,12 @@ export default async function proxy(
     // stamp — but the policy still goes on the response. One policy on every
     // response is a property a reader can check; "on the responses that happen
     // to carry markup" is a rule someone has to re-derive at each caller.
-    return applyCspHeaders(
-      tooManyRequests(request, outcome, now),
-      decideCsp(request),
+    return applyHardeningHeaders(
+      applyCspHeaders(
+        tooManyRequests(request, outcome, now),
+        decideCsp(request),
+      ),
+      request,
     );
   }
 
@@ -174,7 +185,10 @@ export default async function proxy(
     requestHeaders,
   });
 
-  return applyCspHeaders(applyRateLimitHeaders(response, outcome, now), csp);
+  return applyHardeningHeaders(
+    applyCspHeaders(applyRateLimitHeaders(response, outcome, now), csp),
+    request,
+  );
 }
 
 export const config = {

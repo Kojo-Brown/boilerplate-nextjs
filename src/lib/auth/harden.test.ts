@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { hardenSessionToken } from "@/lib/auth/harden";
+import { hardenSessionToken, reportSessionEvent } from "@/lib/auth/harden";
 import {
   SESSION_ABSOLUTE_MAX_AGE_S,
   SESSION_ROTATION_GRACE_S,
@@ -421,5 +421,72 @@ describe("two requests racing to rotate", () => {
       harness.deps,
     );
     expect(next).not.toBeNull();
+  });
+});
+
+/**
+ * The default reporter, which is the audit trail.
+ *
+ * Every case above injects its own `report`, so the sink that actually writes
+ * the line had no test at all — and it is the only part of this module a
+ * deployment's log pipeline ever sees. What matters about it is a machine can
+ * parse it (one JSON object per line, with a stable discriminator to filter on)
+ * and that reuse is louder than policy, because a channel where an expiry and a
+ * stolen cookie look the same is a channel people stop reading.
+ */
+describe("reportSessionEvent", () => {
+  it("writes one parseable JSON line per event, tagged auth.session", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    reportSessionEvent({ type: "session_started", sid: "s1", userId: "u1" });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const line = warn.mock.calls[0]![0] as string;
+    expect(line).not.toContain("\n");
+    expect(JSON.parse(line)).toEqual({
+      event: "auth.session",
+      type: "session_started",
+      sid: "s1",
+      userId: "u1",
+    });
+
+    warn.mockRestore();
+  });
+
+  it("raises token_reuse to error, and leaves the policy events at warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    reportSessionEvent({ type: "token_reuse", sid: "s1" });
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+
+    for (const type of [
+      "session_rotated",
+      "session_revoked",
+      "session_absolutely_expired",
+    ] as const) {
+      reportSessionEvent({ type, sid: "s1" });
+    }
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(error).toHaveBeenCalledTimes(1);
+
+    warn.mockRestore();
+    error.mockRestore();
+  });
+
+  it("names a session in every event that has one to name", () => {
+    // An event with no `sid` cannot be correlated with the family it is about,
+    // which is the whole use of the trail after the fact. `token_unclaimed` is
+    // the one exception and says so in its name: there is no session yet.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    reportSessionEvent({ type: "token_unclaimed" });
+    expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
+      event: "auth.session",
+      type: "token_unclaimed",
+    });
+
+    warn.mockRestore();
   });
 });

@@ -24,7 +24,7 @@
  * whole origin, and every link is interchangeable with every other. Signing the
  * path removes both properties: the destination is an output of verification
  * rather than an input to it, and a link minted for one post cannot be pointed
- * at another. `isSafePreviewPath` is still applied on both sides, because
+ * at another. `isSiteRelativePath` is still applied on both sides, because
  * "signed by us" and "safe to redirect to" are different claims and this module
  * should not be the only thing standing between a mistake in one and the other.
  *
@@ -52,6 +52,7 @@ import "server-only";
 import { deriveHmacKey } from "@/lib/crypto/hmac";
 import { clientEnv } from "@/lib/env/client";
 import { serverEnv } from "@/lib/env/server";
+import { isSiteRelativePath } from "@/lib/security/safe-redirect";
 
 /**
  * How long a freshly minted link stays redeemable.
@@ -125,38 +126,12 @@ export interface SignPreviewTokenOptions {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/**
- * Whether a path is one this application will redirect a browser to.
- *
- * Site-relative only. The three rejected shapes are the ones that turn a
- * redirect into an off-origin one:
- *
- *   `//evil.example`  a protocol-relative URL — a valid absolute URL to a
- *                     browser, and it starts with `/`, which is why a bare
- *                     `startsWith("/")` check is not enough.
- *   `/\evil.example`  the same trick with a backslash, which several browsers
- *                     normalise to `/`.
- *   `https://…`       an absolute URL outright.
- *
- * Applied when minting *and* when redeeming. Minting is where a bad path can
- * still be rejected loudly; redeeming is where it would do damage.
- */
-export function isSafePreviewPath(path: string): boolean {
-  if (!path.startsWith("/")) return false;
-  if (path.startsWith("//") || path.startsWith("/\\")) return false;
-  // A control character in a `Location` header is a response-splitting
-  // vector, a newline most of all. None has any business in a path this
-  // application minted.
-  if (/[\u0000-\u001f\u007f]/.test(path)) return false;
-  return true;
-}
-
 /** Mints a token for `path`. Throws if the path is not one we would redirect to. */
 export async function signPreviewToken(
   path: string,
   options: SignPreviewTokenOptions = {},
 ): Promise<string> {
-  if (!isSafePreviewPath(path)) {
+  if (!isSiteRelativePath(path)) {
     throw new Error(`Refusing to sign a preview token for path "${path}".`);
   }
 
@@ -233,7 +208,7 @@ export async function verifyPreviewToken(
     return { valid: false, reason: "malformed" };
   }
 
-  if (!isSafePreviewPath(payload.path)) {
+  if (!isSiteRelativePath(payload.path)) {
     return { valid: false, reason: "unsafe-path" };
   }
 
