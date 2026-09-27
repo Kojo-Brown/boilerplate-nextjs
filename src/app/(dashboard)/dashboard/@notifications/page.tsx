@@ -1,4 +1,5 @@
 import { getRequiredSession } from "@/lib/session";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import {
   getLastEditedPostByAuthor,
   getPostCountsByAuthor,
@@ -13,10 +14,13 @@ import type { Notification } from "./_components/notifications-widget";
  * need to; sharing the read is what the data layer is for. See
  * `docs/n-plus-one.md`.
  */
-async function buildNotifications(userId: string): Promise<Notification[]> {
+async function buildNotifications(
+  tenantId: string,
+  userId: string,
+): Promise<Notification[]> {
   const [counts, latestPost] = await Promise.all([
-    getPostCountsByAuthor(userId),
-    getLastEditedPostByAuthor(userId),
+    getPostCountsByAuthor(tenantId, userId),
+    getLastEditedPostByAuthor(tenantId, userId),
   ]);
   const draftCount = counts.drafts;
 
@@ -57,6 +61,10 @@ async function buildNotifications(userId: string): Promise<Notification[]> {
 
 export default async function NotificationsSlot() {
   const session = await getRequiredSession();
-  const notifications = await buildNotifications(session.user.id);
+  const tenant = await getRequiredTenant();
+  const notifications = await buildNotifications(
+    tenant.tenantId,
+    session.user.id,
+  );
   return <NotificationsWidget notifications={notifications} />;
 }

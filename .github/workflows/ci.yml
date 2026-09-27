@@ -15,8 +15,21 @@ env:
   # Every job runs `prisma generate`, which loads prisma.config.ts, which
   # resolves DATABASE_URL eagerly and fails if it is unset — even though
   # generate never opens a connection. Only the build job actually reaches a
-  # database, and it gets the same URL from its Postgres service.
-  DATABASE_URL: postgresql://postgres@localhost:5432/nextjs_ci
+  # database, and it gets its URL from the Postgres service below.
+  #
+  # `app_rls` and not `postgres`, and this is the single most load-bearing line
+  # in the file for tenant isolation. Row-level security is not applied to a
+  # superuser and not applied to a role with BYPASSRLS — no warning, no notice,
+  # no error. Built against `postgres`, every policy in `prisma/rls.sql` is
+  # skipped, the application behaves identically, and the tenant-isolation gate
+  # would be measuring a database with no isolation at all. It refuses to, and
+  # that refusal is rule T1. The role is created by `pnpm db:rls`, with the
+  # admin URL below. See docs/multi-tenancy.md.
+  DATABASE_URL: postgresql://app_rls@localhost:5432/nextjs_ci
+  # The connection that may create roles and alter tables: `prisma db push`,
+  # `pnpm db:rls`, and the seed. The application never gets this one, which is
+  # what stops a compromised application connection turning the policies off.
+  DATABASE_ADMIN_URL: postgresql://postgres@localhost:5432/nextjs_ci
 
 # `NODE_OPTIONS: --throw-deprecation` turns Node's own deprecation notices into
 # thrown errors, which is the one class of warning the runtime can escalate for
@@ -241,16 +254,38 @@ jobs:
 
       # `db push` rather than `migrate deploy`: this repo has no migrations
       # directory yet, and the build only needs the tables to exist.
+      #
+      # On the administrative connection: `app_rls` has DML only, deliberately,
+      # and is not the tables' owner — which is what makes `FORCE ROW LEVEL
+      # SECURITY` mean something and what stops the application disabling it.
       - name: Apply schema to the CI database
         run: pnpm exec prisma db push
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
+
+      # `prisma db push` reconciles tables and is entirely unaware that
+      # policies exist, so this is not optional and not once-per-database: it
+      # creates the `app_rls` role, grants it DML, and installs every policy.
+      # A new tenant-scoped table arrives from `db push` with row-level
+      # security off and nothing about it looks wrong — which is what rule R1
+      # of the gate below exists to catch. Idempotent.
+      - name: Apply row-level security policies
+        run: pnpm db:rls
 
       # The tables existing is not enough. `app/blog/[slug]` enumerates
       # published posts in `generateStaticParams`, and an empty database makes
       # that return `[]` — which builds "successfully" while prerendering
       # nothing, exactly the silent hole the route-shape gate below now fails
       # on. Seeding first is what gives the build real rows to enumerate.
+      # Administrative, for two reasons. Creating a tenant cannot happen inside
+      # a tenant scope, and `tenants` deliberately has no INSERT policy — so
+      # the seed run as `app_rls` would insert nothing and the build would
+      # prerender an empty blog. It seeds two workspaces, which is the smallest
+      # number at which isolation is observable at all.
       - name: Seed the CI database
         run: pnpm db:seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
 
       # Wrapped: `next build` prints deprecation notices (file conventions,
       # config keys) and still exits 0, so a bare `pnpm build` is green on a
@@ -608,6 +643,23 @@ jobs:
       # other gates.
       - name: Assert OWASP checklist
         run: pnpm exec tsx scripts/assert-owasp-checklist.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
+      # The only gate here that talks to a database, because the claim is
+      # "Postgres will not return another tenant's rows" and no arrangement of
+      # TypeScript establishes it.
+      #
+      # It runs last and after the seed on purpose: it needs the schema, the
+      # policies and a role that cannot bypass them, and it creates its own
+      # two-tenant fixture on the administrative connection before probing
+      # what the *application's* connection can reach. Every way this fails in
+      # production is silent — a superuser URL, a table enabled but not
+      # forced, a scope that outlives its transaction on a pooled connection —
+      # and each of them leaves an application that works perfectly until a
+      # second customer exists. See docs/multi-tenancy.md.
+      - name: Assert tenant isolation
+        run: pnpm db:rls:verify
         env:
           NODE_OPTIONS: --throw-deprecation
 

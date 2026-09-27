@@ -30,6 +30,29 @@ import { hashPassword } from "@/lib/password";
 /** Not a secret. A literal shared by both seed users so local sign-in is easy. */
 const DEMO_PASSWORD = "demo-password-not-for-real-use";
 
+/**
+ * Two workspaces, so that the seed demonstrates the thing it is seeding.
+ *
+ * A single-tenant seed makes every tenant-scoped query look correct, because
+ * there is no other tenant's row for a missing scope to return. Two is the
+ * smallest number at which isolation is observable at all — and it is what
+ * `scripts/assert-tenant-isolation.ts` measures against.
+ *
+ * Ada is a member of both, which is the case a `tenantId` on `User` could not
+ * represent: her dashboard shows Acme's posts or Globex's depending on which
+ * workspace is open, and never both at once.
+ */
+const TENANTS = [
+  { id: "seed-tenant-acme", slug: "acme", name: "Acme" },
+  { id: "seed-tenant-globex", slug: "globex", name: "Globex" },
+] as const;
+
+const MEMBERSHIPS = [
+  { userId: "seed-user-ada", tenantId: "seed-tenant-acme", role: "OWNER" },
+  { userId: "seed-user-grace", tenantId: "seed-tenant-globex", role: "OWNER" },
+  { userId: "seed-user-ada", tenantId: "seed-tenant-globex", role: "ADMIN" },
+] as const;
+
 const USERS = [
   {
     id: "seed-user-ada",
@@ -56,6 +79,7 @@ const POSTS = [
       "This post exists so the blog has stable, enumerable content at build time.",
     published: true,
     authorId: "seed-user-ada",
+    tenantId: "seed-tenant-acme",
   },
   {
     id: "seed-post-cache-life",
@@ -67,6 +91,7 @@ const POSTS = [
       "to revalidateTag, which addresses the cache entry rather than the URL.",
     published: true,
     authorId: "seed-user-ada",
+    tenantId: "seed-tenant-acme",
   },
   {
     id: "seed-post-suspense-boundaries",
@@ -78,6 +103,7 @@ const POSTS = [
       "in CI rather than trusting a reviewer to notice.",
     published: true,
     authorId: "seed-user-grace",
+    tenantId: "seed-tenant-globex",
   },
   {
     id: "seed-post-unpublished-draft",
@@ -87,6 +113,7 @@ const POSTS = [
       "to show and so generateStaticParams has something it must exclude.",
     published: false,
     authorId: "seed-user-grace",
+    tenantId: "seed-tenant-globex",
   },
 ] as const;
 
@@ -94,6 +121,19 @@ async function main(): Promise<void> {
   // Hashed once and shared: scrypt is intentionally slow, and hashing the same
   // literal per user would only make the seed slower, not safer.
   const password = await hashPassword(DEMO_PASSWORD);
+
+  // Tenants before users, because a membership points at both and a post
+  // points at a tenant. The seed runs on an administrative connection — see
+  // the header of `@/lib/tenancy/provision` for why creating a tenant cannot
+  // happen inside a tenant scope, and `prisma/rls.sql` for the missing INSERT
+  // policy that makes that structural rather than a convention.
+  for (const tenant of TENANTS) {
+    await prisma.tenant.upsert({
+      where: { id: tenant.id },
+      update: { slug: tenant.slug, name: tenant.name },
+      create: { ...tenant },
+    });
+  }
 
   for (const user of USERS) {
     await prisma.user.upsert({
@@ -105,6 +145,19 @@ async function main(): Promise<void> {
     });
   }
 
+  for (const membership of MEMBERSHIPS) {
+    await prisma.membership.upsert({
+      where: {
+        userId_tenantId: {
+          userId: membership.userId,
+          tenantId: membership.tenantId,
+        },
+      },
+      update: { role: membership.role },
+      create: { ...membership },
+    });
+  }
+
   for (const post of POSTS) {
     await prisma.post.upsert({
       where: { id: post.id },
@@ -112,6 +165,7 @@ async function main(): Promise<void> {
         title: post.title,
         content: post.content,
         published: post.published,
+        tenantId: post.tenantId,
       },
       create: { ...post },
     });
@@ -119,7 +173,9 @@ async function main(): Promise<void> {
 
   const published = POSTS.filter((post) => post.published).length;
   console.log(
-    `Seeded ${USERS.length} users and ${POSTS.length} posts (${published} published).`,
+    `Seeded ${TENANTS.length} tenants, ${USERS.length} users, ` +
+      `${MEMBERSHIPS.length} memberships and ${POSTS.length} posts ` +
+      `(${published} published).`,
   );
 }
 

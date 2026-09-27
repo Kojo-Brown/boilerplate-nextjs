@@ -1,4 +1,38 @@
-import { prisma } from "@/lib/prisma";
+/**
+ * Reading posts, in the two access worlds this application has.
+ *
+ * ## Public, unscoped
+ *
+ * `getPublishedPosts`, `getPublishedPostById` and `getPaginatedPublishedPosts`
+ * serve the blog to anonymous visitors and are prerendered at build time.
+ * There is no member whose tenant could scope them, so they read through
+ * `unscopedPrisma` — and the `posts_public_read` policy is what limits an
+ * unscoped connection to published rows. That is worth stating plainly,
+ * because it changes what the `where: { published: true }` in those queries
+ * is: it used to be the only thing keeping a draft off the public blog, and it
+ * is now the second. Deleting it would no longer leak anything, and it stays
+ * because a query that says what it wants is a query whose plan can be read.
+ *
+ * ## Tenant-scoped
+ *
+ * Everything the dashboard reads takes a `tenantId` and runs through
+ * `tenantClient`, so the connection itself cannot see another workspace's
+ * rows. The `authorId` filters stay: within one tenant, "whose post is this"
+ * is still a question, and the tenant scope does not answer it. The two are
+ * different predicates and neither subsumes the other — a workspace has
+ * several members, and a member belongs to several workspaces.
+ *
+ * `tenantId` is the first parameter rather than part of an options object
+ * because these are all memoised, and `@/lib/request-memo` keys on argument
+ * identity: an object literal misses the cache every time. See R4 in
+ * `scripts/assert-no-n-plus-one.ts`.
+ */
+import {
+  tenantClient,
+  unscopedPrisma,
+  withPreviewRead,
+} from "@/lib/tenancy/client";
+import { tenantScope } from "@/lib/tenancy/scope";
 import { paginateQuery } from "@/lib/pagination";
 import { requestMemo } from "@/lib/request-memo";
 import { loadPost } from "@/lib/dal/loaders";
@@ -26,7 +60,8 @@ const POST_SUMMARY_SELECT = {
 } as const;
 
 export const getPublishedPosts = requestMemo(async (): Promise<PostSummary[]> =>
-  prisma.post.findMany({
+  // Unscoped: the public blog, limited to published rows by `posts_public_read`.
+  unscopedPrisma.post.findMany({
     where: { published: true },
     select: POST_SUMMARY_SELECT,
     orderBy: { createdAt: "desc" },
@@ -49,15 +84,20 @@ export const getPublishedPosts = requestMemo(async (): Promise<PostSummary[]> =>
  */
 export const getPostsForPreview = requestMemo(
   async (): Promise<PostSummary[]> =>
-    prisma.post.findMany({
-      select: POST_SUMMARY_SELECT,
-      orderBy: { createdAt: "desc" },
-    }),
+    // Unscoped, and the one read that may see a draft without a tenant. The
+    // preview transaction is what the `posts_preview_read` policy requires;
+    // without it this returns exactly what the public blog returns.
+    withPreviewRead((tx) =>
+      tx.post.findMany({
+        select: POST_SUMMARY_SELECT,
+        orderBy: { createdAt: "desc" },
+      }),
+    ),
 );
 
 export const getPostsByUser = requestMemo(
-  async (userId: string): Promise<PostSummary[]> =>
-    prisma.post.findMany({
+  async (tenantId: string, userId: string): Promise<PostSummary[]> =>
+    tenantClient(tenantScope(tenantId, userId)).post.findMany({
       where: { authorId: userId },
       select: POST_SUMMARY_SELECT,
       orderBy: { createdAt: "desc" },
@@ -99,7 +139,8 @@ export function getPostById(id: string): Promise<PostWithAuthor | null> {
  */
 export const getPublishedPostById = requestMemo(
   async (id: string): Promise<PostWithAuthor | null> =>
-    prisma.post.findFirst({
+    // Unscoped: the public blog. See this module's header.
+    unscopedPrisma.post.findFirst({
       where: { id, published: true },
       include: {
         author: {
@@ -140,8 +181,12 @@ export type EditablePost = Pick<
  * in its `where`, and `authorId` is not one.
  */
 export const getEditablePost = requestMemo(
-  async (id: string, userId: string): Promise<EditablePost | null> =>
-    prisma.post.findFirst({
+  async (
+    tenantId: string,
+    id: string,
+    userId: string,
+  ): Promise<EditablePost | null> =>
+    tenantClient(tenantScope(tenantId, userId)).post.findFirst({
       where: { id, authorId: userId },
       select: {
         id: true,
@@ -159,8 +204,10 @@ export const getEditablePost = requestMemo(
 );
 
 export const getPostCountByUser = requestMemo(
-  async (userId: string): Promise<number> =>
-    prisma.post.count({ where: { authorId: userId } }),
+  async (tenantId: string, userId: string): Promise<number> =>
+    tenantClient(tenantScope(tenantId, userId)).post.count({
+      where: { authorId: userId },
+    }),
 );
 
 /**
@@ -183,8 +230,10 @@ export interface PostCounts {
 }
 
 export const getPostCountsByAuthor = requestMemo(
-  async (userId: string): Promise<PostCounts> => {
-    const groups = await prisma.post.groupBy({
+  async (tenantId: string, userId: string): Promise<PostCounts> => {
+    const groups = await tenantClient(
+      tenantScope(tenantId, userId),
+    ).post.groupBy({
       by: ["published"],
       where: { authorId: userId },
       _count: { _all: true },
@@ -211,8 +260,12 @@ export type RecentPost = Pick<Post, "id" | "title" | "published" | "createdAt">;
  * See the note on argument identity in `@/lib/request-memo`.
  */
 export const getRecentPostsByAuthor = requestMemo(
-  async (userId: string, limit: number): Promise<RecentPost[]> =>
-    prisma.post.findMany({
+  async (
+    tenantId: string,
+    userId: string,
+    limit: number,
+  ): Promise<RecentPost[]> =>
+    tenantClient(tenantScope(tenantId, userId)).post.findMany({
       where: { authorId: userId },
       select: { id: true, title: true, published: true, createdAt: true },
       orderBy: { createdAt: "desc" },
@@ -232,8 +285,8 @@ export type LastEditedPost = Pick<Post, "title" | "updatedAt" | "published">;
  * why this is a second query rather than the first element of the list above.
  */
 export const getLastEditedPostByAuthor = requestMemo(
-  async (userId: string): Promise<LastEditedPost | null> =>
-    prisma.post.findFirst({
+  async (tenantId: string, userId: string): Promise<LastEditedPost | null> =>
+    tenantClient(tenantScope(tenantId, userId)).post.findFirst({
       where: { authorId: userId },
       orderBy: { updatedAt: "desc" },
       select: { title: true, updatedAt: true, published: true },
@@ -241,12 +294,13 @@ export const getLastEditedPostByAuthor = requestMemo(
 );
 
 export async function getPaginatedPostsByUser(
+  tenantId: string,
   userId: string,
   params: CursorPageParams,
 ): Promise<CursorPage<PostSummary>> {
   return paginateQuery(
     (args) =>
-      prisma.post.findMany({
+      tenantClient(tenantScope(tenantId, userId)).post.findMany({
         where: { authorId: userId },
         select: POST_SUMMARY_SELECT,
         orderBy: { createdAt: "desc" },
@@ -261,7 +315,8 @@ export async function getPaginatedPublishedPosts(
 ): Promise<CursorPage<PostSummary>> {
   return paginateQuery(
     (args) =>
-      prisma.post.findMany({
+      // Unscoped: the public blog. See this module's header.
+      unscopedPrisma.post.findMany({
         where: { published: true },
         select: POST_SUMMARY_SELECT,
         orderBy: { createdAt: "desc" },

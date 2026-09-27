@@ -79,7 +79,7 @@ describe("writeWithOutbox", () => {
   it("writes the rows and the events in one transaction", async () => {
     const result = await writeWithOutbox(async ({ tx: client, emit }) => {
       const post = await client.post.create({
-        data: { title: "Hello", authorId: "user-1" },
+        data: { title: "Hello", authorId: "user-1", tenantId: "tenant-1" },
       });
       emit({
         type: "post.created",

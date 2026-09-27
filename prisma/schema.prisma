@@ -22,6 +22,7 @@ model User {
   sessions        Session[]
   posts           Post[]
   sessionFamilies SessionFamily[]
+  memberships     Membership[]
 
   @@map("users")
 }
@@ -87,11 +88,31 @@ model Post {
   /// fields. See the note on `updatePostAction`.
   version   Int      @default(1)
   authorId  String
+  /// The tenant this row belongs to, and the only column the row-level
+  /// security policy on `posts` reads.
+  ///
+  /// Not derivable from `authorId`. A user belongs to many tenants, so "whose
+  /// row is this" and "which workspace is it in" are different questions, and
+  /// a policy that had to join `memberships` to answer the second would run
+  /// that join on every row of every query. Denormalised on purpose: the
+  /// predicate is an equality test against an indexed column.
+  ///
+  /// `onDelete: Cascade` because a tenant's rows are meaningless without it and
+  /// a restricted delete would leave rows no policy can ever match again —
+  /// invisible to the application and still present in the table.
+  tenantId  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  author User @relation(fields: [authorId], references: [id])
+  author User   @relation(fields: [authorId], references: [id])
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  /// The column every policy predicate on this table tests, leading a composite
+  /// with the sort key the dashboard's lists use. A sequential scan filtered by
+  /// an RLS predicate is the usual way enabling RLS is discovered in
+  /// production, by the latency rather than by a test.
+  @@index([tenantId, createdAt])
+  @@index([authorId])
   @@map("posts")
 }
 
@@ -349,4 +370,92 @@ model VerificationToken {
 enum Role {
   USER
   ADMIN
+}
+
+/// One workspace, and the unit every row-level security policy is written
+/// against.
+///
+/// ## Why a table rather than a column on `User`
+///
+/// Because the two facts a tenant carries — "this row belongs to workspace X"
+/// and "this person may act inside workspace X" — have different cardinality.
+/// A user belongs to many workspaces and a workspace holds many users, so the
+/// membership is an edge (`Membership`), and the tenant has to be a node for
+/// that edge to point at. A `tenantId` on `User` would make the second fact a
+/// property of the person, which is the model that cannot express an invite.
+///
+/// ## Why `slug` is unique and what it is for
+///
+/// It is the tenant's stable public handle — the thing a subdomain, a path
+/// segment or a support ticket names, none of which want a cuid. Unique
+/// because all three of those are lookups, and a duplicate would make the
+/// lookup ambiguous at exactly the moment it decides which tenant's data a
+/// request sees.
+model Tenant {
+  id        String   @id @default(cuid())
+  /// Lowercase, hyphenated, unique. See `@/lib/tenancy/slug` for the grammar
+  /// and for why it refuses the names a hostname label cannot carry.
+  slug      String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  posts       Post[]
+
+  @@map("tenants")
+}
+
+/// One person's membership of one tenant, and the only thing that grants it.
+///
+/// This table is the authority `@/lib/tenancy/active` consults on every
+/// request, and that placement is the point. The active tenant reaches the
+/// server in a cookie, which is a *request*, not a fact: a cookie cannot be
+/// withdrawn when somebody is removed from a workspace, and a signed one is no
+/// better — a signature proves the server issued the value, not that it is
+/// still true. So the cookie is treated as an unverified claim and this row is
+/// what turns it into a tenant id the client may be scoped to. Removing a
+/// membership takes effect on the next request.
+///
+/// It is deliberately *not* what the tenant client enforces. Membership decides
+/// which tenant the connection is scoped to; the row-level security policies
+/// decide what that scope can reach. Collapsing the two would mean a query that
+/// forgot to filter was protected by nothing.
+model Membership {
+  id        String     @id @default(cuid())
+  userId    String
+  tenantId  String
+  role      TenantRole @default(MEMBER)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  /// One membership per person per tenant. Two rows would mean two roles, and
+  /// nothing in the model says which one wins.
+  @@unique([userId, tenantId])
+  /// "Which tenants may this person open", the read `@/lib/tenancy/active`
+  /// issues on every request that names a tenant.
+  @@index([userId])
+  /// "Who is in this tenant", the members list.
+  @@index([tenantId])
+  @@map("memberships")
+}
+
+/// What a member may do inside one tenant.
+///
+/// Deliberately separate from `Role`, which is a property of the *installation*
+/// — an `ADMIN` there operates this deployment. Folding the two together would
+/// make the owner of one workspace an operator of every other one, which is the
+/// single worst bug a multi-tenant system can have.
+enum TenantRole {
+  /// Created the tenant. Exactly one per tenant by convention; the model does
+  /// not enforce it, because transferring ownership is a two-row change and a
+  /// database constraint would make the intermediate state unrepresentable.
+  OWNER
+  /// May manage members and every row in the tenant.
+  ADMIN
+  /// May work in the tenant.
+  MEMBER
 }

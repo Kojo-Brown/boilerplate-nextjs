@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/prisma", () => ({
+const { prisma, scopeLog } = vi.hoisted(() => ({
+  scopeLog: [] as { tenantId: string; userId: string }[],
   prisma: {
     /**
      * The mutations now run inside `writeWithOutbox`, so every one of them goes
@@ -44,8 +45,50 @@ vi.mock("@/lib/prisma", () => ({
   },
 }));
 
+vi.mock("@/lib/prisma", () => ({ prisma }));
+
+/**
+ * The tenancy client, routed back onto the same mocked Prisma object.
+ *
+ * Keeping one object is what lets every assertion below stay written against
+ * `prisma.post.*` — the same choice the `$transaction` mock already made, and
+ * for the same reason. What is *not* thrown away is which scope each call
+ * opened: `scopeLog` records it, so "this mutation ran in the caller's
+ * workspace" is a thing the tests below can state. A mutation that silently
+ * dropped its scope would otherwise pass every one of them, because a mock
+ * returns what it was told to regardless of the connection that asked.
+ */
+vi.mock("@/lib/tenancy/client", () => ({
+  unscopedPrisma: prisma,
+  tenantClient: (scope: { tenantId: string; userId: string }) => {
+    scopeLog.push(scope);
+    return prisma;
+  },
+  withTenantTransaction: (
+    scope: { tenantId: string; userId: string },
+    fn: (tx: unknown) => Promise<unknown>,
+    options?: { timeout: number; maxWait: number },
+  ) => {
+    scopeLog.push(scope);
+    return (
+      prisma.$transaction as unknown as (
+        callback: (tx: unknown) => Promise<unknown>,
+        options?: { timeout: number; maxWait: number },
+      ) => Promise<unknown>
+    )(fn, options);
+  },
+  withPreviewRead: (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
+}));
+
 vi.mock("@/auth", () => ({
   auth: vi.fn(),
+}));
+
+// Resolving the workspace reads `memberships`; which tenant it picks is
+// `src/lib/tenancy/active.test.ts`'s subject. Here it has to be a tenant, so
+// the mutations below have a scope to open.
+vi.mock("@/lib/tenancy/active", () => ({
+  getRequiredTenant: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({
@@ -57,7 +100,7 @@ import type { Session } from "next-auth";
 import { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { refresh, updateTag } from "next/cache";
-import { prisma } from "@/lib/prisma";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
 import {
   createPostAction,
@@ -128,9 +171,19 @@ const mockTransaction = vi.mocked(
   ) => Promise<unknown>,
 );
 
+const mockTenant = {
+  tenantId: "tenant-1",
+  slug: "acme",
+  name: "Acme",
+  role: "OWNER" as const,
+  scope: { tenantId: "tenant-1", userId: "user-1" },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuth.mockResolvedValue(mockSession);
+  vi.mocked(getRequiredTenant).mockResolvedValue(mockTenant);
+  scopeLog.length = 0;
 
   mockTransaction.mockImplementation(async (callback) => callback(prisma));
   vi.mocked(prisma.outboxEvent.createMany).mockResolvedValue({
@@ -1118,5 +1171,62 @@ describe("createPostAction idempotency", () => {
     expect(tooShort.success).toBe(false);
     expect(prisma.post.create).not.toHaveBeenCalled();
     expect(prisma.idempotencyKey.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Every mutation runs in the caller's workspace.
+ *
+ * The rest of this file would pass with the scope dropped entirely: a mocked
+ * client answers the same way however it was obtained, and in any deployment
+ * with one tenant so does a real one. This is the assertion that does not.
+ *
+ * It checks the scope is opened *at all* and that it carries both halves —
+ * `withTenantTransaction` writes `app.tenant_id` and `app.user_id`, and the
+ * `memberships_own_read` policy depends on the second. The statements
+ * themselves are `client.test.ts`'s subject; what belongs here is that each
+ * action reaches for one.
+ */
+describe("every mutation opens the caller's workspace", () => {
+  const mutations: Array<[string, () => Promise<unknown>]> = [
+    [
+      "createPostAction",
+      () =>
+        createPostAction({
+          idempotencyKey: "01JQ0000000000000000000000",
+          title: "Scoped",
+        }),
+    ],
+    ["deletePostAction", () => deletePostAction("post-1")],
+    ["togglePublishAction", () => togglePublishAction("post-1")],
+  ];
+
+  it.each(mutations)("%s", async (_name, run) => {
+    await run();
+
+    expect(scopeLog.length).toBeGreaterThan(0);
+    for (const scope of scopeLog) {
+      expect(scope).toEqual({
+        tenantId: mockTenant.tenantId,
+        userId: mockSession.user.id,
+      });
+    }
+  });
+
+  it("updatePostAction", async () => {
+    const data = new FormData();
+    data.append("postId", "post-1");
+    data.append("expectedVersion", "3");
+    data.append("title", "Scoped");
+
+    await updatePostAction(null, data);
+
+    expect(scopeLog.length).toBeGreaterThan(0);
+    for (const scope of scopeLog) {
+      expect(scope).toEqual({
+        tenantId: mockTenant.tenantId,
+        userId: mockSession.user.id,
+      });
+    }
   });
 });

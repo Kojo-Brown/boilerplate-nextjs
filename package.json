@@ -16,7 +16,9 @@
     "csp:hashes": "tsx scripts/emit-csp-hashes.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "tsx --conditions=react-server prisma/seed.ts"
+    "db:seed": "tsx --conditions=react-server prisma/seed.ts",
+    "db:rls": "tsx scripts/apply-rls.ts",
+    "db:rls:verify": "tsx scripts/assert-tenant-isolation.ts"
   },
   "dependencies": {
     "@auth/core": "0.41.3",

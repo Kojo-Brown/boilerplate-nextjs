@@ -436,6 +436,7 @@ the factory table, the Next comparison, and these gaps.
 - [ ] Log redaction: a serialiser that refuses to print a secret-shaped value
 - [ ] Pin every GitHub Action to a commit digest, with Dependabot digest updates
 - [ ] A scheduled dependency-advisory audit that opens an issue rather than failing a pull request
+- [ ] Scope draft-mode preview to the tenant that minted the token
 
 _The five items above came out of the OWASP checklist item rather than being
 invented for it: each is a gap `docs/owasp-top-10.md` records against a category,
@@ -443,6 +444,13 @@ and `scripts/assert-owasp-checklist.ts` rule C5 requires every such gap to name 
 open item here — so ticking one of them fails the gate until that document is
 revisited. They are deliberately last in this phase, so the order the scheduled
 agent reads is unchanged._
+
+_The sixth came out of the multi-tenancy item the same way. Draft mode is a
+whole-site preview, so a token minted inside one workspace opens every
+workspace's unpublished posts; that is what draft mode has always done here,
+and row-level security made it visible by requiring the rule to be written
+down as `posts_preview_read` in `prisma/rls.sql` rather than being the default
+behaviour of an unrestricted connection. See `docs/multi-tenancy.md`._
 
 ## Phase 12 — Accessibility & TDD
 

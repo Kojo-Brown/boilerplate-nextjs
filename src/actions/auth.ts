@@ -3,7 +3,8 @@
 import { AuthError } from "next-auth";
 import { z } from "zod";
 import { signIn, signOut } from "@/auth";
-import { prisma } from "@/lib/prisma";
+import { unscopedPrisma } from "@/lib/tenancy/client";
+import { provisionPersonalTenant } from "@/lib/tenancy/provision";
 import { hashPassword } from "@/lib/password";
 import { ActionError } from "@/lib/actions/result";
 import {
@@ -69,7 +70,9 @@ export const registerAction = defineFormAction({
   handler: async ({ input }): Promise<void> => {
     const { name, email, password } = input;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    // Unscoped: `users` is not a tenant-scoped table, and this runs before the
+    // account — and therefore any workspace — exists.
+    const existing = await unscopedPrisma.user.findUnique({ where: { email } });
     if (existing) {
       throw new ActionError("An account with this email already exists.", {
         email: ["This email is already registered."],
@@ -77,8 +80,18 @@ export const registerAction = defineFormAction({
     }
 
     const hashedPassword = await hashPassword(password);
-    await prisma.user.create({
-      data: { name, email, password: hashedPassword },
+
+    // The account and its first workspace are one transaction. A user with no
+    // membership can sign in and then open nothing — `getRequiredTenant`
+    // sends them to /forbidden — so a failure between the two writes would
+    // leave behind an account that is permanently unusable and, because the
+    // email is taken, cannot be created again. See `@/lib/tenancy/provision`.
+    await unscopedPrisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: { name, email, password: hashedPassword },
+        select: { id: true, name: true, email: true },
+      });
+      await provisionPersonalTenant(tx, user);
     });
 
     try {

@@ -22,6 +22,7 @@ import {
   fetchCallSites,
   isCollectedByVitest,
   parseChecklist,
+  RAW_SQL_CALL_SITES,
   rawSqlUses,
   remotePatterns,
   supplyChain,
@@ -332,6 +333,57 @@ describe("T1 — no raw SQL", () => {
     const findings = rawSqlUses(root);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.file).toBe("src/lib/dal/report.ts");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not fire on a module listed in RAW_SQL_CALL_SITES", () => {
+    // The rule became an allowlist when row-level security arrived: opening a
+    // tenant scope is `SELECT set_config(…)`, and Prisma's builder models rows
+    // rather than session state, so there is no non-raw spelling of it.
+    const root = withTree();
+
+    expect(
+      rawSqlUses(root).filter((finding) =>
+        RAW_SQL_CALL_SITES.some((entry) => entry.file === finding.file),
+      ),
+    ).toEqual([]);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fires on a stale allowlist entry", () => {
+    // An entry naming a file that no longer issues a raw query is a hole
+    // waiting for a file of that name — the same failure `FETCH_CALL_SITES`
+    // guards against, and the reason both lists are checked in both directions.
+    const root = withTree((tree) => {
+      for (const entry of RAW_SQL_CALL_SITES) {
+        write(tree, entry.file, "export const nothing = 1;\n");
+      }
+    });
+
+    const findings = rawSqlUses(root);
+
+    expect(findings).toHaveLength(RAW_SQL_CALL_SITES.length);
+    expect(findings.every((finding) => finding.message.includes("stale"))).toBe(
+      true,
+    );
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("still fires on an unlisted module that uses the unsafe form", () => {
+    // Every allowlisted entry uses a tagged template, so every interpolation
+    // is a bind parameter. `$queryRawUnsafe` is the string-concatenation form
+    // and is in no entry's reason.
+    const root = withTree((tree) => {
+      write(
+        tree,
+        "src/lib/tenancy/oops.ts",
+        "export const rows = (t: string) => prisma.$queryRawUnsafe(`SET x = ${t}`);\n",
+      );
+    });
+
+    expect(
+      rawSqlUses(root).some((f) => f.file === "src/lib/tenancy/oops.ts"),
+    ).toBe(true);
     rmSync(root, { recursive: true, force: true });
   });
 

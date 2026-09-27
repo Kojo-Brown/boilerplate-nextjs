@@ -1,4 +1,5 @@
 import { getPostCountsByAuthor } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 
 type DashboardStatsProps = {
   userId: string;
@@ -12,7 +13,8 @@ type DashboardStatsProps = {
  * other component can see. See `docs/n-plus-one.md`.
  */
 export async function DashboardStats({ userId }: DashboardStatsProps) {
-  const stats = await getPostCountsByAuthor(userId);
+  const tenant = await getRequiredTenant();
+  const stats = await getPostCountsByAuthor(tenant.tenantId, userId);
 
   const tiles: Array<{ label: string; value: number; description: string }> = [
     { label: "Total Posts", value: stats.total, description: "All time" },

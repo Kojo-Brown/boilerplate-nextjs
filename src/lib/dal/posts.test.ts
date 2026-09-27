@@ -1,18 +1,60 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("@/lib/prisma", () => ({
-  prisma: {
-    post: {
-      findMany: vi.fn(),
-      findUnique: vi.fn(),
-      findFirst: vi.fn(),
-      count: vi.fn(),
-      groupBy: vi.fn(),
-    },
+/**
+ * The tenancy client is the mock, not `@/lib/prisma`.
+ *
+ * Every read in this module now goes through one of three access worlds — a
+ * tenant scope, the unscoped public path, or the preview capability — and
+ * which one a read uses is the property tenancy adds. Mocking the Prisma
+ * singleton underneath them would leave all three indistinguishable, which is
+ * exactly the confusion row-level security exists to remove.
+ *
+ * `scopeLog` records `<world>:<operation>` per call, so a read that quietly
+ * moves between worlds fails a test rather than a customer.
+ */
+const { postSpies, scopeLog } = vi.hoisted(() => ({
+  postSpies: {
+    findMany: vi.fn(),
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    count: vi.fn(),
+    groupBy: vi.fn(),
   },
+  scopeLog: [] as string[],
 }));
 
-import { prisma } from "@/lib/prisma";
+vi.mock("@/lib/tenancy/client", () => {
+  const model = (world: string) =>
+    new Proxy(
+      {},
+      {
+        get:
+          (_target, operation: string) =>
+          (...args: unknown[]) => {
+            scopeLog.push(`${world}:${operation}`);
+            // The index is an operation name the proxy was just asked for, so
+            // the lookup is total in practice; the cast is what tells
+            // `noUncheckedIndexedAccess` that, rather than a `?.` that would
+            // silently return undefined for a typo in a test.
+            const spy = (postSpies as Record<string, ReturnType<typeof vi.fn>>)[
+              operation
+            ];
+            if (!spy) throw new Error(`No spy for post.${operation}`);
+            return spy(...args);
+          },
+      },
+    );
+
+  return {
+    unscopedPrisma: { post: model("unscoped") },
+    tenantClient: (scope: { tenantId: string }) => ({
+      post: model(`tenant:${scope.tenantId}`),
+    }),
+    withPreviewRead: (fn: (tx: { post: unknown }) => unknown) =>
+      fn({ post: model("preview") }),
+  };
+});
+
 import {
   getPublishedPosts,
   getPostsForPreview,
@@ -49,17 +91,20 @@ const mockFullPost = {
   },
 };
 
+const TENANT = "tenant-1";
+
 beforeEach(() => {
   vi.clearAllMocks();
+  scopeLog.length = 0;
 });
 
 describe("getPublishedPosts", () => {
   it("queries published posts ordered by createdAt desc", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
     const result = await getPublishedPosts();
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { published: true },
         orderBy: { createdAt: "desc" },
@@ -70,7 +115,7 @@ describe("getPublishedPosts", () => {
   });
 
   it("returns an empty array when no published posts exist", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
     const result = await getPublishedPosts();
     expect(result).toEqual([]);
@@ -79,11 +124,11 @@ describe("getPublishedPosts", () => {
 
 describe("getPostsForPreview", () => {
   it("applies no published filter, which is the whole reason it is separate", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
     await getPostsForPreview();
 
-    const [args] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
+    const [args] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
     // Not `where: { published: true }`, and not a `where` at all — an omitted
     // filter is the only shape that cannot be half-right.
     expect(args).not.toHaveProperty("where");
@@ -91,11 +136,11 @@ describe("getPostsForPreview", () => {
   });
 
   it("orders newest first, like the published list it stands in for", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
     await getPostsForPreview();
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { createdAt: "desc" } }),
     );
   });
@@ -103,13 +148,13 @@ describe("getPostsForPreview", () => {
   it("selects the same fields as the published list", async () => {
     // The two feed one component. A field present in one and not the other is
     // a preview that renders differently from the page it is previewing.
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
     await getPublishedPosts();
     await getPostsForPreview();
 
-    const [published] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
-    const [preview] = vi.mocked(prisma.post.findMany).mock.calls[1] ?? [];
+    const [published] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
+    const [preview] = vi.mocked(postSpies.findMany).mock.calls[1] ?? [];
     expect((preview as { select: unknown }).select).toEqual(
       (published as { select: unknown }).select,
     );
@@ -118,11 +163,11 @@ describe("getPostsForPreview", () => {
 
 describe("getPostsByUser", () => {
   it("filters posts by authorId", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    await getPostsByUser("user-1");
+    await getPostsByUser(TENANT, "user-1");
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { authorId: "user-1" },
       }),
@@ -130,9 +175,9 @@ describe("getPostsByUser", () => {
   });
 
   it("returns posts for the given user", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    const result = await getPostsByUser("user-1");
+    const result = await getPostsByUser(TENANT, "user-1");
     expect(result).toHaveLength(1);
     expect(result[0]?.author.id).toBe("user-1");
   });
@@ -143,11 +188,11 @@ describe("getPostById", () => {
   // keyed `findMany` rather than a `findUnique`. `loaders.test.ts` covers the
   // batching itself; these two pin the contract callers depend on.
   it("looks up by primary key", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockFullPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockFullPost] as never);
 
     const result = await getPostById("post-1");
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: { in: ["post-1"] } } }),
     );
     expect(result?.id).toBe("post-1");
@@ -156,7 +201,7 @@ describe("getPostById", () => {
   it("returns null when post does not exist", async () => {
     // A key with no row comes back as an absent row, not an error — the
     // loader's `fetch` returns fewer rows than it was asked for.
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
     const result = await getPostById("missing");
     expect(result).toBeNull();
@@ -165,14 +210,14 @@ describe("getPostById", () => {
 
 describe("getPublishedPostById", () => {
   it("puts the published filter in the query, not in the caller", async () => {
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(mockFullPost as never);
 
     await getPublishedPostById("post-1");
 
     // The regression this function exists for: while the check lived in the
     // page component, `getCachedPost` could write an unpublished post into a
     // cache entry the whole public shares.
-    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+    expect(postSpies.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "post-1", published: true } }),
     );
   });
@@ -180,7 +225,7 @@ describe("getPublishedPostById", () => {
   it("returns null for an unpublished post", async () => {
     // The database applies the filter, so an unpublished row simply does not
     // come back. This pins the contract callers rely on.
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(null as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(null as never);
 
     expect(await getPublishedPostById("draft-1")).toBeNull();
   });
@@ -191,14 +236,14 @@ describe("getPublishedPostById", () => {
     // now that the unfiltered read goes through the batch loader: the loader's
     // `include` and this one are written in different modules, so they can
     // drift without either looking wrong on its own.
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockFullPost] as never);
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockFullPost] as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(mockFullPost as never);
 
     await getPostById("post-1");
     await getPublishedPostById("post-1");
 
-    const [unfiltered] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
-    const [filtered] = vi.mocked(prisma.post.findFirst).mock.calls[0] ?? [];
+    const [unfiltered] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
+    const [filtered] = vi.mocked(postSpies.findFirst).mock.calls[0] ?? [];
     expect((filtered as { include: unknown }).include).toEqual(
       (unfiltered as { include: unknown }).include,
     );
@@ -207,11 +252,11 @@ describe("getPublishedPostById", () => {
 
 describe("getPostCountByUser", () => {
   it("counts posts for a specific user", async () => {
-    vi.mocked(prisma.post.count).mockResolvedValue(3);
+    vi.mocked(postSpies.count).mockResolvedValue(3);
 
-    const count = await getPostCountByUser("user-1");
+    const count = await getPostCountByUser(TENANT, "user-1");
 
-    expect(prisma.post.count).toHaveBeenCalledWith({
+    expect(postSpies.count).toHaveBeenCalledWith({
       where: { authorId: "user-1" },
     });
     expect(count).toBe(3);
@@ -220,21 +265,24 @@ describe("getPostCountByUser", () => {
 
 describe("getPaginatedPostsByUser", () => {
   it("fetches take=limit+1 posts for cursor detection", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    await getPaginatedPostsByUser("user-1", { limit: 10 });
+    await getPaginatedPostsByUser(TENANT, "user-1", { limit: 10 });
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ take: 11, where: { authorId: "user-1" } }),
     );
   });
 
   it("passes cursor and skip when cursor is provided", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    await getPaginatedPostsByUser("user-1", { cursor: "post-1", limit: 5 });
+    await getPaginatedPostsByUser(TENANT, "user-1", {
+      cursor: "post-1",
+      limit: 5,
+    });
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ cursor: { id: "post-1" }, skip: 1, take: 6 }),
     );
   });
@@ -244,9 +292,9 @@ describe("getPaginatedPostsByUser", () => {
       ...mockPost,
       id: `post-${i + 1}`,
     }));
-    vi.mocked(prisma.post.findMany).mockResolvedValue(items as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue(items as never);
 
-    const page = await getPaginatedPostsByUser("user-1", { limit: 5 });
+    const page = await getPaginatedPostsByUser(TENANT, "user-1", { limit: 5 });
 
     expect(page.hasMore).toBe(true);
     expect(page.nextCursor).toBe("post-5");
@@ -254,9 +302,9 @@ describe("getPaginatedPostsByUser", () => {
   });
 
   it("returns hasMore=false when on last page", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    const page = await getPaginatedPostsByUser("user-1", { limit: 10 });
+    const page = await getPaginatedPostsByUser(TENANT, "user-1", { limit: 10 });
 
     expect(page.hasMore).toBe(false);
     expect(page.nextCursor).toBeNull();
@@ -265,11 +313,11 @@ describe("getPaginatedPostsByUser", () => {
 
 describe("getPaginatedPublishedPosts", () => {
   it("filters by published=true", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
     await getPaginatedPublishedPosts({ limit: 10 });
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { published: true } }),
     );
   });
@@ -279,7 +327,7 @@ describe("getPaginatedPublishedPosts", () => {
       ...mockPost,
       id: `post-${i + 1}`,
     }));
-    vi.mocked(prisma.post.findMany).mockResolvedValue(items as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue(items as never);
 
     const page = await getPaginatedPublishedPosts({ limit: 10 });
 
@@ -290,14 +338,14 @@ describe("getPaginatedPublishedPosts", () => {
 
 describe("getEditablePost", () => {
   it("filters on the author in the query, not in the caller", async () => {
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(mockFullPost as never);
 
-    await getEditablePost("post-1", "user-1");
+    await getEditablePost(TENANT, "post-1", "user-1");
 
     // The ownership rule is the `where`. A read that returned the row and left
     // the check to the page is one `||` away from serving another author's
     // draft — the same failure `getPublishedPostById` was written to close.
-    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+    expect(postSpies.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "post-1", authorId: "user-1" },
       }),
@@ -305,11 +353,11 @@ describe("getEditablePost", () => {
   });
 
   it("selects the editable fields and nothing else", async () => {
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(mockFullPost as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(mockFullPost as never);
 
-    await getEditablePost("post-1", "user-1");
+    await getEditablePost(TENANT, "post-1", "user-1");
 
-    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+    expect(postSpies.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         select: {
           id: true,
@@ -328,9 +376,11 @@ describe("getEditablePost", () => {
   });
 
   it("returns null when the post is not this user's", async () => {
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(null);
 
-    await expect(getEditablePost("post-1", "user-2")).resolves.toBeNull();
+    await expect(
+      getEditablePost(TENANT, "post-1", "user-2"),
+    ).resolves.toBeNull();
   });
 });
 
@@ -342,14 +392,14 @@ describe("getPostCountsByAuthor", () => {
     ] as never;
 
   it("answers all three tiles with one GROUP BY", async () => {
-    vi.mocked(prisma.post.groupBy).mockResolvedValue(groups(3, 2));
+    vi.mocked(postSpies.groupBy).mockResolvedValue(groups(3, 2));
 
-    const counts = await getPostCountsByAuthor("user-1");
+    const counts = await getPostCountsByAuthor(TENANT, "user-1");
 
     // The regression this replaces: `@stats` ran two COUNT(*)s and
     // `@notifications` a third, for the same author, in the same render.
-    expect(prisma.post.groupBy).toHaveBeenCalledTimes(1);
-    expect(prisma.post.groupBy).toHaveBeenCalledWith(
+    expect(postSpies.groupBy).toHaveBeenCalledTimes(1);
+    expect(postSpies.groupBy).toHaveBeenCalledWith(
       expect.objectContaining({
         by: ["published"],
         where: { authorId: "user-1" },
@@ -360,9 +410,9 @@ describe("getPostCountsByAuthor", () => {
 
   it("reports zeroes for an author with no posts", async () => {
     // Postgres returns no groups at all, not groups of zero.
-    vi.mocked(prisma.post.groupBy).mockResolvedValue([] as never);
+    vi.mocked(postSpies.groupBy).mockResolvedValue([] as never);
 
-    expect(await getPostCountsByAuthor("user-1")).toEqual({
+    expect(await getPostCountsByAuthor(TENANT, "user-1")).toEqual({
       total: 0,
       published: 0,
       drafts: 0,
@@ -370,11 +420,11 @@ describe("getPostCountsByAuthor", () => {
   });
 
   it("handles an author whose posts are all published", async () => {
-    vi.mocked(prisma.post.groupBy).mockResolvedValue([
+    vi.mocked(postSpies.groupBy).mockResolvedValue([
       { published: true, _count: { _all: 4 } },
     ] as never);
 
-    expect(await getPostCountsByAuthor("user-1")).toEqual({
+    expect(await getPostCountsByAuthor(TENANT, "user-1")).toEqual({
       total: 4,
       published: 4,
       drafts: 0,
@@ -382,11 +432,11 @@ describe("getPostCountsByAuthor", () => {
   });
 
   it("handles an author whose posts are all drafts", async () => {
-    vi.mocked(prisma.post.groupBy).mockResolvedValue([
+    vi.mocked(postSpies.groupBy).mockResolvedValue([
       { published: false, _count: { _all: 4 } },
     ] as never);
 
-    expect(await getPostCountsByAuthor("user-1")).toEqual({
+    expect(await getPostCountsByAuthor(TENANT, "user-1")).toEqual({
       total: 4,
       published: 0,
       drafts: 4,
@@ -396,11 +446,11 @@ describe("getPostCountsByAuthor", () => {
 
 describe("getRecentPostsByAuthor", () => {
   it("takes the caller's limit, newest first", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    await getRecentPostsByAuthor("user-1", 5);
+    await getRecentPostsByAuthor(TENANT, "user-1", 5);
 
-    expect(prisma.post.findMany).toHaveBeenCalledWith(
+    expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { authorId: "user-1" },
         orderBy: { createdAt: "desc" },
@@ -410,11 +460,11 @@ describe("getRecentPostsByAuthor", () => {
   });
 
   it("selects only what the activity list renders", async () => {
-    vi.mocked(prisma.post.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    await getRecentPostsByAuthor("user-1", 5);
+    await getRecentPostsByAuthor(TENANT, "user-1", 5);
 
-    const [args] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
+    const [args] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
     expect((args as { select: unknown }).select).toEqual({
       id: true,
       title: true,
@@ -430,11 +480,11 @@ describe("getLastEditedPostByAuthor", () => {
     // make "last worked on" stop moving the moment an old post is edited,
     // which is also why it is a second query rather than the first row of
     // getRecentPostsByAuthor.
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(null);
 
-    await getLastEditedPostByAuthor("user-1");
+    await getLastEditedPostByAuthor(TENANT, "user-1");
 
-    expect(prisma.post.findFirst).toHaveBeenCalledWith(
+    expect(postSpies.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { authorId: "user-1" },
         orderBy: { updatedAt: "desc" },
@@ -443,8 +493,103 @@ describe("getLastEditedPostByAuthor", () => {
   });
 
   it("returns null for an author with no posts", async () => {
-    vi.mocked(prisma.post.findFirst).mockResolvedValue(null);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(null);
 
-    expect(await getLastEditedPostByAuthor("user-1")).toBeNull();
+    expect(await getLastEditedPostByAuthor(TENANT, "user-1")).toBeNull();
+  });
+});
+
+/**
+ * Which access world each read runs in.
+ *
+ * These are the assertions tenancy adds, and they are worth more than they
+ * look: every other test in this file passes whether a read is scoped or not,
+ * because a mock returns whatever it was told to regardless of which client
+ * asked. The bug this catches is a dashboard read quietly moving onto the
+ * unscoped client — which in any single-tenant environment, including every
+ * developer's laptop, returns exactly the right answer.
+ */
+describe("access worlds", () => {
+  const scopedReads: Array<[string, () => Promise<unknown>]> = [
+    ["getPostsByUser", () => getPostsByUser(TENANT, "user-1")],
+    ["getPostCountByUser", () => getPostCountByUser(TENANT, "user-1")],
+    ["getEditablePost", () => getEditablePost(TENANT, "post-1", "user-1")],
+    ["getPostCountsByAuthor", () => getPostCountsByAuthor(TENANT, "user-1")],
+    [
+      "getRecentPostsByAuthor",
+      () => getRecentPostsByAuthor(TENANT, "user-1", 5),
+    ],
+    [
+      "getLastEditedPostByAuthor",
+      () => getLastEditedPostByAuthor(TENANT, "user-1"),
+    ],
+    [
+      "getPaginatedPostsByUser",
+      () => getPaginatedPostsByUser(TENANT, "user-1", { limit: 10 }),
+    ],
+  ];
+
+  it.each(scopedReads)(
+    "%s reads through the tenant scope",
+    async (_name, read) => {
+      vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+      vi.mocked(postSpies.findFirst).mockResolvedValue(null as never);
+      vi.mocked(postSpies.count).mockResolvedValue(0 as never);
+      vi.mocked(postSpies.groupBy).mockResolvedValue([] as never);
+
+      await read();
+
+      expect(scopeLog).toHaveLength(1);
+      expect(scopeLog[0]).toMatch(new RegExp(`^tenant:${TENANT}:`));
+    },
+  );
+
+  it("the dashboard list is scoped to the workspace it was asked for", async () => {
+    // Spelled out rather than left to the table above, because this is the
+    // property the OWASP checklist cites under A01 and a citation should
+    // point at a test whose name says what it establishes.
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+
+    await getPostsByUser("tenant-7", "user-1");
+
+    expect(scopeLog).toEqual(["tenant:tenant-7:findMany"]);
+  });
+
+  const publicReads: Array<[string, () => Promise<unknown>]> = [
+    ["getPublishedPosts", () => getPublishedPosts()],
+    ["getPublishedPostById", () => getPublishedPostById("post-1")],
+    [
+      "getPaginatedPublishedPosts",
+      () => getPaginatedPublishedPosts({ limit: 10 }),
+    ],
+  ];
+
+  it.each(publicReads)("%s reads unscoped", async (_name, read) => {
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+    vi.mocked(postSpies.findFirst).mockResolvedValue(null as never);
+
+    await read();
+
+    expect(scopeLog).toHaveLength(1);
+    expect(scopeLog[0]).toMatch(/^unscoped:/);
+  });
+
+  it("getPostsForPreview reads through the preview capability", async () => {
+    // Not merely "unscoped": an unscoped read cannot see a draft, and the
+    // whole reason this function is separate from `getPublishedPosts` is that
+    // it must. `posts_preview_read` is the policy that allows it.
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+
+    await getPostsForPreview();
+
+    expect(scopeLog).toEqual(["preview:findMany"]);
+  });
+
+  it("getPostById reads through the preview capability, via the loader", async () => {
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+
+    await getPostById("post-1");
+
+    expect(scopeLog).toEqual(["preview:findMany"]);
   });
 });
