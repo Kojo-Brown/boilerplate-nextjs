@@ -32,6 +32,7 @@
  *     repopulates the cache would stamp it into HTML every later visitor is
  *     served. See `PolicyInput.documentRegenerates` for the measurement.
  */
+import { logError } from "@/lib/logging/logger";
 import { isSecureRequest } from "@/lib/experiments/cookies";
 import {
   CSP_HEADER,
@@ -128,7 +129,11 @@ export function decideCsp(
   const nodeEnv = options.nodeEnv ?? process.env["NODE_ENV"];
   const mode = nodeEnv === "development" ? "development" : "production";
   const servesPrerendered = nodeEnv === "production";
-  const warn = options.warn ?? ((message: string) => console.error(message));
+  const warn =
+    options.warn ??
+    ((message: string) => {
+      logError("csp.warning", { message });
+    });
 
   const thirdParty = options.thirdParty ?? {
     plausibleDomain: process.env["NEXT_PUBLIC_PLAUSIBLE_DOMAIN"] || undefined,

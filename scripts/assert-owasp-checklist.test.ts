@@ -273,18 +273,22 @@ describe("C4 — cited tests exist and run", () => {
 });
 
 describe("C5 — a gap tracks an open spec item", () => {
-  // Both cases used to sabotage the file-upload gap, and that gap is now closed:
-  // content sniffing, the measured size cap and the antivirus hook shipped, so
-  // A10 carries mitigations where it carried a deferral. The rule worked exactly
-  // as designed on the way through — ticking the item failed this gate until the
-  // document was revisited, which is the whole point of it — and these cases move
-  // to a gap that is still open rather than being deleted with the one they named.
+  // Both cases have now outlived two gaps. They sabotaged the file-upload
+  // deferral until that shipped, then the log-redaction one until this item
+  // closed it — A09 carries mitigations where it carried a deferral. Each time,
+  // the rule worked exactly as designed on the way through: ticking the item
+  // failed this gate until the document was revisited, which is the whole point
+  // of it. So the cases move to a gap that is still open rather than being
+  // deleted with the one they named.
   it("fails when the item it defers to has been ticked", () => {
     // The point of the rule: finishing the deferred work is what makes this
     // document wrong, so finishing it has to fail the gate.
     const root = withTree((tree) => {
       edit(tree, "SPEC.md", (source) =>
-        source.replace("- [ ] Log redaction:", "- [x] Log redaction:"),
+        source.replace(
+          "- [ ] Pin every GitHub Action",
+          "- [x] Pin every GitHub Action",
+        ),
       );
     });
 
@@ -295,7 +299,10 @@ describe("C5 — a gap tracks an open spec item", () => {
   it("fails a Gap bullet with no SPEC reference", () => {
     const root = withTree((tree) => {
       edit(tree, CHECKLIST_FILE, (source) =>
-        source.replace(/SPEC: Log redaction:.*$/m, "one day, probably."),
+        source.replace(
+          /SPEC: Pin every GitHub Action.*$/m,
+          "one day, probably.",
+        ),
       );
     });
 

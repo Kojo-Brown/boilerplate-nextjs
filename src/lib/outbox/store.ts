@@ -13,6 +13,7 @@
  * write is to match nothing — which `updateMany` expresses and `update` turns
  * into a thrown `P2025` on a path that is not an error.
  */
+import { logWarn } from "@/lib/logging/logger";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import type {
@@ -107,10 +108,12 @@ export const prismaOutboxStore: OutboxRelayStore = {
       // Not an error: the effect happened, and the row belongs to whoever took
       // it over. Worth a line, because a relay that logs this every pass has a
       // lease shorter than its dispatches take.
-      console.warn(
-        `[outbox] ${id}: dispatched, but the claim had been taken over before it could be marked processed; ` +
-          "it will be dispatched again.",
-      );
+      logWarn("outbox.claim_taken_over", {
+        id,
+        detail:
+          "dispatched, but the claim had been taken over before it could be " +
+          "marked processed; it will be dispatched again.",
+      });
     }
   },
 

@@ -6,6 +6,7 @@ import {
   createLogSink,
   resolveVitalsSink,
 } from "./sink";
+import { setLogWriter } from "@/lib/logging/logger";
 import type { VitalsEvent, VitalsLogLine } from "./sink";
 
 function event(overrides: Partial<VitalsEvent> = {}): VitalsEvent {
@@ -30,19 +31,40 @@ describe("createLogSink", () => {
     // path; a row per metric makes that a filter instead of a JSON traversal
     // inside the query.
     const lines: string[] = [];
-    const sink = createLogSink((line) => lines.push(line));
+    const restore = setLogWriter({
+      error: (line) => lines.push(line),
+      warn: (line) => lines.push(line),
+      info: (line) => lines.push(line),
+    });
 
-    sink.deliver([
-      event(),
-      event({ metric: { ...event().metric, id: "cls-1", name: "CLS" } }),
-    ]);
+    try {
+      createLogSink().deliver([
+        event(),
+        event({ metric: { ...event().metric, id: "cls-1", name: "CLS" } }),
+      ]);
+    } finally {
+      setLogWriter(restore);
+    }
 
     expect(lines).toHaveLength(2);
   });
 
   it("writes a parseable line carrying the discriminator", () => {
+    // Through the default writer, so what is asserted is the text this sink
+    // actually puts on stdout — including the trip through the redactor, which
+    // is the one thing between a metric and the log platform.
     const lines: string[] = [];
-    createLogSink((line) => lines.push(line)).deliver([event()]);
+    const restore = setLogWriter({
+      error: (line) => lines.push(line),
+      warn: (line) => lines.push(line),
+      info: (line) => lines.push(line),
+    });
+
+    try {
+      createLogSink().deliver([event()]);
+    } finally {
+      setLogWriter(restore);
+    }
 
     const parsed = JSON.parse(lines[0] ?? "") as VitalsLogLine;
     expect(parsed.event).toBe(VITALS_LOG_EVENT);
@@ -53,7 +75,7 @@ describe("createLogSink", () => {
   });
 
   it("writes nothing for an empty batch", () => {
-    const lines: string[] = [];
+    const lines: unknown[] = [];
     createLogSink((line) => lines.push(line)).deliver([]);
     expect(lines).toEqual([]);
   });

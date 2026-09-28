@@ -23,6 +23,7 @@ import {
   createPresignedReadUrl,
 } from "@/lib/s3";
 import type { S3Target } from "@/lib/s3";
+import { logWarn } from "@/lib/logging/logger";
 import { SNIFF_BYTE_COUNT } from "@/lib/uploads/sniff";
 
 /**
@@ -194,25 +195,19 @@ export async function deleteObject(
     const response = await fetchImpl(url, { method: "DELETE" });
 
     if (!response.ok) {
-      console.warn(
-        JSON.stringify({
-          event: "upload.quarantine_delete_failed",
-          key: target.key,
-          status: response.status,
-        }),
-      );
+      logWarn("upload.quarantine_delete_failed", {
+        key: target.key,
+        status: response.status,
+      });
       return false;
     }
 
     return true;
   } catch (error) {
-    console.warn(
-      JSON.stringify({
-        event: "upload.quarantine_delete_failed",
-        key: target.key,
-        error: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    logWarn("upload.quarantine_delete_failed", {
+      key: target.key,
+      error,
+    });
     return false;
   }
 }

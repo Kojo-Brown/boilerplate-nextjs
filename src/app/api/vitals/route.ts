@@ -1,5 +1,6 @@
 import { defineRoute } from "@/lib/api/define-route";
 import { rateMetric, vitalsPayloadSchema } from "@/lib/vitals/metric";
+import { logError } from "@/lib/logging/logger";
 import { resolveVitalsSink } from "@/lib/vitals/sink";
 import type { VitalsPayload } from "@/lib/vitals/metric";
 import type { VitalsEvent } from "@/lib/vitals/sink";
@@ -71,10 +72,7 @@ export const POST = defineRoute<VitalsAck, undefined, undefined, VitalsPayload>(
         // The one place this failure is recorded. `[vitals]` rather than the
         // `[api]` prefix `defineRoute` uses for faults, because this is not a
         // fault of the request — the request was fine and is being answered 202.
-        console.error(
-          `[vitals] sink "${sink.name}" failed to deliver:`,
-          thrown,
-        );
+        logError("vitals.delivery_failed", { sink: sink.name, error: thrown });
       }
 
       return { accepted: events.length };

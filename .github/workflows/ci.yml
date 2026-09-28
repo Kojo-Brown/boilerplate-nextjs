@@ -690,6 +690,26 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for what reaches stdout. The invariant is not "lines are
+      # redacted" — nothing can check that — but "there is one writer", because
+      # redaction only applies to the lines it is shown and the next
+      # `console.error` is one keystroke that looks exactly like the twenty
+      # that were already there. `no-console` in eslint.config.mjs is the first
+      # layer and catches the typing of it; this catches a disable comment, the
+      # rule being deleted from that config, a `globalThis.console` spelling,
+      # and the redactor being unwired from inside the writer. Four probes run
+      # this repository's own secret formats through the serialiser — including
+      # a hash derived here at the parameters `src/lib/password.ts` declares —
+      # and, just as importantly, check that the identifiers the auth audit
+      # trail is correlated on still print. See docs/log-redaction.md.
+      #
+      # Static analysis plus four probes; it needs no build output and no
+      # database, and sits here with the other gates.
+      - name: Assert log redaction
+        run: pnpm exec tsx scripts/assert-log-redaction.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.

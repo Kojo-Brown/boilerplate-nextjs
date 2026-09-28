@@ -8,6 +8,7 @@ import {
 import { MemorySessionRegistry } from "@/lib/auth/registry";
 import type { HardenDeps, SessionSecurityEvent } from "@/lib/auth/harden";
 import type { JWT } from "@auth/core/jwt";
+import { captureLogs } from "@/test/log-lines";
 
 const START = new Date("2026-09-23T12:00:00.000Z");
 
@@ -436,30 +437,43 @@ describe("two requests racing to rotate", () => {
  */
 describe("reportSessionEvent", () => {
   it("writes one parseable JSON line per event, tagged auth.session", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
+    const logs = captureLogs();
     reportSessionEvent({ type: "session_started", sid: "s1", userId: "u1" });
+    logs.restore();
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    const line = warn.mock.calls[0]![0] as string;
-    expect(line).not.toContain("\n");
-    expect(JSON.parse(line)).toEqual({
+    expect(logs.warn).toHaveLength(1);
+    expect(logs.warn[0]).not.toContain("\n");
+    expect(logs.parsed()).toEqual({
+      level: "warn",
       event: "auth.session",
       type: "session_started",
       sid: "s1",
       userId: "u1",
     });
+  });
 
-    warn.mockRestore();
+  it("survives the redactor with the identifiers it correlates on intact", () => {
+    // This trail is keyed on `sid`, and every query anyone writes against it
+    // groups by that value. `sid` is a randomUUID and `userId` a cuid, both
+    // high-entropy by construction — so a redactor with an entropy rule and no
+    // exclusion for identifier formats would leave an audit log that cannot be
+    // correlated with anything, which is worse than the leak it prevents.
+    const logs = captureLogs();
+    reportSessionEvent({
+      type: "token_reuse",
+      sid: "9c3f1e7a-2b45-4d81-9f6e-0a7c5d8b3e21",
+    });
+    logs.restore();
+
+    expect(logs.error[0]).toContain("9c3f1e7a-2b45-4d81-9f6e-0a7c5d8b3e21");
   });
 
   it("raises token_reuse to error, and leaves the policy events at warn", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logs = captureLogs();
 
     reportSessionEvent({ type: "token_reuse", sid: "s1" });
-    expect(error).toHaveBeenCalledTimes(1);
-    expect(warn).not.toHaveBeenCalled();
+    expect(logs.error).toHaveLength(1);
+    expect(logs.warn).toHaveLength(0);
 
     for (const type of [
       "session_rotated",
@@ -468,25 +482,24 @@ describe("reportSessionEvent", () => {
     ] as const) {
       reportSessionEvent({ type, sid: "s1" });
     }
-    expect(warn).toHaveBeenCalledTimes(3);
-    expect(error).toHaveBeenCalledTimes(1);
+    logs.restore();
 
-    warn.mockRestore();
-    error.mockRestore();
+    expect(logs.warn).toHaveLength(3);
+    expect(logs.error).toHaveLength(1);
   });
 
   it("names a session in every event that has one to name", () => {
     // An event with no `sid` cannot be correlated with the family it is about,
     // which is the whole use of the trail after the fact. `token_unclaimed` is
     // the one exception and says so in its name: there is no session yet.
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
+    const logs = captureLogs();
     reportSessionEvent({ type: "token_unclaimed" });
-    expect(JSON.parse(warn.mock.calls[0]![0] as string)).toEqual({
+    logs.restore();
+
+    expect(logs.parsed()).toEqual({
+      level: "warn",
       event: "auth.session",
       type: "token_unclaimed",
     });
-
-    warn.mockRestore();
   });
 });

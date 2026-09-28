@@ -78,6 +78,7 @@
  * shape no longer parses is refused rather than returned.
  */
 import { createHash, randomUUID } from "node:crypto";
+import { logError } from "@/lib/logging/logger";
 import { ActionError } from "@/lib/actions/result";
 
 /** How long an in-flight claim stays authoritative before it can be taken over. */
@@ -345,10 +346,10 @@ export async function runIdempotent<T>(options: IdempotentRun<T>): Promise<T> {
       // has already happened; re-running it because its *receipt* is unreadable
       // is the duplicate this module exists to prevent, and a caller who sees
       // an error will reload, at which point the row is simply there.
-      console.error(
-        `[idempotency] ${record.action}: stored result is no longer readable:`,
-        thrown,
-      );
+      logError("idempotency.replay_unreadable", {
+        action: record.action,
+        error: thrown,
+      });
       throw new ActionError(UNREPLAYABLE_MESSAGE);
     }
   }
@@ -363,10 +364,10 @@ export async function runIdempotent<T>(options: IdempotentRun<T>): Promise<T> {
     try {
       await store.release(record, token);
     } catch (releaseFailure) {
-      console.error(
-        `[idempotency] ${record.action}: could not release key after a failure:`,
-        releaseFailure,
-      );
+      logError("idempotency.release_failed", {
+        action: record.action,
+        error: releaseFailure,
+      });
     }
     throw thrown;
   }
@@ -384,10 +385,10 @@ export async function runIdempotent<T>(options: IdempotentRun<T>): Promise<T> {
     // guaranteed to produce the duplicate submission. The cost of carrying on
     // is that the key stays in flight until its lease expires and a much later
     // retry re-executes; the cost of not is a duplicate now.
-    console.error(
-      `[idempotency] ${record.action}: could not record the result for replay:`,
-      thrown,
-    );
+    logError("idempotency.result_not_recorded", {
+      action: record.action,
+      error: thrown,
+    });
   }
 
   return value;

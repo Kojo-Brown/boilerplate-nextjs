@@ -47,6 +47,7 @@
  * old one. Losing the swap is reported rather than retried — a retry would need
  * the plaintext of whatever won, which this request does not have.
  */
+import { log } from "@/lib/logging/logger";
 import { unscopedPrisma } from "@/lib/tenancy/client";
 import {
   hashPassword,
@@ -176,9 +177,9 @@ export const prismaPasswordChangeStore: PasswordChangeStore = {
  * password, because it is not given them.
  */
 export function reportPasswordChange(event: PasswordChangeEvent): void {
-  const line = JSON.stringify({ event: "password_change", ...event });
-  if (event.outcome === "changed") console.warn(line);
-  else console.error(line);
+  log(event.outcome === "changed" ? "warn" : "error", "password_change", {
+    ...event,
+  });
 }
 
 /**
