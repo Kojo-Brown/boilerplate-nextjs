@@ -273,21 +273,21 @@ describe("C4 — cited tests exist and run", () => {
 });
 
 describe("C5 — a gap tracks an open spec item", () => {
-  // Both cases have now outlived two gaps. They sabotaged the file-upload
-  // deferral until that shipped, then the log-redaction one until this item
-  // closed it — A09 carries mitigations where it carried a deferral. Each time,
-  // the rule worked exactly as designed on the way through: ticking the item
-  // failed this gate until the document was revisited, which is the whole point
-  // of it. So the cases move to a gap that is still open rather than being
-  // deleted with the one they named.
+  // Both cases have now outlived three gaps. They sabotaged the file-upload
+  // deferral until that shipped, then the log-redaction one, then A08's
+  // tag-pinning one — which now carries three mitigations where it carried a
+  // deferral. Each time, the rule worked exactly as designed on the way
+  // through: ticking the item failed this gate until the document was
+  // revisited, which is the whole point of it. So the cases move to a gap that
+  // is still open rather than being deleted with the one they named.
   it("fails when the item it defers to has been ticked", () => {
     // The point of the rule: finishing the deferred work is what makes this
     // document wrong, so finishing it has to fail the gate.
     const root = withTree((tree) => {
       edit(tree, "SPEC.md", (source) =>
         source.replace(
-          "- [ ] Pin every GitHub Action",
-          "- [x] Pin every GitHub Action",
+          "- [ ] A scheduled dependency-advisory audit",
+          "- [x] A scheduled dependency-advisory audit",
         ),
       );
     });
@@ -300,7 +300,7 @@ describe("C5 — a gap tracks an open spec item", () => {
     const root = withTree((tree) => {
       edit(tree, CHECKLIST_FILE, (source) =>
         source.replace(
-          /SPEC: Pin every GitHub Action.*$/m,
+          /SPEC: A scheduled dependency-advisory audit.*$/m,
           "one day, probably.",
         ),
       );
@@ -560,9 +560,12 @@ describe("T4 — the supply chain", () => {
 
   it("fails an action pinned to a moving branch", () => {
     const root = withTree((tree) => {
+      // Every `uses:` is a digest now, so the sabotage is a digest put back on
+      // a branch rather than a tag swapped for one. This rule only ever saw
+      // `@main`; `scripts/assert-action-pins.ts` is what fails the tag.
       edit(tree, ".github/workflows/ci.yml", (source) =>
         source.replace(
-          "uses: actions/checkout@v4",
+          /uses: actions\/checkout@[0-9a-f]{40}.*$/m,
           "uses: actions/checkout@main",
         ),
       );

@@ -249,7 +249,13 @@ integrity of a write against the events it emits.
   - **Test** `src/lib/outbox/write.test.ts` › "writes the rows and the events in one transaction"
 - **Mitigation** — no workflow pins an action to a moving branch, and the action versions are themselves a tracked dependency through `.github/dependabot.yml`. The gate fails a `@main`.
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "fails an action pinned to a moving branch"
-- **Gap** — the actions are pinned to major tags, not to commit digests, so a tag can be moved by its publisher. Digest pinning plus Dependabot's digest updates is the stronger form; it is a change to every workflow step and belongs with the CI work rather than here. SPEC: Pin every GitHub Action to a commit digest, with Dependabot digest updates
+- **Mitigation** — every `uses:` is a 40-character commit digest, not a tag, enforced by `scripts/assert-action-pins.ts`. A tag is a pointer its publisher can move; `@v4` is a promise to run whatever that ref holds on the next push, in a job carrying this repository's token. That is the `tj-actions/changed-files` failure exactly — tags that had already been reviewed were moved under tens of thousands of repositories. Each pin carries the release in a trailing `# vX.Y.Z` comment, which is both what a reviewer reads and what Dependabot rewrites.
+  - **Test** `scripts/assert-action-pins.test.ts` › "P1 — fails an action put back on a major tag"
+  - **Test** `scripts/assert-action-pins.test.ts` › "P2 — fails a digest with the version comment stripped"
+- **Mitigation** — the digests are maintained rather than frozen: `.github/dependabot.yml` keeps the `github-actions` ecosystem, and the gate fails both its removal and an `ignore:` added inside it. A pin with no update path is a pinned advisory, which is the argument people reach for against digest pinning and is only true when this half is missing.
+  - **Test** `scripts/assert-action-pins.test.ts` › "P4 — fails when the github-actions ecosystem is dropped"
+- **Mitigation** — the two files under `workflow-templates/` are held to the same pins as the workflow that runs. Dependabot's `github-actions` ecosystem reads `.github/workflows` and nothing else, so a template — the file somebody copies into a new repository — would otherwise keep whatever digest it was written with forever. One action, one digest, across every file scanned.
+  - **Test** `scripts/assert-action-pins.test.ts` › "P3 — fails the template left behind at an older digest"
 
 ### A09:2021 — Security Logging and Monitoring Failures
 
