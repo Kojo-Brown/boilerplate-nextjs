@@ -58,6 +58,10 @@ function goodManifest(): PrerenderManifest {
       "/admin": { initialRevalidateSeconds: false, srcRoute: "/admin" },
       "/images": { initialRevalidateSeconds: false, srcRoute: "/images" },
       "/upload": { initialRevalidateSeconds: false, srcRoute: "/upload" },
+      "/settings/security": {
+        initialRevalidateSeconds: false,
+        srcRoute: "/settings/security",
+      },
     },
     dynamicRoutes: {
       "/blog/[slug]": {},

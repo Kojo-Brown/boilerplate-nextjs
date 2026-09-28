@@ -36,9 +36,9 @@
  *       call site is a second format, and the one that is not this module's
  *       records nothing.
  *   R3  Nothing but an enumerated set of modules writes a `password` field.
- *       The set is small on purpose: registration, the upgrade, and the seed.
- *       A fourth writer is a fourth thing that can put a value in that column
- *       which `verifyPassword` was never asked about.
+ *       The set is small on purpose: registration, the upgrade, the change, and
+ *       the seed. Another writer is another thing that can put a value in that
+ *       column which `verifyPassword` was never asked about.
  *   R4  `PASSWORD_HASH_POLICY` is at or above a floor. This is the rule that
  *       makes the other three worth having: a self-describing format is a way
  *       to *change* the cost, and nothing else in this repository would notice
@@ -81,6 +81,7 @@ export interface Finding {
 
 export const PASSWORD_FILE = "src/lib/password.ts";
 export const UPGRADE_FILE = "src/lib/auth/password-upgrade.ts";
+export const CHANGE_FILE = "src/lib/auth/password-change.ts";
 export const AUTH_FILE = "src/auth.ts";
 
 /**
@@ -88,10 +89,17 @@ export const AUTH_FILE = "src/auth.ts";
  *
  * `prisma/seed.ts` is in the list because a seed that wrote a hash of its own
  * making would be a demo account nobody can sign into, discovered by hand.
+ *
+ * `CHANGE_FILE` is the only one of the four whose write also ends every session
+ * the old password opened, and that half is not this gate's to check — see rule
+ * R7 of `scripts/assert-session-hardening.ts`. What matters here is the same
+ * thing that matters for the other three: the value it writes came out of
+ * `hashPassword`.
  */
 export const PASSWORD_WRITERS = [
   "src/actions/auth.ts",
   UPGRADE_FILE,
+  CHANGE_FILE,
   "prisma/seed.ts",
 ] as const;
 
@@ -210,7 +218,12 @@ function staticRules(root: string): Finding[] {
   }
 
   // R2 — one derivation site.
-  for (const file of [UPGRADE_FILE, AUTH_FILE, "src/actions/auth.ts"]) {
+  for (const file of [
+    UPGRADE_FILE,
+    CHANGE_FILE,
+    AUTH_FILE,
+    "src/actions/auth.ts",
+  ]) {
     const source = withoutComments(read(root, file));
     if (!/\bscrypt\b|\bpbkdf2\b/.test(source)) continue;
 

@@ -80,6 +80,40 @@ describe("selectPolicy", () => {
     ).toBe(AUTHENTICATION_POLICY);
   });
 
+  it("counts a password change against the credential budget too", () => {
+    // `changePasswordAction` verifies the current password, so a POST to this
+    // path is a guess. Without its own row the Server Action fallback would
+    // allow 120 a minute against an account whose identity the caller already
+    // knows.
+    const change = selectPolicy(
+      describeRequest({
+        method: "POST",
+        pathname: "/settings/security",
+        isServerAction: true,
+      }),
+    );
+    const login = selectPolicy(
+      describeRequest({
+        method: "POST",
+        pathname: "/login",
+        isServerAction: true,
+      }),
+    );
+
+    expect(change?.policy).toBe(AUTHENTICATION_POLICY);
+    // One bucket with the other two doors, for the same reason they share one.
+    expect(change?.scope).toBe(login?.scope);
+  });
+
+  it("does not put navigating to the security page on the credential budget", () => {
+    // The rule is keyed on the request being a Server Action. A GET of the page
+    // — which Next prefetches from every sidebar — must not spend one of ten
+    // password attempts a minute.
+    expect(
+      selectPolicy(describeRequest({ pathname: "/settings/security" })),
+    ).toBeUndefined();
+  });
+
   it("leaves the rest of the auth surface usable", () => {
     // `/api/auth/session` is polled by the client on window focus and the OAuth
     // redirects land here; refusing them breaks sign-in for a real user.

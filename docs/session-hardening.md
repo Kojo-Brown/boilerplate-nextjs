@@ -227,18 +227,72 @@ the point of having it.
 
 ## Revoking every session for a user
 
-A password change owes this, and there is no password change in this application
-yet — so it is written down here rather than shipped as a method with no caller:
+This is what a password change owes, and it now exists:
+`/settings/security` posts `changePasswordAction`, which verifies the current
+password, writes a new hash and revokes every live family for that user —
+including the one that asked.
 
 ```ts
-await prisma.sessionFamily.updateMany({
+// src/lib/auth/password-change.ts, inside one transaction
+const { count } = await tx.user.updateMany({
+  where: { id: userId, password: from },
+  data: { password: to },
+});
+if (count !== 1) return null;
+
+const { count: revoked } = await tx.sessionFamily.updateMany({
   where: { userId, revokedAt: null },
-  data: { revokedAt: new Date(), revokedReason: "REVOKED_BY_USER" },
+  data: { revokedAt: now, revokedReason: "REVOKED_BY_USER" },
 });
 ```
 
 Every one of that user's sessions stops on its next request, in the proxy, with
-no cookie to reach and nothing to clear.
+no cookie to reach and nothing to clear. The browser that made the request does
+not wait for that: the action calls `signOut` afterwards, which clears the
+cookie and lands on `/login`. Revocation is server-side state and cannot clear a
+cookie — that needs a response — so without the sign-out the person would stay
+on a page whose session was already dead and discover it on their next click.
+
+Three decisions in that snippet are worth the words.
+
+**The two writes are one transaction**, which is why this is a method on the
+password-change store rather than on `SessionRegistry`. A registry method would
+bring its own client and could not join the transaction writing `users`, and the
+window between two separate statements has a specific shape: the hash lands, the
+revocation fails on a connection error, and the account is left with a password
+its owner did not choose and sessions they believe they closed — with no way to
+retry, because the current password they would have to type is no longer
+current. Inside one transaction the failure is a change that did not happen,
+which the form can report and the person can repeat. `tx` and not the imported
+singleton for the same reason `docs/outbox.md` gives: the singleton's statement
+runs on its own connection, commits independently, and survives the rollback
+meant to undo it.
+
+**The hash write is conditional on the hash that was verified.** Same
+compare-and-set as the rehash in [`password-hashing.md`](./password-hashing.md),
+and the same reason: a verify-then-rehash landing between the verification and
+this write would otherwise overwrite the new password with a re-derivation of
+the old one. Losing the swap is reported, not retried — a retry needs the
+plaintext of whatever won, which this request does not have.
+
+**Nothing is spared, this session included.** Sparing the caller's own family is
+what most applications do and it needs the `sid` out of the caller's token; this
+application deliberately keeps that claim out of the session object handed to
+the client, so obtaining it means widening what a session exposes in order to
+narrow what a revocation covers. "Everywhere" with an exception is also a rule
+with a path on which a session survives, and re-authenticating with the new
+password is the cheapest possible proof that the change did what it said.
+
+The reason recorded is `REVOKED_BY_USER`, and `revokedAt: null` in the predicate
+is what stops this update relabelling a family that ended in `TOKEN_REUSE`.
+`session_families` has an index on `userId` for exactly this statement.
+
+Rule R7 of `scripts/assert-session-hardening.ts` is what keeps it: it fails on a
+dropped revocation, on a predicate keyed on the family instead of the user, on
+either write moving off the transaction client, on the transaction going away,
+and on the action no longer calling the library. Every one of those leaves a
+working application — the password changes, the form says so, and the cookies
+that were the reason for changing it go on working.
 
 ## Operating it
 
@@ -248,6 +302,16 @@ else to `console.warn`, because a session reaching its absolute deadline is the
 policy working and paging on it would train people to ignore the channel that
 also carries the incident.
 
+A password change writes its own line, under `"event":"password_change"`, with
+the outcome, the user and the number of families it ended. Every outcome is
+logged including the ordinary success — the opposite of the rehash's reporter,
+which suppresses `current` because that would be a line per sign-in saying
+nothing happened. A change is rare, it is the kind of event somebody
+reconstructs a timeline from afterwards, and its `incorrect` outcome is a
+signed-in caller guessing at the password of the account they are already in.
+The line carries an id, an outcome and a count; it cannot carry either password,
+because `reportPasswordChange` is not given them.
+
 `session_families` rows are kept after revocation on purpose: an operator
 answering "why was I signed out?" needs to see `TOKEN_REUSE` rather than
 `SIGNED_OUT`. `expiresAt` is the sweep key — a row past it can decide nothing
@@ -255,13 +319,15 @@ the `sat` claim would not already have decided.
 
 ## Where it lives
 
-| File                                                                            | What it holds                                               |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| [`src/lib/auth/claims.ts`](../src/lib/auth/claims.ts)                           | the four claims, and why the name is `tid`                  |
-| [`src/lib/auth/policy.ts`](../src/lib/auth/policy.ts)                           | the durations and `classifyToken` — all pure                |
-| [`src/lib/auth/registry.ts`](../src/lib/auth/registry.ts)                       | the store interface and the compare-and-swap                |
-| [`src/lib/auth/harden.ts`](../src/lib/auth/harden.ts)                           | the `jwt` callback, parameterised over its clock            |
-| [`src/lib/auth/deployment.ts`](../src/lib/auth/deployment.ts)                   | the pinned origin, `trustHost`, the cookie name             |
-| [`src/auth.config.ts`](../src/auth.config.ts)                                   | the config both NextAuth instances share                    |
-| [`src/proxy.ts`](../src/proxy.ts)                                               | the only caller that may rotate                             |
-| [`scripts/assert-session-hardening.ts`](../scripts/assert-session-hardening.ts) | the six rules, each checked against the regression it names |
+| File                                                                            | What it holds                                                 |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| [`src/lib/auth/claims.ts`](../src/lib/auth/claims.ts)                           | the four claims, and why the name is `tid`                    |
+| [`src/lib/auth/policy.ts`](../src/lib/auth/policy.ts)                           | the durations and `classifyToken` — all pure                  |
+| [`src/lib/auth/registry.ts`](../src/lib/auth/registry.ts)                       | the store interface and the compare-and-swap                  |
+| [`src/lib/auth/harden.ts`](../src/lib/auth/harden.ts)                           | the `jwt` callback, parameterised over its clock              |
+| [`src/lib/auth/deployment.ts`](../src/lib/auth/deployment.ts)                   | the pinned origin, `trustHost`, the cookie name               |
+| [`src/auth.config.ts`](../src/auth.config.ts)                                   | the config both NextAuth instances share                      |
+| [`src/proxy.ts`](../src/proxy.ts)                                               | the only caller that may rotate                               |
+| [`src/lib/auth/password-change.ts`](../src/lib/auth/password-change.ts)         | the change, and the revocation it commits with                |
+| [`src/actions/account.ts`](../src/actions/account.ts)                           | the action, and the sign-out that follows a change            |
+| [`scripts/assert-session-hardening.ts`](../scripts/assert-session-hardening.ts) | the seven rules, each checked against the regression it names |

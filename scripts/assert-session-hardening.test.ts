@@ -240,3 +240,96 @@ describe("R6 — sign-out revokes", () => {
     expect(check(root).some((finding) => finding.rule === "R6")).toBe(true);
   });
 });
+
+describe("R7 — a password change revokes every session", () => {
+  it("fails when the revocation is dropped", () => {
+    // The change still works. Every cookie taken from another device also still
+    // works, for up to the absolute deadline — which is the one thing the person
+    // pressing the button believed they were preventing.
+    const root = withBrokenTree([
+      {
+        file: "src/lib/auth/password-change.ts",
+        edit: (source) =>
+          source.replace(
+            /const \{ count: revoked \} = await tx\.sessionFamily[\s\S]*?\}\);/,
+            "const revoked = 0;",
+          ),
+      },
+    ]);
+
+    const findings = check(root).filter((finding) => finding.rule === "R7");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("the revocation");
+  });
+
+  it("fails when the revocation is keyed on one family instead of the user", () => {
+    const root = withBrokenTree([
+      {
+        file: "src/lib/auth/password-change.ts",
+        edit: (source) =>
+          source.replace(
+            "where: { userId, revokedAt: null },",
+            "where: { id: userId, revokedAt: null },",
+          ),
+      },
+    ]);
+
+    const findings = check(root).filter((finding) => finding.rule === "R7");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("userId");
+  });
+
+  it("fails when a write moves onto the imported singleton", () => {
+    // Well-typed by construction: `unscopedPrisma` and `tx` are both clients
+    // with the same delegates. The statement runs outside the transaction, so
+    // the revocation can commit without the hash landing.
+    const root = withBrokenTree([
+      {
+        file: "src/lib/auth/password-change.ts",
+        edit: (source) =>
+          source.replace(
+            "await tx.sessionFamily.updateMany(",
+            "await unscopedPrisma.sessionFamily.updateMany(",
+          ),
+      },
+    ]);
+
+    const findings = check(root).filter((finding) => finding.rule === "R7");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.message).toContain("transaction client");
+  });
+
+  it("fails when the transaction goes away entirely", () => {
+    const root = withBrokenTree([
+      {
+        file: "src/lib/auth/password-change.ts",
+        edit: (source) =>
+          source.replace("unscopedPrisma.$transaction(", "immediately("),
+      },
+    ]);
+
+    expect(
+      check(root).some(
+        (finding) =>
+          finding.rule === "R7" && finding.message.includes("no transaction"),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails when the action stops calling the library", () => {
+    // The shape of the failure the ThemeToggle item found, one layer down: the
+    // form still posts, the action still answers, and the thing it was written
+    // to do has no caller.
+    const root = withBrokenTree([
+      {
+        file: "src/actions/account.ts",
+        edit: (source) =>
+          source.replace("await changeUserPassword(", "await noop("),
+      },
+    ]);
+
+    const findings = check(root).filter((finding) => finding.rule === "R7");
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.file).toBe("src/actions/account.ts");
+  });
+});
