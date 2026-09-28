@@ -118,6 +118,10 @@ export const UNSCOPED_READERS: readonly { file: string; why: string }[] = [
     file: "src/actions/auth.ts",
     why: "registration runs before the account, and therefore any workspace, exists",
   },
+  {
+    file: "src/lib/auth/password-upgrade.ts",
+    why: "a password belongs to a person and not to one of their workspaces, so the rehash writes `users` — untenanted, the same table and the same client registration writes the first hash through",
+  },
 ];
 
 // ---------------------------------------------------------------------------
