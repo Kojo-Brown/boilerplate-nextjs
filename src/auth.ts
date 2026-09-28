@@ -12,6 +12,11 @@ import { serverEnv } from "@/lib/env/server";
 import { prisma } from "@/lib/prisma";
 import { authConfig } from "@/auth.config";
 import { verifyPassword } from "@/lib/password";
+import {
+  prismaPasswordStore,
+  reportPasswordUpgrade,
+  upgradePasswordHash,
+} from "@/lib/auth/password-upgrade";
 import { readSessionClaims } from "@/lib/auth/claims";
 import { hardenSessionToken, reportSessionEvent } from "@/lib/auth/harden";
 import { sessionRegistry } from "@/lib/auth/registry";
@@ -50,6 +55,19 @@ const credentialsSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
 });
+
+/**
+ * The dependencies `@/lib/auth/password-upgrade` is parameterised over.
+ *
+ * Bound here rather than defaulted inside that module for the same reason the
+ * session hardening below is: the Prisma store is the half that cannot run in
+ * a unit test, and a module that reaches for it itself is a module whose tests
+ * have to mock the database to assert anything about the decision.
+ */
+export const passwordUpgrade = {
+  store: prismaPasswordStore,
+  report: reportPasswordUpgrade,
+};
 
 /**
  * The dependencies `@/lib/auth/harden` is parameterised over, bound once.
@@ -99,6 +117,25 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const valid = await verifyPassword(parsed.data.password, user.password);
         if (!valid) return null;
+
+        // Verify-then-rehash. This is the only request in an account's life
+        // that holds the plaintext, so it is the only one that can raise the
+        // hash's cost to the current policy — see
+        // `@/lib/auth/password-upgrade` for why it cannot be a migration and
+        // why it is a compare-and-set. Awaited rather than left floating: a
+        // promise abandoned here would be cancelled with the request in a
+        // serverless runtime, so the upgrade would appear to work locally and
+        // never happen in production. It never throws and never refuses a
+        // sign-in, so the only cost of awaiting is the derivation itself, on
+        // the one sign-in per account that needs it.
+        await upgradePasswordHash(
+          {
+            userId: user.id,
+            storedHash: user.password,
+            password: parsed.data.password,
+          },
+          passwordUpgrade,
+        );
 
         return {
           id: user.id,

@@ -92,13 +92,24 @@ derivation and comparison rather than about algorithm choice.
 - **Mitigation** — passwords are scrypt-hashed with a per-password 16-byte salt and verified with `timingSafeEqual`, in `src/lib/password.ts`. The length check before the comparison is load-bearing: `timingSafeEqual` throws on a length mismatch rather than returning false.
   - **Test** `src/lib/password.test.ts` › "produces different hashes for the same password"
   - **Test** `src/lib/password.test.ts` › "returns false for a hash without a dot separator"
+- **Mitigation** — the hash records the cost that produced it, in PHC string format (`$scrypt$ln=16,r=8,p=2$salt$key`), and `verifyPassword` derives at the parameters it reads out of the stored string rather than at the current policy. That is what makes the cost a line that can move: the parameters are `ln=16, r=8, p=2`, one of the equivalent configurations OWASP's Password Storage cheat sheet lists, chosen over `ln=17, r=8, p=1` because they cost the same (386 ms against 414 ms, measured) and peak memory halves with N — and Node runs `scrypt` on the libuv thread pool, so that number is multiplied by concurrency. See `docs/password-hashing.md`.
+  - **Test** `src/lib/password.test.ts` › "derives at the hash's parameters and not at the current policy"
+  - **Test** `src/lib/password.test.ts` › "records its own cost parameters in the hash"
+- **Mitigation** — sign-in is verify-then-rehash: `@/lib/auth/password-upgrade` re-derives a below-policy hash from the plaintext the request is already holding, which is the only request in an account's life that has it. The write is `UPDATE … WHERE id = :id AND password = :verified`, so a password change landing between the read and the write wins instead of being silently reverted to a re-derivation of the old password, and a failure never refuses a sign-in that has already succeeded.
+  - **Test** `src/lib/auth/password-upgrade.test.ts` › "re-derives a below-policy hash and writes it at the new cost"
+  - **Test** `src/lib/auth/password-upgrade.test.ts` › "names the hash it verified against, so a concurrent change wins"
+- **Mitigation** — hashes in the previous parameterless `hex.salt` format still verify, at the Node defaults that produced them, and report as needing a rehash. Losing that locks out every account older than the format change and is invisible in a fresh database, so `scripts/assert-password-hashing.ts` probe P2 re-derives one with the old implementation on every build.
+  - **Test** `src/lib/password.test.ts` › "verifies a hash written by the previous parameterless format"
+  - **Test** `scripts/assert-password-hashing.test.ts` › "P2 — fires when the previous format stops verifying"
+- **Mitigation** — the parameters in a stored hash are an allocation size and a loop count, read on an unauthenticated POST, so they are bounded: `128 · r · (N + p + 2)` may not exceed 256 MiB and a hash outside that is refused rather than evaluated. `maxmem` is derived from the same expression, which is also what makes the cost raisable at all — Node defaults it to 32 MiB and refuses every parameter set above its own default N.
+  - **Test** `src/lib/password.test.ts` › "returns false rather than allocating for a hash demanding gigabytes"
+  - **Test** `src/lib/password.test.ts` › "raises the cost without help from maxmem, which Node defaults to 32 MiB"
 - **Mitigation** — transport and cookie flags are a deployment fact rather than a per-request reading of `x-forwarded-proto`: `src/lib/auth/deployment.ts` pins them to the validated origin, and the session cookie takes the `__Host-` prefix, which additionally forbids a `Domain` and so cannot be set by a sibling subdomain.
   - **Test** `src/lib/auth/deployment.test.ts` › "never carries a Domain, which __Host- forbids"
   - **Test** `src/lib/auth/deployment.test.ts` › "is decided by the pinned origin and not by NODE_ENV"
 - **Mitigation** — HSTS is sent on every TLS response, with `includeSubDomains` and a two-year window, from `src/lib/security/headers.ts`. Not `preload`: that is months to reverse and applies to every subdomain, which is a decision about somebody's DNS rather than a default a boilerplate gets to make.
   - **Test** `src/lib/security/headers.test.ts` › "sends HSTS on an https request"
   - **Test** `src/lib/security/headers.test.ts` › "does not ask for preload, which is not a boilerplate's decision"
-- **Gap** — the scrypt parameters are Node's defaults (N=16384) and the stored hash records no parameters, so they cannot be raised without invalidating every existing hash. A format that carries its own cost parameters, and a verify-then-rehash path, is the fix. SPEC: Password hashing that records its own cost parameters, with verify-then-rehash on sign-in
 
 ### A03:2021 — Injection
 

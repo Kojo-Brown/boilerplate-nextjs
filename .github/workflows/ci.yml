@@ -671,6 +671,25 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # And again, for the password hash. Every part of this one is invisible
+      # by absence: delete the `upgradePasswordHash` call from `authorize` and
+      # every sign-in still works, hashes just stop being upgraded forever;
+      # lower `PASSWORD_HASH_POLICY` and the whole unit suite stays green,
+      # because `needsRehash` measures against that same constant; drop the
+      # legacy branch from the parser and nothing fails until the first person
+      # with an account older than the format change tries to sign in. The four
+      # probes derive real hashes against the module rather than reading it —
+      # including one at a cost one step above policy, which is the claim the
+      # item was opened for and which fails the moment `maxmem` stops being
+      # computed from the parameters. See docs/password-hashing.md.
+      #
+      # Static analysis plus four derivations; it needs no build output and no
+      # database, and sits here with the other gates.
+      - name: Assert password hashing
+        run: pnpm exec tsx scripts/assert-password-hashing.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.
