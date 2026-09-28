@@ -52,10 +52,20 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # The workflows themselves, which are code that runs with this repository's
-  # secrets. An action pinned to a moving major tag is a supply-chain dependency
-  # whose contents can change without a commit here — updating the pins is how
-  # that window closes, and A08's row in docs/owasp-top-10.md is honest about
-  # what tag-pinning does and does not buy.
+  # secrets. Every `uses:` is pinned to a commit digest rather than a tag, so
+  # this entry is the only thing that ever moves one: Dependabot resolves the
+  # action's newest release, rewrites the SHA *and* the trailing `# vX.Y.Z`
+  # comment together, and the diff says which release the new bytes came from.
+  # Without this entry a digest-pinned workflow is frozen rather than hardened —
+  # it keeps running whatever was current the day it was written, advisories
+  # included. `scripts/assert-action-pins.ts` rule P4 fails the loss of this
+  # entry, and fails an `ignore:` added inside it, because ignoring an action
+  # here is the quiet version of deleting it.
+  #
+  # `directory: /` means `.github/workflows`, and only that. Dependabot has no
+  # view of `workflow-templates/`, which this repository also ships — so the
+  # templates' pins are held to the workflow's by rule P3 of the same gate
+  # rather than by anything GitHub runs.
   - package-ecosystem: github-actions
     directory: /
     schedule:

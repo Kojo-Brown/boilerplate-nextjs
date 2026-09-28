@@ -35,9 +35,9 @@ env:
 # thrown errors, which is the one class of warning the runtime can escalate for
 # us. It is set per step rather than here on purpose: a workflow-level value is
 # inherited by every JavaScript *action* too, and those run on the runner's own
-# Node (24) before `setup-node` has done anything. `pnpm/action-setup@v4`'s
-# bundled installer calls `url.parse()` (DEP0169), so a workflow-level setting
-# killed all six jobs during setup — see the first run on this PR.
+# Node (24) before `setup-node` has done anything. `pnpm/action-setup`'s bundled
+# installer calls `url.parse()` (DEP0169), so a workflow-level setting killed
+# all six jobs during setup — see the first run on that PR.
 #
 # It is also deliberately absent from `pnpm install`: the same DEP0169 path runs
 # when pnpm builds its registry auth headers, and that is pnpm's code to fix,
@@ -58,13 +58,13 @@ jobs:
         # to support, or claiming support for a version CI never runs.
         node-version: ["22", "24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # No `version:` input on purpose — the action reads `packageManager`
       # from package.json, and specifying both is a hard error.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -89,14 +89,14 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history so the diff below has a merge base to work from.
           fetch-depth: 0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: pnpm
@@ -128,11 +128,11 @@ jobs:
       matrix:
         node-version: ["22", "24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -163,11 +163,11 @@ jobs:
       matrix:
         node-version: ["22", "24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -219,11 +219,11 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -239,7 +239,7 @@ jobs:
       # on, so a source edit reuses the previous run's cache instead of starting
       # cold. Per Node major, since the two produce different artefacts.
       - name: Restore Next.js build cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .next/cache
           key: ${{ runner.os }}-node${{ matrix.node-version }}-nextjs-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('src/**/*.[jt]s', 'src/**/*.[jt]sx') }}
@@ -646,6 +646,28 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # Every `uses:` above and in `workflow-templates/` is a commit digest, and
+      # this is what keeps it one. A tag is a pointer its publisher can move, so
+      # `actions/checkout@v4` is a promise to run whatever is at that ref on the
+      # next push — with this job's token, in a job that holds the database URLs
+      # and mints an auth secret. The OWASP gate's existing rule fails a `@main`
+      # and nothing else, which `@v4` passes, so this is the rule that was
+      # missing rather than a second copy of one.
+      #
+      # P3 is the one worth reading twice. Dependabot's `github-actions`
+      # ecosystem looks inside `.github/workflows` and nowhere else, so the two
+      # files under `workflow-templates/` — which exist to be copied into other
+      # repositories — would keep whatever digest they were written with while
+      # this one moved. Holding all three to the same pin is the only
+      # maintenance those templates get.
+      #
+      # Static analysis over the workflow files, so it needs no build output; it
+      # sits here with the other gates.
+      - name: Assert action pins
+        run: pnpm exec tsx scripts/assert-action-pins.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # Holds the upload path to the seven properties it depends on, every one of
       # which can be lost while the feature goes on working — which is the test
       # for whether something belongs in a gate rather than in a unit test. Take
@@ -735,7 +757,7 @@ jobs:
       # The artifact name carries the Node major, because two matrix legs
       # uploading under one name is a hard error in upload-artifact v4.
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nextjs-build-node${{ matrix.node-version }}
           path: .next/
