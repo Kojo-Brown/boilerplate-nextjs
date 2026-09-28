@@ -43,6 +43,7 @@
  * an outage of the login page, which is a self-inflicted denial of service in
  * the name of a cost parameter.
  */
+import { log } from "@/lib/logging/logger";
 import { unscopedPrisma } from "@/lib/tenancy/client";
 import {
   hashPassword,
@@ -140,9 +141,9 @@ export function reportPasswordUpgrade(event: PasswordUpgradeEvent): void {
   // would be one line per login saying nothing happened.
   if (event.outcome === "current") return;
 
-  const line = JSON.stringify({ event: "password_rehash", ...event });
-  if (event.outcome === "failed") console.error(line);
-  else console.warn(line);
+  log(event.outcome === "failed" ? "error" : "warn", "password_rehash", {
+    ...event,
+  });
 }
 
 /**

@@ -57,6 +57,7 @@ import "server-only";
 
 import { headers } from "next/headers";
 import { serverEnv } from "@/lib/env/server";
+import { logError } from "@/lib/logging/logger";
 import { ActionError } from "@/lib/actions/result";
 
 /**
@@ -222,7 +223,7 @@ export async function assertSameOrigin(): Promise<void> {
 
   // Logged, not returned. The operator of a misconfigured proxy needs both
   // sides of the comparison; the caller gets the fixed sentence above.
-  console.error(`[action] rejected cross-origin request: ${result.reason}`);
+  logError("action.cross_origin_rejected", { reason: result.reason });
 
   throw new ActionError(ORIGIN_REJECTED_MESSAGE);
 }

@@ -45,6 +45,55 @@ const config = [
     },
   },
   {
+    // One writer, enforced where it is cheapest to enforce: in the editor.
+    //
+    // Redaction can only apply to lines that go through
+    // `src/lib/logging/redact.ts`, and before this item there were twenty-odd
+    // `console.*` calls across the action wrapper, the route wrapper, the
+    // idempotency runner, the outbox, the upload path and two env modules,
+    // several of them handing Node a thrown value to format at its own
+    // discretion. A redactor with a bypass that short is a redactor with no
+    // coverage.
+    //
+    // This rule is the first of two layers and catches the typing of it;
+    // `scripts/assert-log-redaction.ts` is the second and catches the rest —
+    // an `eslint-disable` comment, a rule removed from this file, a `globalThis
+    // .console` spelling. Neither layer sees what the other does.
+    //
+    // Test files are out of scope: spying on the console is how a test asserts
+    // that nothing was written to it.
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    rules: {
+      "no-console": "error",
+    },
+  },
+  {
+    // The writer itself, and the two client-side exceptions.
+    //
+    // `src/lib/logging/logger.ts` is where the ban has to end: something has to
+    // call `console`.
+    //
+    // The others run only in a browser, where "the log" is the console of the
+    // person who caused the error and not a stream anyone collects — the thing
+    // redaction exists to keep a secret out of. Routing them through the
+    // serialiser would put it, and its pattern table, into the client bundle to
+    // protect a value that is already in that browser's memory.
+    // `src/lib/env/client.ts` has a second reason that is stronger than the
+    // first: the only thing it can print is the validation failure of a
+    // `NEXT_PUBLIC_*` variable, and a schema containing no secrets is the whole
+    // purpose of the server/client env split. Both are held to this list by
+    // rule R2 of `scripts/assert-log-redaction.ts`.
+    files: [
+      "src/lib/logging/logger.ts",
+      "src/lib/env/client.ts",
+      "src/app/**/error.tsx",
+    ],
+    rules: {
+      "no-console": "off",
+    },
+  },
+  {
     ignores: [
       ".next/**",
       "out/**",

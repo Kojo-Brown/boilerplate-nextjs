@@ -24,6 +24,7 @@ import {
   PASSWORD_HASH_POLICY,
   type ScryptParameters,
 } from "@/lib/password";
+import { captureLogs } from "@/test/log-lines";
 
 /**
  * Cheap enough to derive inside a test. The cost of the hash is not what is
@@ -428,37 +429,39 @@ describe("reportPasswordChange", () => {
   });
 
   it("logs a successful change at warn", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
+    const logs = captureLogs();
     reportPasswordChange({
       outcome: "changed",
       userId: "u1",
       sessionsRevoked: 2,
     });
+    logs.restore();
 
-    expect(warn).toHaveBeenCalledWith(
+    expect(logs.warn).toEqual([
       JSON.stringify({
+        level: "warn",
         event: "password_change",
         outcome: "changed",
         userId: "u1",
         sessionsRevoked: 2,
       }),
-    );
+    ]);
   });
 
   it("logs a refusal at error", async () => {
     // A signed-in caller guessing at the password of the account they are
     // already in is the line somebody reconstructs a timeline from.
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-
+    const logs = captureLogs();
     reportPasswordChange({ outcome: "incorrect", userId: "u1" });
+    logs.restore();
 
-    expect(error).toHaveBeenCalledWith(
+    expect(logs.error).toEqual([
       JSON.stringify({
+        level: "error",
         event: "password_change",
         outcome: "incorrect",
         userId: "u1",
       }),
-    );
+    ]);
   });
 });

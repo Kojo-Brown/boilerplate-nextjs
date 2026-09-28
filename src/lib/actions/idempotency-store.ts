@@ -27,6 +27,7 @@
  * and a misleading log line is much the smallest of the three costs.
  */
 import { Prisma } from "@prisma/client";
+import { logWarn } from "@/lib/logging/logger";
 import { prisma } from "@/lib/prisma";
 import type {
   ClaimOutcome,
@@ -171,10 +172,12 @@ export const prismaIdempotencyStore: IdempotencyStore = {
     });
 
     if (count === 0) {
-      console.warn(
-        `[idempotency] ${action}: claim was taken over before the result could be recorded; ` +
-          "a later retry of this key will re-execute.",
-      );
+      logWarn("idempotency.claim_taken_over", {
+        action,
+        detail:
+          "the claim was taken over before the result could be recorded; a " +
+          "later retry of this key will re-execute.",
+      });
     }
   },
 

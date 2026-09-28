@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { signOut } from "@/auth";
 import { isFrameworkSignal } from "@/lib/api/errors";
+import { logError } from "@/lib/logging/logger";
 import { ActionError } from "@/lib/actions/result";
 import { defineAuthedFormAction } from "@/lib/actions/define-authed-action";
 import {
@@ -169,10 +170,10 @@ async function endThisBrowsersSession(): Promise<void> {
     await signOut({ redirectTo: POST_PASSWORD_CHANGE_PATH });
   } catch (thrown) {
     if (isFrameworkSignal(thrown)) throw thrown;
-    console.error(
-      "[action] changePassword: the change committed but signing this " +
-        "browser out failed:",
-      thrown,
-    );
+    logError("action.failed", {
+      action: "changePassword",
+      detail: "the change committed but signing this browser out failed.",
+      error: thrown,
+    });
   }
 }

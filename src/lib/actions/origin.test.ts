@@ -8,6 +8,7 @@ import {
 import { ActionError } from "@/lib/actions/result";
 import { setRequestHeaders } from "@/test/request-headers";
 import { serverEnv } from "@/lib/env/server";
+import { captureLogs } from "@/test/log-lines";
 
 /**
  * The origin leg, as a decision table.
@@ -276,14 +277,20 @@ describe("assertSameOrigin", () => {
       host: "localhost:3000",
     });
 
-    await expect(assertSameOrigin()).rejects.toThrow(ORIGIN_REJECTED_MESSAGE);
+    const logs = captureLogs();
+    try {
+      await expect(assertSameOrigin()).rejects.toThrow(ORIGIN_REJECTED_MESSAGE);
+    } finally {
+      logs.restore();
+    }
 
     // The message a caller sees names neither side; a message that named the
     // expected host would tell whoever is probing exactly what to forge.
     expect(ORIGIN_REJECTED_MESSAGE).not.toMatch(/localhost/);
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('Origin "evil.example" does not match'),
-    );
+    expect(logs.parsed()).toMatchObject({
+      event: "action.cross_origin_rejected",
+    });
+    expect(logs.error[0]).toContain('Origin \\"evil.example\\" does not match');
   });
 
   it("honours ALLOWED_ACTION_ORIGINS", async () => {

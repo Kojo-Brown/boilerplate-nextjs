@@ -37,6 +37,7 @@ import {
 } from "@/lib/auth/policy";
 import type { JWT } from "@auth/core/jwt";
 import type { SessionRegistry } from "@/lib/auth/registry";
+import { log } from "@/lib/logging/logger";
 
 /**
  * Something worth a line in the log. Reported through a sink rather than
@@ -77,15 +78,20 @@ export interface HardenParams {
 /**
  * The default reporter.
  *
- * `console.warn` rather than `error` for everything but reuse: a session
- * reaching its absolute deadline is the policy working, not a fault, and
- * paging on it would train people to ignore the channel that also carries
- * `token_reuse`.
+ * `warn` rather than `error` for everything but reuse: a session reaching its
+ * absolute deadline is the policy working, not a fault, and paging on it would
+ * train people to ignore the channel that also carries `token_reuse`.
+ *
+ * The line goes through `@/lib/logging/logger`, so `sid` and `userId` are
+ * checked against the redactor on the way out like everything else. Both
+ * survive it, and that is a property worth knowing rather than assuming: `sid`
+ * is a UUID and `userId` a cuid, and `src/lib/logging/redact.ts` excludes both
+ * formats from its entropy rule precisely so that this trail stays correlatable.
  */
 export function reportSessionEvent(event: SessionSecurityEvent): void {
-  const line = JSON.stringify({ event: "auth.session", ...event });
-  if (event.type === "token_reuse") console.error(line);
-  else console.warn(line);
+  log(event.type === "token_reuse" ? "error" : "warn", "auth.session", {
+    ...event,
+  });
 }
 
 export async function hardenSessionToken(

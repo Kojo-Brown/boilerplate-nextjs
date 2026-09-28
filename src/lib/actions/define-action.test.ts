@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import {
@@ -12,15 +12,12 @@ import {
 import { ActionError } from "@/lib/actions/result";
 import { ORIGIN_REJECTED_MESSAGE } from "@/lib/actions/origin";
 import { setRequestHeaders } from "@/test/request-headers";
+import { captureLogs } from "@/test/log-lines";
 
 const CROSS_ORIGIN = {
   origin: "https://evil.example",
   host: "localhost:3000",
 };
-
-beforeEach(() => {
-  vi.spyOn(console, "error").mockImplementation(() => {});
-});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -137,14 +134,30 @@ describe("defineAction", () => {
       },
     });
 
-    const result = await action({});
+    const logs = captureLogs();
+    let result;
+    try {
+      result = await action({});
+    } finally {
+      logs.restore();
+    }
 
     // The caller must not learn the connection string.
     expect(result).toEqual({ success: false, error: UNEXPECTED_ERROR_MESSAGE });
-    expect(console.error).toHaveBeenCalledWith(
-      "[action] explodes failed:",
-      expect.any(Error),
-    );
+    expect(logs.error).toHaveLength(1);
+    expect(logs.parsed()).toMatchObject({
+      event: "action.failed",
+      action: "explodes",
+    });
+
+    // Nor must the log. This handler is the one every Server Action runs
+    // inside, the password change included, and a driver reports a failed
+    // statement by quoting it — so the line that is the only record of the
+    // fault is also the line most likely to carry a credential.
+    expect(logs.error[0]).not.toContain("hunter2");
+    expect(logs.error[0]).not.toContain("postgres://");
+    // Still names the relation, which is what anybody reading it needs.
+    expect(logs.error[0]).toContain("does not exist");
   });
 
   it("lets a framework signal through untouched", async () => {
@@ -161,8 +174,13 @@ describe("defineAction", () => {
       },
     });
 
-    await expect(action({})).rejects.toBe(signal);
-    expect(console.error).not.toHaveBeenCalled();
+    const logs = captureLogs();
+    try {
+      await expect(action({})).rejects.toBe(signal);
+    } finally {
+      logs.restore();
+    }
+    expect(logs.error).toEqual([]);
   });
 });
 

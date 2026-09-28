@@ -18,6 +18,7 @@ import {
   verifyPassword,
   type ScryptParameters,
 } from "@/lib/password";
+import { captureLogs } from "@/test/log-lines";
 
 /** Cheap enough to hash inside a test; the cost is not what is under test. */
 const OLD: ScryptParameters = { ln: 1, r: 1, p: 1 };
@@ -219,28 +220,27 @@ describe("reportPasswordUpgrade", () => {
   });
 
   it("logs an upgrade at warn and a failure at error", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-
+    const logs = captureLogs();
     reportPasswordUpgrade({ outcome: "upgraded", userId: "u1" });
     reportPasswordUpgrade({ outcome: "failed", userId: "u1", error: "boom" });
+    logs.restore();
 
-    expect(warn).toHaveBeenCalledWith(
+    expect(logs.warn).toEqual([
       JSON.stringify({
+        level: "warn",
         event: "password_rehash",
         outcome: "upgraded",
         userId: "u1",
       }),
-    );
-    expect(error).toHaveBeenCalledWith(
+    ]);
+    expect(logs.error).toEqual([
       JSON.stringify({
+        level: "error",
         event: "password_rehash",
         outcome: "failed",
         userId: "u1",
         error: "boom",
       }),
-    );
-    warn.mockRestore();
-    error.mockRestore();
+    ]);
   });
 });

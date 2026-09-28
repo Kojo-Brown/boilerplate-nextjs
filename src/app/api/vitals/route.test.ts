@@ -5,6 +5,7 @@ import type { VitalsAck } from "./route";
 import type { VitalsLogLine } from "@/lib/vitals/sink";
 import type { ApiErrorBody } from "@/lib/api/errors";
 import type { WebVitalsMetric } from "@/lib/vitals/metric";
+import { captureLogs } from "@/test/log-lines";
 
 function metric(overrides: Partial<WebVitalsMetric> = {}): WebVitalsMetric {
   return {
@@ -34,18 +35,15 @@ async function captureLog(run: () => Promise<Response>): Promise<{
   response: Response;
   lines: VitalsLogLine[];
 }> {
-  const written: string[] = [];
-  const spy = vi.spyOn(console, "log").mockImplementation((line: unknown) => {
-    written.push(String(line));
-  });
+  const logs = captureLogs();
   try {
     const response = await run();
     return {
       response,
-      lines: written.map((line) => JSON.parse(line) as VitalsLogLine),
+      lines: logs.info.map((line) => JSON.parse(line) as VitalsLogLine),
     };
   } finally {
-    spy.mockRestore();
+    logs.restore();
   }
 }
 
@@ -193,14 +191,21 @@ describe("POST /api/vitals", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("ENOTFOUND collector.example"));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    const response = await post({ path: "/", metrics: [metric()] });
+    const logs = captureLogs();
+    let response;
+    try {
+      response = await post({ path: "/", metrics: [metric()] });
+    } finally {
+      logs.restore();
+    }
 
     expect(response.status).toBe(202);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(errorSpy).toHaveBeenCalledTimes(1);
-    expect(String(errorSpy.mock.calls[0]?.[0])).toContain("[vitals]");
+    expect(logs.error).toHaveLength(1);
+    expect(logs.parsed()).toMatchObject({
+      event: "vitals.delivery_failed",
+      sink: "http",
+    });
   });
 
   it("forwards to the configured collector instead of the log", async () => {

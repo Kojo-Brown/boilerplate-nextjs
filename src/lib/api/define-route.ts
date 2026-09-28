@@ -31,6 +31,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import type { NextRequest } from "next/server";
+import { logError } from "@/lib/logging/logger";
 import { ApiError, isFrameworkSignal, toApiError } from "@/lib/api/errors";
 import type { ApiErrorBody } from "@/lib/api/errors";
 
@@ -193,10 +194,11 @@ export function defineRoute<
       // already replaced its message with a fixed sentence for the client, so
       // if it is not logged here it is gone.
       if (error !== thrown) {
-        console.error(
-          `[api] ${request.method} ${request.nextUrl.pathname} failed:`,
-          thrown,
-        );
+        logError("api.failed", {
+          method: request.method,
+          path: request.nextUrl.pathname,
+          error: thrown,
+        });
       }
 
       return error.toResponse();

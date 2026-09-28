@@ -18,9 +18,12 @@
  * an API key would mean this feature ships disabled, which is the state it is
  * already in.
  *
- * `console.log` rather than a logging library for the same reason: adding one
- * would make the sink's output depend on a transport that has to be configured
- * before the fallback works.
+ * Stdout rather than a logging library for the same reason: adding one would
+ * make the sink's output depend on a transport that has to be configured before
+ * the fallback works. It goes out through `@/lib/logging/logger`, which is this
+ * application's one writer and the thing that runs the line past the redactor —
+ * a metric is not secret, but `path` is a caller-supplied string and this sink
+ * is the interface a deployment replaces with one of its own.
  *
  * ## Why one line per metric, not one per batch
  *
@@ -30,6 +33,7 @@
  * week"), and a row per metric is what makes that a filter rather than a JSON
  * traversal inside the query.
  */
+import { writeLine } from "@/lib/logging/logger";
 import type { RatedMetric } from "./metric";
 
 /** One measurement, with everything the server knows about it attached. */
@@ -70,19 +74,20 @@ export const VITALS_LOG_EVENT = "web-vitals" as const;
  *
  * `write` is injected so the tests capture lines rather than reaching into the
  * global console, and so a deployment that has a structured logger can pass its
- * own writer without reimplementing the shape.
+ * own writer without reimplementing the shape. It takes the line as an object
+ * and not as a string: serialising is the redactor's job, and a writer that was
+ * handed text would be a way around it.
  */
 export function createLogSink(
-  write: (line: string) => void = (line) => {
-    console.log(line);
+  write: (line: VitalsLogLine) => void = (line) => {
+    writeLine("info", line);
   },
 ): VitalsSink {
   return {
     name: "log",
     deliver(events) {
       for (const event of events) {
-        const line: VitalsLogLine = { event: VITALS_LOG_EVENT, ...event };
-        write(JSON.stringify(line));
+        write({ event: VITALS_LOG_EVENT, ...event });
       }
     },
   };

@@ -21,6 +21,7 @@
  */
 import "server-only";
 
+import { logError } from "@/lib/logging/logger";
 import { z } from "zod";
 
 /**
@@ -179,10 +180,20 @@ const parsed = skip
   : server.safeParse(process.env);
 
 if (!parsed.success) {
-  console.error(
-    "Invalid environment variables:",
-    parsed.error.flatten().fieldErrors,
-  );
+  // A list and not the `{ VARIABLE: [messages] }` map `flatten()` returns, and
+  // the reason is the redactor: its key rule refuses the *value under* a field
+  // named like a credential, so a map keyed by variable name redacts the
+  // diagnosis for exactly the variables whose absence stops the server booting
+  // — `NEXTAUTH_SECRET` would read `[redacted: key "NEXTAUTH_SECRET"]` with no
+  // hint of why it was rejected. Moving the name into a value under `variable`
+  // keeps both halves: the name is a public identifier, the messages are Zod's
+  // own and carry no input.
+  logError("config.invalid", {
+    scope: "server",
+    invalid: Object.entries(parsed.error.flatten().fieldErrors).map(
+      ([variable, issues]) => ({ variable, issues }),
+    ),
+  });
   throw new Error("Invalid environment variables");
 }
 

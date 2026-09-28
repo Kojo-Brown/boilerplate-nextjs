@@ -43,6 +43,7 @@
  * `@/lib/actions/define-authed-action` adds the session leg to the first two.
  */
 import { z } from "zod";
+import { logError } from "@/lib/logging/logger";
 import { isFrameworkSignal } from "@/lib/api/errors";
 import { assertSameOrigin } from "@/lib/actions/origin";
 import { ActionError, err, ok } from "@/lib/actions/result";
@@ -249,7 +250,7 @@ export async function runHardenedAction<TIn, TOut, TPrepared>(
 
     // The only record of the original. `UNEXPECTED_ERROR_MESSAGE` replaces it
     // on the way out, so if it is not logged here it is gone.
-    console.error(`[action] ${name} failed:`, thrown);
+    logError("action.failed", { action: name, error: thrown });
     return err(UNEXPECTED_ERROR_MESSAGE);
   }
 }

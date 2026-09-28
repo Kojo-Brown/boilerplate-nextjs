@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { defineRoute } from "./define-route";
 import { ApiError } from "./errors";
+import { captureLogs } from "@/test/log-lines";
 
 function request(url: string, init?: RequestInit): NextRequest {
   return new NextRequest(new Request(url, init));
@@ -217,9 +218,6 @@ describe("defineRoute error handling", () => {
   });
 
   it("answers an unexpected throw with an opaque 500 and logs the original", async () => {
-    const error = vi
-      .spyOn(console, "error")
-      .mockImplementation(() => undefined);
     const leak = new Error('relation "users" does not exist');
     const GET = defineRoute<never>({
       handler: () => {
@@ -227,17 +225,25 @@ describe("defineRoute error handling", () => {
       },
     });
 
-    const response = await GET(request("https://example.test/api/thing"));
+    const logs = captureLogs();
+    let response;
+    try {
+      response = await GET(request("https://example.test/api/thing"));
+    } finally {
+      logs.restore();
+    }
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toEqual({
       error: { code: "internal_error", message: "Internal server error" },
     });
     // Redacted on the wire, but not lost: this log is the only remaining record.
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("/api/thing"),
-      leak,
-    );
+    expect(logs.parsed()).toMatchObject({
+      event: "api.failed",
+      method: "GET",
+      path: "/api/thing",
+    });
+    expect(logs.error[0]).toContain("does not exist");
   });
 
   it("rethrows a framework control-flow signal instead of answering it", async () => {

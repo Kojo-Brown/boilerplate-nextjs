@@ -63,6 +63,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { unscopedPrisma, withTenantTransaction } from "@/lib/tenancy/client";
+import { logError } from "@/lib/logging/logger";
 import { dispatchOutboxEvent } from "@/lib/outbox/dispatch";
 import type { DispatchContext } from "@/lib/outbox/dispatch";
 import type { OutboxEvent } from "@/lib/outbox/events";
@@ -273,10 +274,12 @@ async function dispatchCommitted(
     } catch (thrown) {
       // One event failing does not stop the others: they are independent facts,
       // and the relay will retry this one on its own.
-      console.error(
-        `[outbox] ${event.type} (${id}) could not be dispatched inline; leaving it for the relay:`,
-        thrown,
-      );
+      logError("outbox.dispatch_failed", {
+        type: event.type,
+        id,
+        detail: "could not be dispatched inline; leaving it for the relay.",
+        error: thrown,
+      });
     }
   }
 
@@ -298,10 +301,12 @@ async function dispatchCommitted(
     // The effect has happened; only the receipt failed. The row stays PENDING
     // and the relay will dispatch it a second time, which is why consumers must
     // be idempotent — see this module's header.
-    console.error(
-      "[outbox] dispatched inline but could not mark the rows processed; " +
-        "the relay will dispatch them again:",
-      thrown,
-    );
+    logError("outbox.receipt_failed", {
+      ids: dispatched,
+      detail:
+        "dispatched inline but could not mark the rows processed; the relay " +
+        "will dispatch them again.",
+      error: thrown,
+    });
   }
 }

@@ -265,7 +265,25 @@ of writing one.
 - **Mitigation** — telemetry is structured by construction: `src/lib/vitals/sink.ts` writes one JSON line per metric with a discriminator to filter on, which is the default rather than a disabled state when no collector is configured.
   - **Test** `src/lib/vitals/sink.test.ts` › "writes a parseable line carrying the discriminator"
   - **Test** `src/lib/vitals/sink.test.ts` › "writes one JSON line per metric, not one per batch"
-- **Gap** — there is no redaction layer, so a future log line that interpolates a token or a hash would publish it, and nothing here alerts: `token_reuse` goes to `console.error` and it is the deployment's job to route it somewhere a person sees. Both are named in `docs/server-only.md` as out of scope for the boundary work. SPEC: Log redaction: a serialiser that refuses to print a secret-shaped value
+- **Mitigation** — every line this application writes goes through one writer, `src/lib/logging/logger.ts`, and a `console.*` call anywhere else under `src/` fails both `pnpm lint` and `scripts/assert-log-redaction.ts`. Redaction can only apply to lines it is shown, so the invariant that is enforced is the funnel rather than the output.
+  - **Test** `scripts/assert-log-redaction.test.ts` › "R1 — fails a console call added anywhere in src/"
+  - **Test** `scripts/assert-log-redaction.test.ts` › "R5 — fails when the writer stops redacting"
+- **Mitigation** — the serialiser in `src/lib/logging/redact.ts` refuses on two independent grounds: a field named like a credential, and a value shaped like one. A field name catches the value with no distinguishing shape — a passphrase, a PIN — and the shape catches the value nobody labelled, which is the one that leaks.
+  - **Test** `src/lib/logging/redact.test.ts` › "refuses a secret-shaped value under an innocent key"
+  - **Test** `src/lib/logging/redact.test.ts` › "refuses an innocent-shaped value under a secret key"
+- **Mitigation** — a thrown value is flattened rather than handed to `util.inspect`, and the properties a driver attaches to its error — `pg`'s `detail`, Prisma's `meta` — go through the same rules as everything else. That is the path the live defect took: `defineAction` wraps every Server Action, the password change included, and a driver reports a failed statement by quoting the row it was writing.
+  - **Test** `src/lib/logging/redact.test.ts` › "walks the properties a driver attaches, which is where the row is"
+  - **Test** `src/lib/actions/define-action.test.ts` › "replaces an unexpected throw and logs the original"
+- **Mitigation** — the identifiers this trail is correlated on survive redaction, which is checked rather than assumed: `sid` is a UUID and `userId` a cuid, both high-entropy by construction, and the entropy rule excludes those formats by name.
+  - **Test** `src/lib/auth/harden.test.ts` › "survives the redactor with the identifiers it correlates on intact"
+  - **Test** `scripts/assert-log-redaction.test.ts` › "P2 — fails when the redactor starts eating identifiers"
+
+One thing here stays a deployment's to settle, and it is written down rather than
+left implied: nothing in this repository alerts. `token_reuse` is raised to
+`error` and every other session event stays at `warn` so the two are
+distinguishable, but routing the first somewhere a person sees is a log
+platform's job and not a boilerplate's. `docs/log-redaction.md` says what to
+filter on.
 
 ### A10:2021 — Server-Side Request Forgery
 

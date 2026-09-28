@@ -52,6 +52,7 @@
 import "server-only";
 
 import type { S3Target } from "@/lib/s3";
+import { writeLine } from "@/lib/logging/logger";
 import { objectUrl } from "@/lib/s3";
 import {
   MAX_FILE_SIZE_BYTES,
@@ -108,10 +109,8 @@ export interface VerifyDependencies {
 }
 
 function defaultReport(line: Record<string, unknown>): void {
-  const text = JSON.stringify(line);
-  if (line["level"] === "error") console.error(text);
-  else if (line["level"] === "warn") console.warn(text);
-  else console.log(text);
+  const level = line["level"];
+  writeLine(level === "error" || level === "warn" ? level : "info", line);
 }
 
 /**
