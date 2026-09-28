@@ -160,6 +160,7 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
       ["/admin", "the admin shell"],
       ["/images", "the image showcase shell"],
       ["/upload", "the upload shell"],
+      ["/settings/security", "the security settings shell"],
     ] as const
   ).map(([route, what]): RouteExpectation => ({
     route,

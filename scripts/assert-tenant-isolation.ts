@@ -122,6 +122,10 @@ export const UNSCOPED_READERS: readonly { file: string; why: string }[] = [
     file: "src/lib/auth/password-upgrade.ts",
     why: "a password belongs to a person and not to one of their workspaces, so the rehash writes `users` — untenanted, the same table and the same client registration writes the first hash through",
   },
+  {
+    file: "src/lib/auth/password-change.ts",
+    why: "the same two untenanted tables the rehash and the sign-out already write: `users` for the hash and `session_families` for the revocation, both of which belong to a person across every workspace they are in. Scoping either would make changing a password — and the sign-out it performs — apply to one workspace",
+  },
 ];
 
 // ---------------------------------------------------------------------------

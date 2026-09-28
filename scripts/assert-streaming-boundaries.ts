@@ -129,6 +129,19 @@ export const EXPECTED_STREAMING: readonly StreamingExpectation[] = [
     because:
       "the page is a heading and a Client Component; the session is the upload action's business, not the page's",
   },
+  {
+    route: "/settings/security",
+    mustPrerender: [
+      ">Security</h1>",
+      ">Change password</h3>",
+      "signs out every session, including this one",
+    ],
+    // <UserChip> only: the account the change applies to is read inside the
+    // action, so the page itself depends on nothing about the request.
+    minStreamedHoles: 1,
+    because:
+      "the warning about what this form does has to be in the document that renders the form, not streamed in after it",
+  },
 ];
 
 export interface Violation {

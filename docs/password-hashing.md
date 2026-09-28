@@ -201,10 +201,14 @@ person with an old account tries to sign in.
 
 ## Not done
 
-- There is no password-change action, so the only path that rehashes is
-  sign-in and an account that never signs in never upgrades. Tracked by the
-  next spec item, which owns "sign out everywhere" and brings a password change
-  with it — that action will be a fourth entry in `PASSWORD_WRITERS`.
+- Sign-in is still the only path that _raises_ an existing hash's cost, so an
+  account that never signs in never upgrades. `changePasswordAction` is now the
+  fourth entry in `PASSWORD_WRITERS` and always writes at the current policy —
+  but it needs the plaintext too, so it upgrades the accounts of people who
+  choose to use it rather than the ones that have gone quiet. That is not a
+  migration, and there is no such thing: the stored value is a one-way function
+  of a password nobody has. See [session-hardening.md](./session-hardening.md)
+  for the revocation the change performs with the write.
 - No minimum-strength or breach-corpus check on the password itself. The
   registration schema asks for eight characters and nothing more, which is a
   policy decision this boilerplate has not made.

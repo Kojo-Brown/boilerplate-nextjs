@@ -46,6 +46,19 @@
  *       copy of the cookie keeps working until the absolute deadline. Losing
  *       the `events.signOut` handler leaves sign-out looking entirely normal.
  *
+ *   R7  A password change revokes every one of that user's sessions, in the
+ *       transaction that writes the new hash. Four ways to lose it, and a
+ *       working application after each: drop the second statement and the
+ *       change succeeds while every stolen cookie keeps working for up to a
+ *       week; key it on the family id instead of `userId` and it signs out only
+ *       the browser that asked, which is the one session that was not at risk;
+ *       move either write onto the imported singleton and it runs on its own
+ *       connection, so the revocation commits without the hash or the hash
+ *       without the revocation; take the `changeUserPassword` call out of the
+ *       action and the form reports success having done nothing. Every one of
+ *       those is green on the unit suite, because what stops happening is a
+ *       write nobody's assertion is looking at.
+ *
  * Static analysis, so it needs no build output.
  *
  * Usage: tsx scripts/assert-session-hardening.ts
@@ -56,7 +69,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 export interface Finding {
-  rule: "R1" | "R2" | "R3" | "R4" | "R5" | "R6";
+  rule: "R1" | "R2" | "R3" | "R4" | "R5" | "R6" | "R7";
   file: string;
   message: string;
 }
@@ -79,6 +92,8 @@ const PROXY_FILE = "src/proxy.ts";
 const AUTH_CONFIG_FILE = "src/auth.config.ts";
 const AUTH_FILE = "src/auth.ts";
 const DEPLOYMENT_FILE = "src/lib/auth/deployment.ts";
+const PASSWORD_CHANGE_FILE = "src/lib/auth/password-change.ts";
+const ACCOUNT_ACTIONS_FILE = "src/actions/account.ts";
 
 /** The files R2 scans: every source file that could call the callback. */
 const SOURCE_GLOB_ROOTS = ["src"];
@@ -295,6 +310,89 @@ export function check(root: string): Finding[] {
     });
   }
 
+  // R7 — a password change ends every session, atomically with the new hash.
+  findings.push(...checkPasswordChange(root));
+
+  return findings;
+}
+
+/**
+ * R7, as four independent checks on two files.
+ *
+ * Syntactic, like the rest of this gate, and for the reason `assert-
+ * transactional-writes.ts` gives about its own subject: `unscopedPrisma` and the
+ * transaction client are both Prisma clients with the same delegates, so using
+ * the wrong one is well-typed by construction. There is nothing for a type or a
+ * mocked-out unit test to notice.
+ */
+export function checkPasswordChange(root: string): Finding[] {
+  const findings: Finding[] = [];
+  const source = stripComments(read(root, PASSWORD_CHANGE_FILE));
+
+  if (!/\$transaction\s*\(/.test(source)) {
+    findings.push({
+      rule: "R7",
+      file: PASSWORD_CHANGE_FILE,
+      message:
+        "opens no transaction. The new hash and the revocation have to commit " +
+        "together: separately, a failure between them leaves an account with a " +
+        "password its owner did not choose and sessions they believe they " +
+        "closed — and no way to retry, because the current password they would " +
+        "have to type is no longer current.",
+    });
+  }
+
+  for (const [what, pattern] of [
+    ["the new hash", /\btx\.user\.updateMany\s*\(/],
+    ["the revocation", /\btx\.sessionFamily\.updateMany\s*\(/],
+  ] as const) {
+    if (pattern.test(source)) continue;
+
+    findings.push({
+      rule: "R7",
+      file: PASSWORD_CHANGE_FILE,
+      message:
+        `does not write ${what} through the transaction client \`tx\`. On the ` +
+        "imported singleton the statement runs on its own connection: it " +
+        "commits independently and survives a rollback of the other half.",
+    });
+  }
+
+  // Keyed on the user, not on one family. The narrow version is the one that
+  // looks like it works — the person changing their password is signed out, so
+  // the feature appears to do something, and the sessions it exists to end are
+  // exactly the ones left running.
+  const revocation =
+    /\btx\.sessionFamily\.updateMany\s*\(\s*\{\s*where:\s*\{([^}]*)\}/.exec(
+      source,
+    );
+  // `userId` has to be a *key* of the predicate, not merely a word in it. The
+  // first draft of this rule tested `/\buserId\b/`, which the regression it
+  // exists for satisfies: `where: { id: userId }` names the variable and filters
+  // on the family id. Checked against that edit, not against a passing tree.
+  if (revocation && !/(^|,)\s*userId\s*(,|:|$)/.test(revocation[1] as string)) {
+    findings.push({
+      rule: "R7",
+      file: PASSWORD_CHANGE_FILE,
+      message:
+        "revokes on a predicate that does not mention `userId`, so a password " +
+        "change ends some smaller set of sessions than all of them. The " +
+        "browser that asked is the one session a password change is not " +
+        "protecting against.",
+    });
+  }
+
+  const action = stripComments(read(root, ACCOUNT_ACTIONS_FILE));
+  if (!/\bchangeUserPassword\s*\(/.test(action)) {
+    findings.push({
+      rule: "R7",
+      file: ACCOUNT_ACTIONS_FILE,
+      message:
+        "does not call changeUserPassword, so whatever the form posts to, it " +
+        "is not the path that revokes the sessions.",
+    });
+  }
+
   return findings;
 }
 
@@ -313,7 +411,8 @@ export function main(root: string): number {
   console.log(
     "Session hardening OK — claim names clear of jose's reserved set, " +
       "rotation confined to the proxy, cookie flags and __Host- prefix intact, " +
-      "trustHost paired with a pinned origin, sign-out revokes the family.",
+      "trustHost paired with a pinned origin, sign-out revokes the family, " +
+      "a password change revokes every session in the same transaction.",
   );
   return 0;
 }

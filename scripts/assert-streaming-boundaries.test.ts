@@ -184,6 +184,7 @@ describe("EXPECTED_STREAMING", () => {
       "/admin",
       "/images",
       "/upload",
+      "/settings/security",
     ]);
   });
 

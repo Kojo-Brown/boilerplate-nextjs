@@ -72,12 +72,13 @@ export interface SessionRegistry {
    * Ends a session. Idempotent: revoking an already-revoked family is a no-op.
    *
    * Deliberately the only write here besides `start` and `rotate`. "Revoke
-   * every session for this user" — what a password change owes — is a single
-   * `updateMany` on `userId` and is written out in `docs/session-hardening.md`,
-   * but it is not on this interface: there is no password change in this
-   * application yet, and a security method with no caller is the shape of the
-   * `src/actions/blog.ts` helper that sat fully unit-tested and imported by
-   * nobody while the bug it would have fixed was live.
+   * every session for this user" — what a password change owes — now exists and
+   * has a caller, and it is still not on this interface: it lives in
+   * `@/lib/auth/password-change`, because it has to run on the same transaction
+   * that writes the new hash. A method here would bring its own client and
+   * could not join one, which would put a window between the two writes in
+   * which the password changes and the sessions do not. See
+   * `docs/session-hardening.md`.
    */
   revoke(
     sid: string,

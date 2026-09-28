@@ -226,7 +226,13 @@ properties.
 - **Mitigation** — revocation is server-side state, not a cleared cookie: `src/lib/auth/registry.ts` makes the rotation a conditional update and keeps the first revocation reason, so signing out ends the row rather than only the browser that asked.
   - **Test** `src/lib/auth/registry.test.ts` › "will not revive a family revoked between the read and the write"
   - **Test** `src/lib/auth/registry.test.ts` › "keeps the first revocation reason"
-- **Gap** — there is no password-change or "sign out everywhere" action, so the registry's per-user revocation has no caller. `docs/session-hardening.md` writes out the query rather than shipping a method nothing calls. SPEC: Sign out everywhere: a password-change action that revokes every session for a user
+- **Mitigation** — a password change is a revocation: `src/lib/auth/password-change.ts` writes the new hash and ends every live family for that user in one transaction, so the cookie somebody else is holding stops working at the change rather than at its own deadline a week later. The two statements are one method because they have to commit together — separately, a revocation that fails after the hash lands leaves an account whose owner cannot even retry, since the current password they would have to type is no longer current.
+  - **Test** `src/lib/auth/password-change.test.ts` › "writes the hash and revokes the families in one transaction"
+  - **Test** `src/lib/auth/password-change.test.ts` › "revokes nothing when the row no longer holds the verified hash"
+  - **Test** `scripts/assert-session-hardening.test.ts` › "fails when the revocation is keyed on one family instead of the user"
+- **Mitigation** — the change is reachable by a person and counted as a credential attempt. `src/app/(dashboard)/settings/security/page.tsx` mounts the form — a revocation with nothing rendering it is the `ThemeToggle` defect in a worse place — and because the action verifies the current password before writing, `src/lib/rate-limit/policy.ts` puts a POST to that path on the same ten-a-minute bucket as `/login`. Without its own rule the Server Action fallback would have allowed 120 guesses a minute against an account whose identity the caller already knows.
+  - **Test** `src/lib/rate-limit/policy.test.ts` › "counts a password change against the credential budget too"
+  - **Test** `src/app/(dashboard)/settings/security/page.test.tsx` › "mounts the change-password form"
 
 ### A08:2021 — Software and Data Integrity Failures
 

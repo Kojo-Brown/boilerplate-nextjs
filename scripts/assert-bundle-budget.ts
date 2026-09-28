@@ -239,6 +239,14 @@ export const ROUTE_BUDGETS: readonly RouteBudget[] = [
     gzipBudgetBytes: 270_000,
     because: "the upload form: file input, progress and client-side validation",
   },
+  {
+    route: "/settings/security",
+    gzipBudgetBytes: 268_000,
+    because:
+      "three password inputs, `useActionState` and a toast. Measured at 259.4 kB, " +
+      "level with /dashboard: the page adds one small client component to the " +
+      "dashboard shell and nothing else",
+  },
 ];
 
 export interface Violation {

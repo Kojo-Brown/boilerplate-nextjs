@@ -157,6 +157,20 @@ export const RATE_LIMIT_RULES: readonly RateLimitRule[] = [
       isServerAction && (pathname === "/login" || pathname === "/register"),
   },
   {
+    // The third door into the same password check: `changePasswordAction`
+    // verifies the current password before it writes a new one, so a POST here
+    // is a guess like any other. It needs its own row because the fallback
+    // Server Action rule at the bottom of this list would otherwise claim it and
+    // allow 120 a minute — twelve times the credential budget, against an
+    // account whose identity the attacker already knows, at one scrypt
+    // derivation each. Sharing the `authentication` bucket is the same argument
+    // the row above makes: separate budgets let a caller alternate between the
+    // doors and add them up.
+    policy: AUTHENTICATION_POLICY,
+    matches: ({ isServerAction, pathname }) =>
+      isServerAction && pathname === "/settings/security",
+  },
+  {
     policy: AUTH_ENDPOINT_POLICY,
     matches: ({ pathname }) => pathname.startsWith("/api/auth/"),
   },

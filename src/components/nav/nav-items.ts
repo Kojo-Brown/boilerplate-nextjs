@@ -14,4 +14,5 @@ export const NAV_ITEMS: NavItem[] = [
   { label: "Upload", href: "/upload" },
   { label: "Images", href: "/images" },
   { label: "Admin", href: "/admin" },
+  { label: "Security", href: "/settings/security" },
 ];
