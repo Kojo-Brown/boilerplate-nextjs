@@ -113,6 +113,28 @@ const server = z.object({
   AWS_SECRET_ACCESS_KEY: z.string().optional(),
   AWS_REGION: z.string().default("us-east-1"),
   S3_BUCKET_NAME: z.string().optional(),
+  // Where an uploaded object is sent to be scanned for malware. Optional, and
+  // unlike VITALS_COLLECTOR_URL its absence is genuinely a disabled state rather
+  // than a different default: no scanner means every upload is accepted without
+  // one and says so in its audit line at `warn`. Setting it also changes the
+  // failure policy — a configured scanner that does not answer refuses the
+  // upload, because a deployment that configured scanning has decided it is
+  // required. See src/lib/uploads/scan.ts and docs/uploads.md.
+  //
+  // Validated as a URL because a typo is otherwise a `fetch` that throws on
+  // every upload, which — with a scanner configured — refuses every upload.
+  UPLOAD_SCANNER_URL: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().url().optional(),
+  ),
+  // Bearer token for that scanner. Not `optionalSecret`, for the reason
+  // VITALS_API_KEY is not: the key is whatever length that vendor mints, and
+  // refusing to boot over a 24-character one would be this repository inventing
+  // a rule for a credential it does not issue.
+  UPLOAD_SCANNER_API_KEY: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.string().optional(),
+  ),
 });
 
 /**
@@ -142,6 +164,7 @@ export const SECRET_KEYS = [
   "GOOGLE_CLIENT_SECRET",
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
+  "UPLOAD_SCANNER_API_KEY",
 ] as const;
 
 const skip = process.env["SKIP_ENV_VALIDATION"] === "1";

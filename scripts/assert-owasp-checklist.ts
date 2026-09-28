@@ -150,6 +150,40 @@ export const FETCH_CALL_SITES: readonly { file: string; why: string }[] = [
       "not the platform API: `options.fetch` is the caller-supplied batch " +
       "loader a DataLoader takes, and it issues no request of its own",
   },
+  {
+    file: "src/lib/uploads/storage.ts",
+    why:
+      "reads back, promotes and deletes an uploaded object. Every request goes " +
+      "to a URL this module presigns itself, whose host comes from " +
+      "`S3_BUCKET_NAME` and `AWS_REGION` — there is no place in it for a " +
+      "caller-supplied hostname. The key is checked by `parseObjectKey` and " +
+      "its user segment compared with the session's own id before any of these " +
+      "run, so a caller cannot aim the readback at another user's object " +
+      "either. The readback is bounded to a 512-byte range",
+  },
+  {
+    file: "src/lib/uploads/scan.ts",
+    why:
+      "posts an uploaded object's bucket and key to the malware scanner. Its " +
+      "target is `serverEnv.UPLOAD_SCANNER_URL`, validated as a URL by the env " +
+      "schema at boot and reachable from no request; the body carries no URL " +
+      "at all, so the scanner cannot be aimed either",
+  },
+  {
+    file: "src/lib/uploads/verify.ts",
+    why:
+      "issues no request of its own: `fetchImpl` is threaded through to " +
+      "`@/lib/uploads/storage` and to the scanner so a test can substitute " +
+      "one, which is the same `typeof fetch` alias shape the vitals sink uses",
+  },
+  {
+    file: "src/actions/upload.ts",
+    why:
+      "issues no request of its own: it passes the platform `fetch` to " +
+      "`verifyUploadedObject` as the dependency that module declares, rather " +
+      "than letting it default to one — a defaulted dependency is one a test " +
+      "can forget to stub and reach the network with",
+  },
 ];
 
 /**

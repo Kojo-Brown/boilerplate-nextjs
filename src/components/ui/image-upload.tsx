@@ -2,8 +2,12 @@
 
 import { useRef, useState } from "react";
 import { cn } from "@/lib/cn";
-import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from "@/lib/s3";
-import { getPresignedUploadUrlAction } from "@/actions/upload";
+import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from "@/lib/uploads/policy";
+import { SNIFF_BYTE_COUNT, sniffImageType } from "@/lib/uploads/sniff";
+import {
+  finalizeUploadAction,
+  getPresignedUploadUrlAction,
+} from "@/actions/upload";
 
 export interface ImageUploadProps {
   onUploadComplete?: (publicUrl: string) => void;
@@ -16,7 +20,18 @@ type UploadState =
   | { status: "idle" }
   | { status: "selecting" }
   | { status: "uploading"; progress: number }
-  | { status: "done"; publicUrl: string; previewUrl: string }
+  // The object is in the bucket and the server is reading its header bytes
+  // back, sniffing them and scanning it. Its own state rather than a 100%
+  // `uploading`, because it is the step that can still refuse the file and the
+  // progress bar has nothing left to say about it.
+  | { status: "verifying" }
+  | {
+      status: "done";
+      publicUrl: string;
+      previewUrl: string;
+      /** False when no scanner was configured server-side. */
+      scanned: boolean;
+    }
   | { status: "error"; message: string };
 
 const MAX_MB = MAX_FILE_SIZE_BYTES / (1024 * 1024);
@@ -92,7 +107,12 @@ export function ImageUpload({
   const [state, setState] = useState<UploadState>({ status: "idle" });
 
   function handleClick() {
-    if (disabled || state.status === "uploading") return;
+    if (
+      disabled ||
+      state.status === "uploading" ||
+      state.status === "verifying"
+    )
+      return;
     inputRef.current?.click();
   }
 
@@ -105,29 +125,57 @@ export function ImageUpload({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Client-side validation
+    const fail = (message: string) => {
+      setState({ status: "error", message });
+      onUploadError?.(message);
+    };
+
+    // Every check below this line is also made on the server, and none of them
+    // is trusted from here: `getPresignedUploadUrlAction` re-validates the type
+    // and the size, and `finalizeUploadAction` decides the question these
+    // cannot — what the bytes actually are. They run anyway because a file the
+    // server is going to refuse should not cost a round trip and a 5 MB upload
+    // first, and because "wrong file" is a better message when it arrives
+    // before the progress bar than after it.
     if (
       !ALLOWED_MIME_TYPES.includes(
         file.type as (typeof ALLOWED_MIME_TYPES)[number],
       )
     ) {
-      const msg = `File type not allowed. Accepted: JPEG, PNG, WebP, GIF, SVG.`;
-      setState({ status: "error", message: msg });
-      onUploadError?.(msg);
+      fail("File type not allowed. Accepted: JPEG, PNG, WebP and GIF.");
       return;
     }
 
     if (file.size > MAX_FILE_SIZE_BYTES) {
-      const msg = `File exceeds the ${MAX_MB} MB limit.`;
-      setState({ status: "error", message: msg });
-      onUploadError?.(msg);
+      fail(`File exceeds the ${MAX_MB} MB limit.`);
+      return;
+    }
+
+    // The same sniff the server performs, on the same bytes, before anything is
+    // uploaded. Not a security control — it runs in the caller's own browser,
+    // which is the one place a check can be removed with a debugger — but it
+    // turns the commonest honest mistake (a `.png` that a converter left as a
+    // JPEG, an image renamed by hand) into an immediate message instead of a
+    // slow upload followed by a rejection. `file.slice` reads only the header.
+    const header = new Uint8Array(
+      await file.slice(0, SNIFF_BYTE_COUNT).arrayBuffer(),
+    );
+    const detected = sniffImageType(header);
+    if (detected !== file.type) {
+      fail(
+        detected === null
+          ? "That file's contents are not a JPEG, PNG, WebP or GIF image."
+          : `That file is named as ${file.type} but its contents are a ${detected}.`,
+      );
       return;
     }
 
     const previewUrl = URL.createObjectURL(file);
     setState({ status: "uploading", progress: 0 });
 
-    // 1. Get a presigned URL from the server
+    // 1. Mint a presigned PUT. It writes to a quarantine key and comes back
+    //    without any URL the object can be read from — there is nothing to hand
+    //    out for an object nobody has looked at yet.
     const result = await getPresignedUploadUrlAction({
       filename: file.name,
       contentType: file.type,
@@ -136,14 +184,15 @@ export function ImageUpload({
 
     if (!result.success) {
       URL.revokeObjectURL(previewUrl);
-      setState({ status: "error", message: result.error });
-      onUploadError?.(result.error);
+      fail(result.error);
       return;
     }
 
-    const { uploadUrl, publicUrl } = result.data;
+    const { uploadUrl, key } = result.data;
 
-    // 2. PUT the file directly to S3 using the presigned URL
+    // 2. PUT the file straight to S3. `Content-Length` is signed into that URL,
+    //    so the browser's own header has to match the size declared above; it
+    //    does, because this is the file whose size was declared.
     const upload = await putToPresignedUrl({
       file,
       uploadUrl,
@@ -152,16 +201,37 @@ export function ImageUpload({
 
     if (!upload.success) {
       URL.revokeObjectURL(previewUrl);
-      setState({ status: "error", message: upload.error });
-      onUploadError?.(upload.error);
+      fail(upload.error);
       return;
     }
 
-    setState({ status: "done", publicUrl, previewUrl });
-    onUploadComplete?.(publicUrl);
+    // 3. Ask the server to verify what landed and publish it. This is the step
+    //    that returns a URL, and the only one that ever does.
+    setState({ status: "verifying" });
+
+    const finalized = await finalizeUploadAction({
+      key,
+      sizeBytes: file.size,
+    });
+
+    if (!finalized.success) {
+      URL.revokeObjectURL(previewUrl);
+      fail(finalized.error);
+      return;
+    }
+
+    setState({
+      status: "done",
+      publicUrl: finalized.data.publicUrl,
+      previewUrl,
+      scanned: finalized.data.scanned,
+    });
+    onUploadComplete?.(finalized.data.publicUrl);
   }
 
   const isUploading = state.status === "uploading";
+  const isVerifying = state.status === "verifying";
+  const isBusy = isUploading || isVerifying;
   const isDone = state.status === "done";
   const isError = state.status === "error";
 
@@ -173,7 +243,7 @@ export function ImageUpload({
         accept={ACCEPTED}
         className="sr-only"
         onChange={handleFileChange}
-        disabled={disabled || isUploading}
+        disabled={disabled || isBusy}
         aria-label="Upload image"
       />
 
@@ -189,6 +259,20 @@ export function ImageUpload({
             <span className="text-[var(--muted-foreground)] truncate">
               {state.publicUrl}
             </span>
+            {/*
+              Shown rather than only logged. The server accepts an unscanned
+              upload when no scanner is configured, which is a supported state —
+              and one the person looking at the result is entitled to know
+              about, rather than it being a line in a log they will never read.
+            */}
+            {!state.scanned && (
+              <span
+                className="shrink-0 text-xs text-amber-600 dark:text-amber-400"
+                title="No malware scanner is configured on this server, so this file was accepted without being scanned."
+              >
+                Not scanned
+              </span>
+            )}
             <button
               type="button"
               onClick={handleReset}
@@ -202,7 +286,7 @@ export function ImageUpload({
         <button
           type="button"
           onClick={handleClick}
-          disabled={disabled || isUploading}
+          disabled={disabled || isBusy}
           className={cn(
             "flex h-40 w-full cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed transition-colors",
             "hover:border-[var(--primary)] hover:bg-[var(--primary)]/5",
@@ -210,7 +294,7 @@ export function ImageUpload({
             "disabled:cursor-not-allowed disabled:opacity-50",
             isError && "border-red-400 bg-red-50 dark:bg-red-950/20",
           )}
-          aria-busy={isUploading}
+          aria-busy={isBusy}
         >
           {isUploading ? (
             <>
@@ -219,6 +303,14 @@ export function ImageUpload({
                 Uploading… {state.progress}%
               </span>
               <ProgressBar value={state.progress} />
+            </>
+          ) : isVerifying ? (
+            <>
+              <UploadIcon className="h-8 w-8 animate-pulse text-[var(--primary)]" />
+              <span className="text-sm font-medium">Verifying…</span>
+              <span className="text-xs text-[var(--muted-foreground)]">
+                Checking the file&rsquo;s contents
+              </span>
             </>
           ) : (
             <>
@@ -246,7 +338,7 @@ export function ImageUpload({
               >
                 {isError
                   ? state.message
-                  : `JPEG, PNG, WebP, GIF, SVG — max ${MAX_MB} MB`}
+                  : `JPEG, PNG, WebP, GIF — max ${MAX_MB} MB`}
               </span>
             </>
           )}

@@ -646,6 +646,31 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # Holds the upload path to the seven properties it depends on, every one of
+      # which can be lost while the feature goes on working — which is the test
+      # for whether something belongs in a gate rather than in a unit test. Take
+      # the content sniff out of `verifyUploadedObject` and every upload still
+      # succeeds, faster. Put `image/svg+xml` back on the allowlist and SVG
+      # uploads start working again, which looks like restoring a feature. Drop
+      # the user-id comparison in `finalizeUploadAction` and nothing changes for
+      # any caller who is not attacking it. Hand `publicUrl` back from the
+      # presign again and the client gets simpler. In none of those cases does a
+      # test observe a break, because what stops happening is a *check*, and a
+      # check that stops happening looks exactly like a check that passed.
+      #
+      # R1 is the load-bearing one: every type in `ALLOWED_MIME_TYPES` must have
+      # a signature the sniffer recognises. That is what keeps the allowlist from
+      # growing past the sniffer, and it is what refuses `image/svg+xml` — SVG is
+      # XML, so no signature can be written for it, so it cannot pass. See
+      # docs/uploads.md.
+      #
+      # Static analysis, so it needs no build output; it sits here with the
+      # other gates.
+      - name: Assert upload validation
+        run: pnpm exec tsx scripts/assert-upload-validation.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.
