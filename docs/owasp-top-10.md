@@ -123,10 +123,11 @@ test can assert — so the gate checks it directly.
 
 ### A04:2021 — Insecure Design
 
-The category with no single mechanism, so the entries here are the three design
+The category with no single mechanism, so the entries here are the design
 decisions that would each be a class of bug if taken the other way: retries that
-write twice, concurrent edits that silently lose one, and an endpoint whose cost
-is unbounded.
+write twice, concurrent edits that silently lose one, an endpoint whose cost is
+unbounded, and a file upload that believes what it was told about itself
+(CWE-434, which is this category's).
 
 - **Mitigation** — a double submission is one write and two identical answers: `src/lib/actions/idempotency.ts` keys on a client-supplied key scoped to the authenticated principal, and fingerprints the input so a reused key with different input is a conflict rather than a wrong replay.
   - **Test** `src/lib/actions/idempotency.test.ts` › "distinguishes values JSON.stringify collapses"
@@ -139,6 +140,21 @@ is unbounded.
 - **Mitigation** — a write and the events it emits commit together or not at all, through the outbox in `src/lib/outbox/write.ts`. A cache invalidation that happens for a transaction that rolled back is a design failure that presents as a data bug.
   - **Test** `src/lib/outbox/write.test.ts` › "does not dispatch when the transaction aborts"
   - **Test** `src/lib/outbox/write.test.ts` › "refuses an emit that arrives after the transaction closed"
+- **Mitigation** — an uploaded object is accepted on its _bytes_, not on its name: `src/lib/uploads/sniff.ts` reads the leading bytes against the four formats' documented signatures and `src/lib/uploads/verify.ts` refuses anything whose sniffed type is not the type S3 stored it as. Sniffing against the stored `Content-Type` rather than against a type the caller re-declares is what makes the check mean something — the stored header is what a browser is eventually told these bytes are.
+  - **Test** `src/lib/uploads/verify.test.ts` › "refuses an HTML document stored as image/png and deletes it"
+  - **Test** `src/lib/uploads/verify.test.ts` › "compares against the type S3 stored, not one the caller re-declares"
+- **Mitigation** — the allowlist cannot grow past the sniffer: `ALLOWED_MIME_TYPES` in `src/lib/uploads/policy.ts` holds only types with a signature, which is enforced by rule R1 of `scripts/assert-upload-validation.ts`. `image/svg+xml` is refused for exactly that reason — SVG is XML, a well-formed SVG carrying `<script>` is a well-formed SVG, and no byte pattern separates a drawing from a document.
+  - **Test** `src/lib/uploads/policy.test.ts` › "no longer accepts image/svg+xml"
+  - **Test** `scripts/assert-upload-validation.test.ts` › "fails when image/svg+xml is put back on the allowlist"
+- **Mitigation** — the 5 MB cap is enforced twice against things the caller does not control: `content-length` is signed into the presigned PUT (`src/lib/s3.ts`), so S3 refuses a body of any other length, and `verifyUploadedObject` re-measures the stored object from the readback's `Content-Range` before promoting it. Before this, the cap was checked against a declared number that was then discarded, and the URL it minted authorised a PUT of any size.
+  - **Test** `src/lib/s3.test.ts` › "produces a different signature when only the length changes"
+  - **Test** `src/lib/uploads/verify.test.ts` › "measures the stored object rather than believing the declared size"
+- **Mitigation** — nothing is readable until it has been verified. The presign writes to a key under the `quarantine` prefix and returns no URL the object can be read from; `finalizeUploadAction` copies it under the public `uploads` prefix only after the size, the sniff and the scan agree, and deletes what it refuses.
+  - **Test** `src/lib/uploads/verify.test.ts` › "promotes a verified object and returns its public URL"
+  - **Test** `src/lib/uploads/policy.test.ts` › "writes to the quarantine prefix, never the public one"
+- **Mitigation** — the antivirus hook is a seam with an explicit failure policy rather than a bundled engine: `src/lib/uploads/scan.ts` refuses the upload when a _configured_ scanner does not answer, and accepts it while recording `"scanned": false` at `warn` when none is configured. A scanner that reports a timeout as clean is worse than no scanner, so `unavailable` is a distinct verdict from `clean` and cannot be produced by the upload path.
+  - **Test** `src/lib/uploads/scan.test.ts` › "refuses a non-answer from a configured scanner"
+  - **Test** `src/lib/uploads/scan.test.ts` › "treats an unrecognised body as unavailable, never as clean"
 
 ### A05:2021 — Security Misconfiguration
 
@@ -238,7 +254,17 @@ of writing one.
 
 This application performs almost no outbound requests, which is the mitigation —
 but "almost none" is a property that decays one feature at a time, so it is
-enforced rather than asserted.
+enforced rather than asserted. Upload verification is the first feature that made
+the count go up, and the three rows it added are what that enforcement looks like
+when it is working: each new call site had to be argued for in
+`FETCH_CALL_SITES` before the build would pass.
+
+One thing here is a deployment's to settle rather than this repository's, and it
+is written down in `docs/uploads.md` rather than left implied: an accepted object
+is served from the bucket's own URL, and a deployment that fronts that bucket with
+a CDN alias on its application domain turns every upload into same-site content.
+That is why the bucket policy in that document keeps the quarantine prefix private,
+and why `image/svg+xml` is refused outright rather than sanitised.
 
 - **Mitigation** — the set of modules that call `fetch` is enumerated in `scripts/assert-owasp-checklist.ts`, and each entry records why its target cannot be chosen by a caller. A new call site anywhere in `src/` fails the build and has to be argued for in that list. Today there are three: the vitals forwarder, whose target is `serverEnv.VITALS_COLLECTOR_URL`, and two browser-side hooks on literal same-origin paths.
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "fails a fetch call site that is not on the list"
@@ -248,7 +274,14 @@ enforced rather than asserted.
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "fails a remote pattern that allows plain http"
 - **Mitigation** — the collector URL is validated as a URL by the environment schema at boot and is not reachable from a request, so the forwarder's destination is a deployment decision rather than an input.
   - **Test** `src/lib/vitals/sink.test.ts` › "selects the log sink when no collector is configured"
-- **Gap** — a file upload is a presigned `PUT` the browser makes directly to S3, so this application never fetches what was uploaded; when it does — a content-sniffing or antivirus step reading the object back — that becomes a new outbound call site and a new row here. SPEC: File-upload validation: content sniffing, size caps, and antivirus hook
+- **Mitigation** — the gap this section used to record is closed, and it became the call sites it predicted. Verifying an upload means reading the object back, so `src/lib/uploads/storage.ts` now fetches — but only URLs it presigns itself, whose host is built from `S3_BUCKET_NAME` and `AWS_REGION`. There is no position in such a URL for a caller-supplied hostname, and the key is checked by `parseObjectKey` and its user segment compared with the session's own id before any request is made, so the readback cannot be aimed at another user's object either.
+  - **Test** `src/lib/uploads/storage.test.ts` › "aims the request at the bucket's host, with no caller input in it"
+  - **Test** `src/actions/upload.test.ts` › "refuses another user's key without reading it"
+- **Mitigation** — the readback is bounded to a 512-byte `Range`, so an upload cannot make this server pull five megabytes into a Server Action to look at eight bytes of it. The object's real length is taken from the response's `Content-Range` rather than from a second request.
+  - **Test** `src/lib/uploads/storage.test.ts` › "requests only the header bytes"
+  - **Test** `src/lib/uploads/storage.test.ts` › "takes the length from Content-Range, not from the slice's Content-Length"
+- **Mitigation** — the malware scanner is the fourth call site and its target is `serverEnv.UPLOAD_SCANNER_URL`, validated as a URL at boot and reachable from no request. The request body carries the object's bucket and key and no URL at all, so the scanner cannot be pointed at something either: it reads the object itself, which is also why the bytes are never streamed through this process.
+  - **Test** `src/lib/uploads/scan.test.ts` › "sends the bytes nowhere — only the object's location"
 
 ---
 
