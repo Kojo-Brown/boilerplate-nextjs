@@ -46,6 +46,12 @@ const COPIED = [
   "prisma",
   "docs",
   ".github",
+  // Cited by A08 and scanned by T4, and its absence here was quietly
+  // producing a C3 finding in every temp tree — a false one, which is the
+  // kind that hides a real one: the two C5 cases below were passing on a
+  // `toContain` while the list they inspected held a rule neither of them
+  // was about.
+  "workflow-templates",
   "next.config.ts",
   "package.json",
   "SPEC.md",
@@ -273,21 +279,25 @@ describe("C4 — cited tests exist and run", () => {
 });
 
 describe("C5 — a gap tracks an open spec item", () => {
-  // Both cases have now outlived three gaps. They sabotaged the file-upload
+  // Both cases have now outlived four gaps. They sabotaged the file-upload
   // deferral until that shipped, then the log-redaction one, then A08's
-  // tag-pinning one — which now carries three mitigations where it carried a
-  // deferral. Each time, the rule worked exactly as designed on the way
-  // through: ticking the item failed this gate until the document was
-  // revisited, which is the whole point of it. So the cases move to a gap that
-  // is still open rather than being deleted with the one they named.
+  // tag-pinning one, then A06's advisory-audit one — which now carries three
+  // mitigations where it carried a deferral. Each time, the rule worked
+  // exactly as designed on the way through: ticking the item failed this gate
+  // until the document was revisited, which is the whole point of it. So the
+  // cases move to a gap that is still open rather than being deleted with the
+  // one they named. A04's is the last one left, which is worth saying out
+  // loud: when it goes, these two cases have nothing to sabotage and the
+  // honest move is to delete them along with the rule they guard, rather than
+  // to invent a gap for them to live in.
   it("fails when the item it defers to has been ticked", () => {
     // The point of the rule: finishing the deferred work is what makes this
     // document wrong, so finishing it has to fail the gate.
     const root = withTree((tree) => {
       edit(tree, "SPEC.md", (source) =>
         source.replace(
-          "- [ ] A scheduled dependency-advisory audit",
-          "- [x] A scheduled dependency-advisory audit",
+          "- [ ] Scope draft-mode preview to the tenant that minted the token",
+          "- [x] Scope draft-mode preview to the tenant that minted the token",
         ),
       );
     });
@@ -300,7 +310,7 @@ describe("C5 — a gap tracks an open spec item", () => {
     const root = withTree((tree) => {
       edit(tree, CHECKLIST_FILE, (source) =>
         source.replace(
-          /SPEC: A scheduled dependency-advisory audit.*$/m,
+          /SPEC: Scope draft-mode preview to the tenant.*$/m,
           "one day, probably.",
         ),
       );

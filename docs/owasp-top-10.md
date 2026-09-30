@@ -197,12 +197,18 @@ that process needs.
 `pnpm audit` is deliberately **not** a pull-request gate. A new advisory against
 a transitive package would turn every unrelated pull request red, in a repository
 whose rule is that a red check is never merged, which trains people to merge red.
-Dependabot points the failure at the thing that changed instead.
+Dependabot points the failure at the thing that changed instead, and the
+scheduled audit below points at the thing that did not.
 
 - **Mitigation** — `.github/dependabot.yml` opens weekly pull requests for both the npm tree and the workflow actions, grouped so the volume is reviewable. Every CI install is `--frozen-lockfile` and `packageManager` is pinned to an exact pnpm version, so the tree CI resolves is the one the lockfile records. The gate checks all four of those properties.
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "fails a CI install that is not frozen to the lockfile"
   - **Test** `scripts/assert-owasp-checklist.test.ts` › "fails when dependabot stops covering an ecosystem"
-- **Gap** — nothing here scans for a _known_ advisory against the currently pinned tree; Dependabot's security updates are the only signal, and they arrive on GitHub's schedule rather than this repository's. A scheduled (not per-pull-request) audit workflow whose failure opens an issue is the shape that would fit. SPEC: A scheduled dependency-advisory audit that opens an issue rather than failing a pull request
+- **Mitigation** — the pinned tree is audited against the published advisory database on a schedule, and the result is an issue rather than a red check. `.github/workflows/dependency-audit.yml` runs weekly and on demand; `scripts/audit-dependencies.ts` runs `pnpm audit --json` and `pnpm audit --prod --json`, uses the second only to mark which advisories reach the production graph, and reconciles one labelled issue — opened, rewritten with a comment naming the delta, or closed, according to a fingerprint over the set rather than over the prose. A version pinned months ago and never touched is the one an advisory is most likely to be published against and the one no pull request will ever mention, which is the half Dependabot structurally cannot cover. `docs/dependency-advisories.md` is the argument, including what it does not reach: only what the registry knows, only the JavaScript tree, and reachability by dependency graph rather than by call graph.
+  - **Test** `scripts/audit-dependencies.test.ts` › "does nothing when the open issue already carries this fingerprint"
+  - **Test** `scripts/audit-dependencies.test.ts` › "closes the open issue once the tree is clean"
+- **Mitigation** — that job's failure mode is silence, and silence is byte for byte what a healthy tree produces, so every way of producing it quietly is a build failure. `scripts/assert-advisory-audit.ts` is eight rules: the workflow exists and is scheduled (A1), carries no `pull_request`, `pull_request_target` or `push` trigger and no `pnpm audit` has reappeared in `.github/workflows/ci.yml` or in a workflow template this repository ships (A2, A3), holds `contents: read` and `issues: write` and nothing else (A4), never `continue-on-error` and never `|| true` (A5), runs the audit with nothing that narrows what it reports — checked against the argv the script executes, not a copy in YAML (A6), invokes the tested module rather than reimplementing the decision in shell, and not with `--dry-run` (A7), and creates the label the script identifies its issue by (A8).
+  - **Test** `scripts/assert-advisory-audit.test.ts` › "reports the workflow as missing rather than passing without it"
+  - **Test** `scripts/audit-dependencies.test.ts` › "refuses empty output rather than reading it as a clean tree"
 
 ### A07:2021 — Identification and Authentication Failures
 
