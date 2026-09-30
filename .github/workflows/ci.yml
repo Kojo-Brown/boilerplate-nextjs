@@ -668,6 +668,28 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The other half of A06, and the gate for a job that is deliberately not
+      # in this file. `dependency-audit.yml` runs on a timer, looks at the
+      # pinned tree for published advisories, and files an issue — because an
+      # advisory against a transitive package must not decide the colour of an
+      # unrelated pull request, in a repository whose rule is that a red check
+      # is never merged.
+      #
+      # Everything about that arrangement fails silently. Delete the workflow
+      # and no check anywhere goes red; the repository simply stops being told
+      # about advisories, which looks exactly like a week with none. Narrow the
+      # audit with `--audit-level` and the same is true for everything below
+      # the threshold. Add `continue-on-error` and a registry outage becomes a
+      # clean bill of health. The eight rules are each one of those edits.
+      #
+      # Static analysis over the two workflow files and the audit script's own
+      # exported argv; it makes no network call and runs no audit, so it sits
+      # here with the other gates. See docs/dependency-advisories.md.
+      - name: Assert dependency-advisory audit
+        run: pnpm exec tsx scripts/assert-advisory-audit.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # Holds the upload path to the seven properties it depends on, every one of
       # which can be lost while the feature goes on working — which is the test
       # for whether something belongs in a gate rather than in a unit test. Take

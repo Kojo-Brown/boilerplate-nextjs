@@ -1,0 +1,107 @@
+# The advisory audit, which is the half of A06 that Dependabot does not cover.
+#
+# Dependabot points at what changed. Nothing pointed at what did not: a version
+# pinned months ago and never touched is the one an advisory is most likely to
+# be published against, and the one no pull request will ever mention.
+#
+# It is a schedule and not a pull-request check, on purpose, and that is the
+# whole shape of this file. An advisory against a transitive package would
+# otherwise turn every unrelated pull request red in a repository whose stated
+# rule is that a red check is never merged — and what a rule like that loses to
+# is not argument, it is a week of unrelated red. `scripts/assert-advisory-
+# audit.ts` rules A2 and A3 fail a `pull_request:` trigger here and a
+# `pnpm audit` smuggled back into `ci.yml`.
+#
+# This job's dangerous outcome is the quiet one. A registry outage, a `gh` that
+# cannot authenticate, an output format that changed under us: each produces no
+# issue, which is exactly what a healthy tree produces. So the job fails loudly
+# on all of them and succeeds only on having looked. Finding advisories is the
+# job working.
+name: Dependency Audit
+
+on:
+  schedule:
+    # 07:17 on Mondays, UTC — a few hours ahead of the working week, and not on
+    # the hour: GitHub's scheduler queues cron runs globally and the top of the
+    # hour is where the queue is.
+    - cron: "17 7 * * 1"
+  # So the first run does not have to wait a week, and so a person who has just
+  # merged a bump can ask rather than wonder.
+  workflow_dispatch:
+
+# Least privilege, and the two halves are asymmetric on purpose: the job reads
+# the lockfile and writes an issue. It never needs to push, and an audit job
+# that could would be a scheduled write to the default branch running on a
+# third-party registry's response.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  # A manual run kicked off next to the scheduled one would otherwise race for
+  # the same issue and could open two. `cancel-in-progress` is safe here in a
+  # way it is not for a deploy: the work is idempotent and the next run redoes
+  # it from scratch.
+  group: dependency-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # The lower bound of `engines.node`, because this job does not build
+          # anything and the audit's answer must not depend on which major ran
+          # it.
+          node-version: "22"
+          cache: pnpm
+
+      # The audit itself reads `pnpm-lock.yaml` and needs nothing installed.
+      # The install is here for `tsx`, and it is `--frozen-lockfile` rather
+      # than `pnpm dlx tsx` on purpose: fetching an unpinned tool at runtime,
+      # in the job whose subject is what an unpinned dependency does to you,
+      # is not a trade this repository gets to make.
+      #
+      # Without `--strict-peer-dependencies`, unlike every job in `ci.yml`.
+      # That flag is a warning gate and this job is not one; a peer range that
+      # broke would already be failing the pull-request checks, and turning
+      # the advisory report red for it would mean the week's advisories went
+      # unreported for an unrelated reason.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `gh issue create --label` fails outright against a label the
+      # repository does not have, so the very first run would die here rather
+      # than file anything. `--force` makes the step idempotent: it creates
+      # the label or updates it in place, and never fails for already
+      # existing — which is what would otherwise need a `|| true`, the one
+      # spelling rule A5 refuses.
+      #
+      # The name is duplicated from `ADVISORY_LABEL` in the script on purpose;
+      # rule A8 is what holds the two spellings together, because a rename on
+      # one side is silent on both.
+      - name: Ensure the advisory label exists
+        run: |
+          gh label create dependency-advisory \
+            --force \
+            --color B60205 \
+            --description "Opened by the scheduled dependency-advisory audit"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+
+      - name: Audit the pinned tree and reconcile the issue
+        run: pnpm exec tsx scripts/audit-dependencies.ts
+        env:
+          # `gh` reads this. The default `GITHUB_TOKEN` is scoped by the
+          # `permissions:` block above, so it can open and edit an issue in
+          # this repository and nothing else.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          NODE_OPTIONS: --throw-deprecation
