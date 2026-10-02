@@ -22,6 +22,27 @@ export const TENANT_GUC = "app.tenant_id";
 export const USER_GUC = "app.user_id";
 
 /**
+ * The setting that opens a draft-mode read, and names the tenant it may read.
+ *
+ * It lives here beside the other two because R2 of
+ * `scripts/assert-tenant-isolation.ts` compares the names declared in this file
+ * against the text of `prisma/rls.sql`, and this one needs that check at least
+ * as much as the other two: a misspelling makes `app.preview_tenant_id()`
+ * return NULL, `"tenantId" = NULL` is NULL rather than true, and every preview
+ * silently shows the published site. It was in `@/lib/tenancy/client` until the
+ * preview capability acquired a tenant, outside the one rule that would have
+ * caught that.
+ *
+ * It is still not part of a {@link TenantScope} and deliberately has no field
+ * on it. A scope narrows what a connection may reach; this widens it, to
+ * exactly one tenant's unpublished rows, and `posts_preview_read` is the only
+ * policy that reads it. Carrying the tenant *in* the capability rather than
+ * beside it is what makes an unscoped preview unrepresentable: there is no
+ * value of this setting that means "every tenant".
+ */
+export const PREVIEW_GUC = "app.preview_tenant_id";
+
+/**
  * The principal a scoped connection is acting as.
  *
  * Both halves, always. The tenant is what the policies on `posts`, `tenants`

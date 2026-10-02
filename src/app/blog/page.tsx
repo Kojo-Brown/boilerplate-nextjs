@@ -20,9 +20,10 @@ export const metadata: Metadata = {
  * the render time so the badge reflects the cache entry rather than the request.
  *
  * `getBlogIndex` picks between that cached read and an uncached one that also
- * returns drafts, according to whether this request is a preview. The route
- * stays statically prerendered either way; `@/lib/preview/draft` has the reason
- * that is possible.
+ * returns one workspace's drafts, according to whether this request is a preview
+ * and which workspace it is a preview of. The route stays statically prerendered
+ * either way; `@/lib/preview/draft` has the reason that is possible, including
+ * why the second cookie read it now does costs nothing here.
  */
 export default async function BlogPage() {
   const { data: posts, renderedAt } = await getBlogIndex();
@@ -43,10 +44,12 @@ export default async function BlogPage() {
               style={{ color: "var(--muted-foreground)" }}
             >
               {/* The heading and this line are derived from the posts actually
-                  in hand rather than from `isPreviewEnabled()` a second time.
-                  Reading the flag once, in the data layer, is what keeps "what
-                  is on this page" and "what this page says about itself" from
-                  being able to disagree. */}
+                  in hand rather than from `getPreviewScope()` a second time.
+                  Asking once, in the data layer, is what keeps "what is on this
+                  page" and "what this page says about itself" from being able to
+                  disagree — and it is what makes a draft session with no
+                  readable workspace render as the published site here, with no
+                  second branch to keep in step. */}
               {posts.length === 0
                 ? "No published posts yet."
                 : `${posts.length} post${posts.length === 1 ? "" : "s"} available` +

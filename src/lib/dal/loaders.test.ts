@@ -7,19 +7,26 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * plain call-through rather than a no-op so that a loader which stopped using
  * it would stop reaching `post.findMany` at all.
  */
-const { prisma } = vi.hoisted(() => ({
+const { prisma, previewTenants } = vi.hoisted(() => ({
   prisma: {
     user: { findMany: vi.fn() },
     post: { findMany: vi.fn() },
   },
+  /** Every workspace a preview transaction was opened for, in order. */
+  previewTenants: [] as string[],
 }));
 
 vi.mock("@/lib/tenancy/client", () => ({
   unscopedPrisma: prisma,
-  withPreviewRead: (fn: (tx: typeof prisma) => unknown) => fn(prisma),
+  withPreviewRead: (tenantId: string, fn: (tx: typeof prisma) => unknown) => {
+    previewTenants.push(tenantId);
+    return fn(prisma);
+  },
 }));
 
 import { createPostLoader, createUserLoader } from "./loaders";
+
+const TENANT = "tenant-mock-a";
 
 const mockUser = {
   id: "user-1",
@@ -49,6 +56,7 @@ const mockPost = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  previewTenants.length = 0;
 });
 
 describe("createUserLoader", () => {
@@ -105,7 +113,7 @@ describe("createPostLoader", () => {
       second,
     ] as never);
 
-    const loader = createPostLoader();
+    const loader = createPostLoader(TENANT);
     const results = await Promise.all([
       loader.load("post-1"),
       loader.load("post-2"),
@@ -125,7 +133,7 @@ describe("createPostLoader", () => {
     // trips one level down.
     vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
 
-    await createPostLoader().load("post-1");
+    await createPostLoader(TENANT).load("post-1");
 
     const [args] = vi.mocked(prisma.post.findMany).mock.calls[0] ?? [];
     expect((args as { include: unknown }).include).toEqual({
@@ -133,13 +141,39 @@ describe("createPostLoader", () => {
     });
   });
 
+  it("opens its preview transaction for the workspace it was constructed with", async () => {
+    // The tenant is a constructor argument and not a `load` one, so one batch
+    // cannot mix workspaces: whichever id arrived first would otherwise decide
+    // the `set_config` for all of them.
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    const loader = createPostLoader("tenant-mock-b");
+    await Promise.all([loader.load("post-1"), loader.load("post-2")]);
+
+    expect(previewTenants).toEqual(["tenant-mock-b"]);
+  });
+
+  it("keys its batch on the id alone, not on the workspace", async () => {
+    // A post id is unique across the installation, so folding the tenant into
+    // the key would make two spellings of one row and halve the batching.
+    vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
+
+    const loader = createPostLoader(TENANT);
+    await Promise.all([loader.load("post-1"), loader.load("post-1")]);
+
+    expect(prisma.post.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["post-1"] } } }),
+    );
+  });
+
   it("gives each instance its own cache", async () => {
     // Two instances are two requests. If they shared anything, the second
     // request would be served rows read on behalf of the first one's user.
     vi.mocked(prisma.post.findMany).mockResolvedValue([mockPost] as never);
 
-    await createPostLoader().load("post-1");
-    await createPostLoader().load("post-1");
+    await createPostLoader(TENANT).load("post-1");
+    await createPostLoader(TENANT).load("post-1");
 
     expect(prisma.post.findMany).toHaveBeenCalledTimes(2);
   });

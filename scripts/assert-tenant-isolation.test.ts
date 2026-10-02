@@ -43,17 +43,20 @@ model Tenant {
 const GOOD_RLS = `
 CREATE OR REPLACE FUNCTION app.current_tenant_id() RETURNS text AS $$ SELECT '' $$;
 CREATE OR REPLACE FUNCTION app.current_user_id() RETURNS text AS $$ SELECT '' $$;
+CREATE OR REPLACE FUNCTION app.preview_tenant_id() RETURNS text AS $$ SELECT '' $$;
 ALTER TABLE public.posts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.posts FORCE ROW LEVEL SECURITY;
 CREATE POLICY posts_tenant_scope ON public.posts
   USING ("tenantId" = app.current_tenant_id());
 SELECT current_setting('app.tenant_id', true);
 SELECT current_setting('app.user_id', true);
+SELECT current_setting('app.preview_tenant_id', true);
 `;
 
 const GOOD_SCOPE = `
 export const TENANT_GUC = "app.tenant_id";
 export const USER_GUC = "app.user_id";
+export const PREVIEW_GUC = "app.preview_tenant_id";
 `;
 
 function write(relativePath: string, text: string): void {
@@ -192,7 +195,7 @@ SELECT current_setting('app.user_id', true);`,
 // ---------------------------------------------------------------------------
 
 describe("R2 — the setting names agree", () => {
-  it("passes when the policy file reads both settings", () => {
+  it("passes when the policy file reads all three settings", () => {
     expect(gucNamesAgree(root)).toEqual([]);
     cleanup();
   });
@@ -215,10 +218,27 @@ describe("R2 — the setting names agree", () => {
   it("fires when a constant stops being a string literal", () => {
     write(
       "src/lib/tenancy/scope.ts",
-      `export const TENANT_GUC = prefix + "tenant_id";\nexport const USER_GUC = "app.user_id";`,
+      `export const TENANT_GUC = prefix + "tenant_id";\nexport const USER_GUC = "app.user_id";\nexport const PREVIEW_GUC = "app.preview_tenant_id";`,
     );
 
     expect(gucNamesAgree(root)[0]?.message).toContain("string literal");
+    cleanup();
+  });
+
+  it("fires when the preview capability's setting is misspelled", () => {
+    // The case the rule did not cover, because this constant used to live in
+    // `@/lib/tenancy/client` — outside the one file R2 reads. While the
+    // capability was a boolean a misspelling merely disabled previews; now it
+    // makes every preview name no workspace, which reads as a stale cache.
+    write(
+      "src/lib/tenancy/scope.ts",
+      GOOD_SCOPE.replace("app.preview_tenant_id", "app.preview_tenant"),
+    );
+
+    const findings = gucNamesAgree(root);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.message).toContain("app.preview_tenant");
     cleanup();
   });
 });
@@ -302,8 +322,41 @@ describe("R4 — unscoped readers", () => {
     cleanup();
   });
 
+  it("does not count a module that only writes about the capability", () => {
+    // The false positive this rule arrived with. `@/lib/cache/blog` and
+    // `@/lib/preview/token` both explain, at length, why their reads do or do
+    // not take the preview capability — and naming it in that paragraph was
+    // reported as taking it. Neither module touches a database. A gate that
+    // makes prose unwritable gets its prose deleted, so the comment-only lines
+    // are stripped before the scan.
+    for (const entry of UNSCOPED_READERS) {
+      write(
+        entry.file,
+        `import { unscopedPrisma } from "@/lib/tenancy/client";`,
+      );
+    }
+    write(
+      "src/lib/essay.ts",
+      [
+        "/**",
+        " * Reads nothing. It branches on a scope and leaves `withPreviewRead`",
+        " * to the data layer, where `unscopedPrisma` also lives.",
+        " */",
+        "// withPreviewRead is deliberately not called here.",
+        "export const NOTHING = 1;",
+      ].join("\n"),
+    );
+
+    expect(
+      unscopedReaders(root).some((f) => f.where === "src/lib/essay.ts"),
+    ).toBe(false);
+    cleanup();
+  });
+
   it("counts a preview read as an unscoped one", () => {
-    // It is more than unscoped: it can see other tenants' *drafts*.
+    // It is more than unscoped: it can see one workspace's *drafts*, which is
+    // more than the public blog gets, and its confinement comes from a policy
+    // rather than from a `where` clause.
     for (const entry of UNSCOPED_READERS) {
       write(
         entry.file,
@@ -480,7 +533,12 @@ function fakeDb(answers: {
   bypass?: string[];
   scopedPosts?: string[];
   unscopedPosts?: string[];
-  previewCount?: number;
+  /** What a preview scoped to tenant A returns. The public site plus A's drafts. */
+  previewPosts?: string[];
+  /** What a preview whose setting is empty returns — T12's fail-closed probe. */
+  previewWithoutTenantPosts?: string[];
+  /** What a *scoped* connection returns when the preview setting is also set — T13. */
+  previewWidensScope?: string[];
   scopedMemberships?: number;
   joinedTenants?: number;
   ownMembershipUsers?: string[];
@@ -491,7 +549,12 @@ function fakeDb(answers: {
 }) {
   const statements: string[] = [];
   let tenantScope: string | null = null;
-  let preview = false;
+  // Two variables and not one, because the preview capability now has three
+  // states and the probes read all three: never opened, opened naming a
+  // workspace, and opened naming none — which is what a missing or forged scope
+  // cookie reaches the database as, and what T12 is about.
+  let previewOpened = false;
+  let previewTenant: string | null = null;
 
   const policyError = Object.assign(
     new Error("new row violates row-level security policy"),
@@ -512,14 +575,16 @@ function fakeDb(answers: {
         tenantScope = (values?.[0] as string) || null;
         return { rows: [], rowCount: null };
       }
-      if (sql.includes("set_config") && sql.includes("app.preview")) {
-        preview = true;
+      if (sql.includes("set_config") && sql.includes("app.preview_tenant_id")) {
+        previewOpened = true;
+        previewTenant = (values?.[0] as string) || null;
         return { rows: [], rowCount: null };
       }
       if (sql.startsWith("BEGIN")) return { rows: [], rowCount: null };
       if (sql.startsWith("ROLLBACK")) {
         tenantScope = null;
-        preview = false;
+        previewOpened = false;
+        previewTenant = null;
         return { rows: [], rowCount: null };
       }
       if (sql.includes("current_setting('app.tenant_id'")) {
@@ -543,17 +608,27 @@ function fakeDb(answers: {
         return { rows: [], rowCount: 1 };
       }
       if (sql.includes("FROM posts")) {
-        if (preview) {
-          return {
-            rows: Array.from({ length: answers.previewCount ?? 4 }, (_, i) => ({
-              id: `p${i}`,
-            })),
-            rowCount: null,
-          };
-        }
+        // The scope is checked first because that is the order the policies
+        // resolve in: `posts_preview_read` requires `app.current_tenant_id() IS
+        // NULL`, so a scoped connection is unaffected by the capability however
+        // it is set. `previewWidensScope` is how T13 asks what happens when that
+        // conjunct is gone.
         const ids = tenantScope
-          ? (answers.scopedPosts ?? [FIXTURE.draftA, FIXTURE.publicA])
-          : (answers.unscopedPosts ?? [FIXTURE.publicA, FIXTURE.publicB]);
+          ? previewOpened && answers.previewWidensScope
+            ? answers.previewWidensScope
+            : (answers.scopedPosts ?? [FIXTURE.draftA, FIXTURE.publicA])
+          : previewTenant
+            ? (answers.previewPosts ?? [
+                FIXTURE.draftA,
+                FIXTURE.publicA,
+                FIXTURE.publicB,
+              ])
+            : previewOpened
+              ? (answers.previewWithoutTenantPosts ?? [
+                  FIXTURE.publicA,
+                  FIXTURE.publicB,
+                ])
+              : (answers.unscopedPosts ?? [FIXTURE.publicA, FIXTURE.publicB]);
         return { rows: ids.map((id) => ({ id })), rowCount: null };
       }
       if (sql.includes("JOIN tenants")) {
@@ -666,12 +741,80 @@ describe("the probes", () => {
     ).toContain("T6");
   });
 
-  it("T7 — fires when draft mode cannot see drafts", async () => {
-    const app = fakeDb({ previewCount: 2 });
+  it("T7 — fires when a preview reads another workspace's drafts", async () => {
+    // The gap this item closed, reproduced: a capability that is a boolean
+    // returns every row, so a token minted inside tenant A opens tenant B's
+    // unpublished posts too.
+    const app = fakeDb({
+      previewPosts: [
+        FIXTURE.draftA,
+        FIXTURE.publicA,
+        FIXTURE.draftB,
+        FIXTURE.publicB,
+      ],
+    });
 
-    expect(
-      (await runtimeFindings(app.client, admin().client)).map((f) => f.rule),
-    ).toContain("T7");
+    const findings = await runtimeFindings(app.client, admin().client);
+
+    expect(findings.map((f) => f.rule)).toContain("T7");
+    expect(findings.find((f) => f.rule === "T7")?.message).toContain(
+      "another workspace's drafts",
+    );
+  });
+
+  it("T7 — fires when a preview cannot see its own drafts", async () => {
+    // The other direction, and the one a tightened predicate fails in: a
+    // preview that shows exactly the public site is a preview that does nothing.
+    const app = fakeDb({ previewPosts: [FIXTURE.publicA, FIXTURE.publicB] });
+
+    const findings = await runtimeFindings(app.client, admin().client);
+
+    expect(findings.map((f) => f.rule)).toContain("T7");
+    expect(findings.find((f) => f.rule === "T7")?.message).toContain(
+      "shows exactly what the public sees",
+    );
+  });
+
+  it("T12 — fires when a preview naming no workspace reads drafts", async () => {
+    // Fails closed or it fails open, and there is no third option: a scope
+    // cookie that is missing, truncated or edited arrives as an empty setting,
+    // and the one thing it must not mean is "every workspace".
+    const app = fakeDb({
+      previewWithoutTenantPosts: [
+        FIXTURE.draftA,
+        FIXTURE.publicA,
+        FIXTURE.draftB,
+        FIXTURE.publicB,
+      ],
+    });
+
+    const findings = await runtimeFindings(app.client, admin().client);
+
+    expect(findings.map((f) => f.rule)).toContain("T12");
+    expect(findings.find((f) => f.rule === "T12")?.message).toContain(
+      "like an " + "anonymous visitor",
+    );
+  });
+
+  it("T13 — fires when the preview capability widens a tenant scope", async () => {
+    // `posts_preview_read` without its `app.current_tenant_id() IS NULL`
+    // conjunct: the dashboard's own scoped connection is then one `set_config`
+    // from another workspace, using a setting the application writes next door.
+    const app = fakeDb({
+      previewWidensScope: [
+        FIXTURE.draftA,
+        FIXTURE.publicA,
+        FIXTURE.draftB,
+        FIXTURE.publicB,
+      ],
+    });
+
+    const findings = await runtimeFindings(app.client, admin().client);
+
+    expect(findings.map((f) => f.rule)).toContain("T13");
+    expect(findings.find((f) => f.rule === "T13")?.message).toContain(
+      "IS NULL",
+    );
   });
 
   it("T8 — fires when the scope outlives its transaction", async () => {

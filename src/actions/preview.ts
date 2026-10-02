@@ -25,13 +25,18 @@
  */
 
 import { redirect } from "next/navigation";
-import { draftMode } from "next/headers";
+import { cookies, draftMode } from "next/headers";
 import { z } from "zod";
 import { defineNavigationAction } from "@/lib/actions/define-action";
 import { defineAuthedAction } from "@/lib/actions/define-authed-action";
 import { ActionError } from "@/lib/actions/result";
-import { getPostById } from "@/lib/dal/posts";
+import { getPostOwnership } from "@/lib/dal/posts";
 import { createPreviewLink } from "@/lib/preview/token";
+import { getRequiredTenant } from "@/lib/tenancy/active";
+import {
+  PREVIEW_SCOPE_COOKIE,
+  PREVIEW_SCOPE_COOKIE_ATTRIBUTES,
+} from "@/lib/preview/scope";
 import { isSiteRelativePath } from "@/lib/security/safe-redirect";
 import type { Route } from "next";
 
@@ -46,20 +51,47 @@ export interface PreviewLink {
 }
 
 /**
- * Mints a preview link for one post.
+ * Mints a preview link for one post, scoped to the workspace it is in.
  *
- * Answers the same "not found" for a post that does not exist and one the
- * caller may not preview. The alternative distinguishes them, which turns this
- * action into an oracle for which post ids are real — cheap to avoid, and the
- * ids are guessable enough (cuid, but exposed in every public URL) that it is
- * worth avoiding.
+ * Answers the same "not found" for a post that does not exist, one the caller
+ * may not preview, and one in another workspace. The alternative distinguishes
+ * them, which turns this action into an oracle for which post ids are real —
+ * cheap to avoid, and the ids are guessable enough (cuid, but exposed in every
+ * public URL) that it is worth avoiding.
+ *
+ * ## The workspace is read, not taken
+ *
+ * `getRequiredTenant()` resolves the active workspace the way every other
+ * request does: out of a cookie, and then checked against `memberships`. It is
+ * not an input to this action and must never become one — a caller-supplied
+ * tenant would be a request to mint a capability for a workspace, answered by
+ * the thing whose job is to decide whether they may have one. See
+ * `@/lib/tenancy/active` on why a cookie is a request rather than evidence.
+ *
+ * ## Why the ownership read is scoped
+ *
+ * It reads `getPostOwnership(tenant, user, id)` rather than the unfiltered
+ * preview read it used to. Two things follow, and the second is the one that
+ * closes the gap. A post outside the active workspace is invisible, so it is
+ * answered as "not found" — a member of two workspaces acting in A cannot mint a
+ * link for their own post in B, which would otherwise produce a token whose
+ * tenant and whose path named different workspaces and which would therefore
+ * open nothing. And the authorisation and the scoping are now the *same* read:
+ * there is no arrangement of this handler in which the post is checked against
+ * one workspace and the token signed for another.
+ *
+ * The `authorId === user.id || role === "ADMIN"` check stays, because the tenant
+ * scope does not answer it: a workspace has several members, and "anyone in the
+ * workspace may mint a link to anyone's draft" is a different product decision
+ * from the one this action already made.
  */
 export const createPreviewLinkAction = defineAuthedAction({
   name: "createPreviewLink",
   input: z.string().min(1, "A post id is required.").max(64, "Not a post id."),
   unauthenticatedMessage: "You must be signed in to create a preview link.",
   handler: async ({ input: postId, user }): Promise<PreviewLink> => {
-    const post = await getPostById(postId);
+    const tenant = await getRequiredTenant();
+    const post = await getPostOwnership(tenant.tenantId, user.id, postId);
     const mayPreview =
       post !== null && (post.authorId === user.id || user.role === "ADMIN");
 
@@ -69,10 +101,14 @@ export const createPreviewLinkAction = defineAuthedAction({
       );
     }
 
-    // The path is built here from the id we just authorised, not accepted from
-    // the caller. `signPreviewToken` would reject an unsafe one anyway; the
-    // point is that no caller-supplied string reaches it in the first place.
-    const link = await createPreviewLink(`/blog/${post.id}`);
+    // Both halves come from what was just authorised, not from the caller: the
+    // path from the row's own id, the tenant from the resolved membership.
+    // `signPreviewToken` would reject an unsafe path and an unusable tenant
+    // anyway; the point is that no caller-supplied string reaches it.
+    const link = await createPreviewLink({
+      path: `/blog/${post.id}`,
+      tenantId: tenant.tenantId,
+    });
 
     return { url: link.url, expiresAt: link.expiresAt.toISOString() };
   },
@@ -110,6 +146,16 @@ export const exitPreviewAction = defineNavigationAction({
   handler: async ({ input }): Promise<void> => {
     const draft = await draftMode();
     draft.disable();
+
+    // Both cookies, for the reason `DELETE /api/preview` clears both: a scope
+    // left behind outlives the session it scopes, and the next redemption would
+    // overwrite it — but only if there is a next redemption. Deleted with the
+    // path it was set with, because a browser matches a deletion on name and
+    // path and this one is set at `/`.
+    (await cookies()).delete({
+      name: PREVIEW_SCOPE_COOKIE,
+      path: PREVIEW_SCOPE_COOKIE_ATTRIBUTES.path,
+    });
 
     // `redirect` throws — nothing below it runs, and the cookie cleared above
     // still rides out on the redirect response.

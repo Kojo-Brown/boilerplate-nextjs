@@ -1,8 +1,9 @@
 # Draft mode and signed preview tokens
 
 How an author (or an external CMS) opens a session that renders unpublished
-content, why the destination is inside the signature, why this does not cost
-`/blog` its static prerender, and what the preview session's real lifetime is.
+content, why the destination and the workspace are inside the signature, why
+neither costs `/blog` its static prerender, and what the preview session's real
+lifetime is.
 
 ## The flow
 
@@ -11,31 +12,42 @@ content, why the destination is inside the signature, why this does not cost
      │                             │                              │
      │ createPreviewLinkAction     │                              │
      │  · requires a session       │                              │
-     │  · requires post ownership  │                              │
-     │  · signs { path, exp, nonce }                              │
+     │  · resolves the active workspace                           │
+     │  · requires ownership *in* it                              │
+     │  · signs { path, tenantId, exp, nonce }                    │
      ├────────── URL with ?token ─▶│                              │
                                    │ verify signature             │
                                    │ verify not expired           │
+                                   │ sign scope cookie (tenantId) │
                                    │ draftMode().enable()         │
                                    ├──── 307 to payload.path ────▶│
                                                                   │
-                                              getBlogPost() sees draft mode,
-                                              reads uncached, returns drafts,
-                                              PreviewBanner renders
+                                              getPreviewScope() reads the
+                                              session and the scope cookie,
+                                              getBlogPost() reads uncached from
+                                              that one workspace, returns its
+                                              drafts, PreviewBanner renders
 ```
+
+Two cookies ride out of that redemption. `__prerender_bypass` is Next's and is a
+boolean; `preview-tenant` is ours, signed, and names the workspace. A draft
+session with the first and not the second reads the published site — see
+[Why there are two cookies](#why-there-are-two-cookies).
 
 Exiting is a plain `<form>` in the banner posting to `exitPreviewAction`, which
 calls `draftMode().disable()` and redirects. `DELETE /api/preview` does the same
 thing for a CMS that has a session to end and no page to return to.
 
-| Piece                               | File                           |
-| ----------------------------------- | ------------------------------ |
-| Token format, signing, verification | `src/lib/preview/token.ts`     |
-| Reading the flag                    | `src/lib/preview/draft.ts`     |
-| Redeeming a token                   | `src/app/api/preview/route.ts` |
-| Minting a link / leaving            | `src/actions/preview.ts`       |
-| Choosing the cached or draft read   | `src/lib/cache/blog.ts`        |
-| Banner and draft label              | `src/components/preview/`      |
+| Piece                                   | File                           |
+| --------------------------------------- | ------------------------------ |
+| Token format, signing, verification     | `src/lib/preview/token.ts`     |
+| The scope cookie, signing and verifying | `src/lib/preview/scope.ts`     |
+| Reading the session and the scope       | `src/lib/preview/draft.ts`     |
+| Redeeming a token                       | `src/app/api/preview/route.ts` |
+| Minting a link / leaving                | `src/actions/preview.ts`       |
+| Choosing the cached or draft read       | `src/lib/cache/blog.ts`        |
+| Banner and draft label                  | `src/components/preview/`      |
+| The policy the preview read satisfies   | `prisma/rls.sql`               |
 
 ## Why the path is signed, not passed
 
@@ -94,6 +106,16 @@ while two public requests returned the same stamp.
 Not because the framework would cache a draft — it demonstrably will not — but
 because "a draft response can never become a cache entry" should be a property
 of the shape of the code rather than of a framework internal.
+
+The scope cookie does not change any of this, and the ordering is why. The
+`cookies()` read in `getPreviewScope` sits **below** the `draftMode().isEnabled`
+check, so during a prerender the early return is taken and the jar is never
+touched; at request time the route is already dynamic for the reasons listed
+above. `/blog` still builds as `○` and `/blog/[slug]` as `◐`. The one thing a
+reader must not do to that function is reorder it, and
+`src/lib/preview/draft.test.ts` asserts on the mock — not on the result — that
+the jar goes unread outside a draft session, because a correct `null` says
+nothing about what was read on the way to it.
 
 ## The leak this nearly shipped
 
@@ -167,22 +189,84 @@ minted at build time. So a preview session ends when:
   `previewModeId` and every outstanding cookie stops matching.
 
 An expired token cannot retroactively close a session that is already open.
-Scoping a live session to the token's path would require reading a second cookie
-on every render, and `cookies()` _is_ a tracked dynamic read — it would cost
-`/blog` its static prerender. That trade was not worth making: the banner is
-always visible while a session is open, and the session grants no more than a
-signed-in author already has.
+
+This section used to go on to say that scoping a live session to anything in the
+token was unavailable, because it would mean reading a second cookie on every
+render and `cookies()` is a tracked dynamic read that would cost `/blog` its
+static prerender. **That was wrong**, and the workspace scoping now rests on why:
+a cookie read placed _below_ the draft-mode check is never reached during a
+prerender, because `draftMode().isEnabled` is a plain `false` there. The route
+shape is unchanged — `/blog` still builds as `○` and `/blog/[slug]` as `◐`, which
+`scripts/assert-route-shape.ts` asserts — and at request time a draft reader is
+already being served dynamically, so the read costs nothing that was not already
+spent. See `getPreviewScope` in `src/lib/preview/draft.ts`.
+
+What that argument does _not_ buy is an expiry. Ending a live session early would
+mean a second timestamp somewhere, and a scope cookie carrying one would quietly
+end previews that work today — worth doing deliberately, as its own item, rather
+than as a side effect of scoping them. The banner remains visible for the whole
+session, and the session grants no more than a member of that one workspace
+already has.
+
+## Why there are two cookies
+
+Draft mode is a boolean. `__prerender_bypass` holds the framework's
+`previewModeId` and has no room for anything of ours, so the workspace a preview
+is scoped to has to be written down separately — which is what
+`src/lib/preview/scope.ts` is: `<tenantId>.<base64url HMAC>`, `httpOnly`, `lax`,
+`path=/`, no `Max-Age`, shaped to match the cookie it accompanies so the two
+arrive and expire together.
+
+The two can still get out of step, and the code says which way each half fails.
+
+- **Session but no scope** — a missing, truncated or edited cookie. The reads
+  fall back to the published site (`getBlogIndex` takes the cached branch), and
+  the database agrees independently: with nothing in `app.preview_tenant_id`,
+  `posts_preview_read` matches no row. The **banner still renders**, and says the
+  session is unscoped. That asymmetry is deliberate: the data fails closed, and
+  the escape hatch fails open, because a reader in draft mode with no "Exit
+  preview" button is in a mode they cannot leave.
+- **Scope but no session** — `getPreviewScope` checks the session first, so the
+  cookie does nothing at all. `exitPreviewAction` and `DELETE /api/preview` clear
+  both, by name _and_ path, because that is how a browser matches a deletion.
+
+The scope cookie gets its own HKDF `info`, so it is not verifiable by the token
+signer and vice versa. Both descend from the same secret; `@/lib/crypto/hmac` has
+the argument for why that is only safe with the domain separator.
+
+## Why the workspace is signed, not looked up
+
+Because at redemption there is nobody to ask. A preview link is a bearer
+capability whose holder may have no account — that is what makes it forwardable
+to a CMS, a staging bot or a reviewer — so "which workspace is this preview of"
+cannot be answered from a session. It travels with the capability instead:
+authorised once at minting, where there _is_ a session, and carried from there.
+
+Signed rather than appended for the reason the path is: a tenant in a query
+string is a tenant the holder chooses, which would turn one leaked link into a
+reader for every workspace in the deployment — strictly worse than the
+cross-tenant preview it replaced. `docs/multi-tenancy.md` records the policy side,
+and `docs/owasp-top-10.md`'s A01 rows carry the two mitigations this became.
 
 ## Adding another previewable route
 
-1. Read the flag through `isPreviewEnabled()` from `@/lib/preview/draft` —
-   never `draftMode()` directly, so the "not a tracked read" reasoning stays in
-   one place.
-2. Branch **outside** any `"use cache"` function, as `getBlogIndex` does.
+1. Branch on `getPreviewScope()` from `@/lib/preview/draft`, never on
+   `draftMode()` directly and never on `isPreviewEnabled()`. The scope is what a
+   _read_ needs: it carries the workspace, and `null` is the fail-closed answer
+   for a draft session that has none. `isPreviewEnabled()` is for chrome that
+   must appear whether or not the session can read anything — today that is the
+   banner, and the reason is above.
+2. Branch **outside** any `"use cache"` function, as `getBlogIndex` does. A
+   `cookies()` read inside one throws, and the scope read is a `cookies()` read.
 3. Render `<PreviewBanner returnTo="/your/path" />`. Pass the path explicitly:
    reading the current one on the server is a tracked dynamic access.
 4. Label unpublished content with `<DraftBadge />`. The banner says the session
    is a preview; the badge says which part is not live.
 5. Mint links through a Server Action that checks the caller may see the
-   content. `/api/preview` verifies a signature and nothing about who holds it —
-   authorisation happens once, at minting, and nowhere else.
+   content, **through their own workspace**. `/api/preview` verifies a signature
+   and nothing about who holds it — authorisation happens once, at minting, and
+   nowhere else, so a read scoped to the minter's workspace is what keeps the
+   post authorised and the workspace signed from being different ones.
+6. Pass the workspace into the read, as `getPostsForPreview` does. There is no
+   unscoped preview read to fall back on: `withPreviewRead` requires a tenant and
+   `posts_preview_read` matches nothing without one.

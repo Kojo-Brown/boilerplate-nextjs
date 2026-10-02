@@ -38,12 +38,16 @@ const { prisma, statements } = vi.hoisted(() => {
 vi.mock("@/lib/prisma", () => ({ prisma }));
 
 import {
-  PREVIEW_GUC,
   withPreviewRead,
   withTenantTransaction,
   withUserTransaction,
 } from "./client";
-import { InvalidTenantScopeError, TENANT_GUC, USER_GUC } from "./scope";
+import {
+  InvalidTenantScopeError,
+  PREVIEW_GUC,
+  TENANT_GUC,
+  USER_GUC,
+} from "./scope";
 
 /** A transaction client that records the statements run on it. */
 function transactionClient() {
@@ -181,24 +185,39 @@ describe("withUserTransaction", () => {
 });
 
 describe("withPreviewRead", () => {
-  it("opens the preview capability and no tenant", async () => {
-    // Draft mode is a whole-site preview, so it must *not* carry a tenant —
-    // `posts_preview_read` requires `app.current_tenant_id() IS NULL`.
-    await withPreviewRead(async () => null);
+  const TENANT = "tenant-mock-a";
+
+  it("names the workspace it may read, and opens no tenant scope", async () => {
+    // One statement, not two. The capability *is* the workspace — there is no
+    // `app.tenant_id` here, because `posts_preview_read` requires
+    // `app.current_tenant_id() IS NULL` so that a bearer capability can never
+    // widen a scoped read, and no second setting to forget to write.
+    await withPreviewRead(TENANT, async () => null);
 
     expect(statements).toHaveLength(1);
-    expect(statements[0]?.values).toEqual([PREVIEW_GUC, "on"]);
+    expect(statements[0]?.values).toEqual([PREVIEW_GUC, TENANT]);
   });
 
   it("is transaction-local like the others", async () => {
-    await withPreviewRead(async () => null);
+    await withPreviewRead(TENANT, async () => null);
 
     expect(statements[0]?.sql).toMatch(/,\s*TRUE\s*\)/);
   });
 
   it("returns the callback's value", async () => {
-    await expect(withPreviewRead(async () => ["post"])).resolves.toEqual([
-      "post",
-    ]);
+    await expect(
+      withPreviewRead(TENANT, async () => ["post"]),
+    ).resolves.toEqual(["post"]);
+  });
+
+  it("refuses a workspace it could not scope to, before opening a transaction", async () => {
+    // The empty string is the one that matters, and it does not throw in
+    // Postgres: `set_config` accepts it, `app.preview_tenant_id()` maps it back
+    // to NULL, and the preview silently reads the published site. There is no
+    // unscoped preview to fall back to, so this is refused here instead.
+    await expect(withPreviewRead("", async () => null)).rejects.toThrow(
+      InvalidTenantScopeError,
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

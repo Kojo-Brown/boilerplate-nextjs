@@ -279,26 +279,62 @@ describe("C4 — cited tests exist and run", () => {
 });
 
 describe("C5 — a gap tracks an open spec item", () => {
-  // Both cases have now outlived four gaps. They sabotaged the file-upload
-  // deferral until that shipped, then the log-redaction one, then A08's
-  // tag-pinning one, then A06's advisory-audit one — which now carries three
-  // mitigations where it carried a deferral. Each time, the rule worked
-  // exactly as designed on the way through: ticking the item failed this gate
-  // until the document was revisited, which is the whole point of it. So the
-  // cases move to a gap that is still open rather than being deleted with the
-  // one they named. A04's is the last one left, which is worth saying out
-  // loud: when it goes, these two cases have nothing to sabotage and the
-  // honest move is to delete them along with the rule they guard, rather than
-  // to invent a gap for them to live in.
+  // These two cases outlived five gaps, sabotaging each in turn — the
+  // file-upload deferral, the log-redaction one, A08's tag pinning, A06's
+  // advisory audit, and finally A01's cross-tenant draft preview. Every time,
+  // the rule did exactly what it exists for: ticking the item failed this gate
+  // until the document was revisited. With A01's closed there are no `**Gap**`
+  // bullets left anywhere in the checklist.
+  //
+  // The note that used to live here said that at this point the honest move was
+  // to delete these cases along with rule C5, rather than invent a gap for them
+  // to live in. The first half of that does not follow from the second. C5
+  // protects the *next* deferral, which is a thing a security checklist will
+  // certainly acquire again, and deleting a rule because nothing currently
+  // violates it is how a gate stops covering the case it was written for. What
+  // was right about it is that the real document must not carry a fake gap.
+  //
+  // So the gap is injected into the *copy* — which is what every other case in
+  // this file already does with the condition it is testing — and nothing is
+  // left in `docs/owasp-top-10.md` claiming a deferral that is not one.
+  //
+  // Both halves are injected: the bullet into the checklist and the `- [ ]` line
+  // into `SPEC.md`. Naming a real open item instead would work today and would
+  // couple these cases to whichever item that is, so the run that ticks it would
+  // break them — which is precisely how these tests came to be attached to a
+  // string of unrelated gaps in the first place.
+  const GAP_ITEM = "A synthetic spec item that only this test knows about";
+
+  /** Adds a `**Gap**` bullet to A01, and the open spec line it refers to. */
+  function withGap(
+    tree: string,
+    bullet = `- **Gap** — a synthetic deferral, injected by this test. SPEC: ${GAP_ITEM}`,
+  ): void {
+    edit(tree, CHECKLIST_FILE, (source) =>
+      source.replace(
+        "\n### A02:2021 — Cryptographic Failures",
+        `\n${bullet}\n\n### A02:2021 — Cryptographic Failures`,
+      ),
+    );
+    edit(tree, "SPEC.md", (source) => `${source}\n- [ ] ${GAP_ITEM}\n`);
+  }
+
+  it("passes a Gap bullet whose spec item is still open", () => {
+    // The control, and it has to come first: without it the three failures below
+    // could all be the injection being malformed rather than the rule firing.
+    const root = withTree(withGap);
+
+    expect(rules(check(root))).not.toContain("C5");
+    rmSync(root, { recursive: true, force: true });
+  });
+
   it("fails when the item it defers to has been ticked", () => {
     // The point of the rule: finishing the deferred work is what makes this
     // document wrong, so finishing it has to fail the gate.
     const root = withTree((tree) => {
+      withGap(tree);
       edit(tree, "SPEC.md", (source) =>
-        source.replace(
-          "- [ ] Scope draft-mode preview to the tenant that minted the token",
-          "- [x] Scope draft-mode preview to the tenant that minted the token",
-        ),
+        source.replace(`- [ ] ${GAP_ITEM}`, `- [x] ${GAP_ITEM}`),
       );
     });
 
@@ -308,11 +344,20 @@ describe("C5 — a gap tracks an open spec item", () => {
 
   it("fails a Gap bullet with no SPEC reference", () => {
     const root = withTree((tree) => {
-      edit(tree, CHECKLIST_FILE, (source) =>
-        source.replace(
-          /SPEC: Scope draft-mode preview to the tenant.*$/m,
-          "one day, probably.",
-        ),
+      withGap(tree, "- **Gap** — one day, probably.");
+    });
+
+    expect(rules(check(root))).toContain("C5");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fails a Gap bullet naming an item that is not in SPEC.md at all", () => {
+    // The other way the reference rots, and the one a rename produces: the
+    // bullet still says `SPEC:` and the wording no longer matches a line.
+    const root = withTree((tree) => {
+      withGap(
+        tree,
+        "- **Gap** — a synthetic deferral. SPEC: Something nobody ever wrote down",
       );
     });
 

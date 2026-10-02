@@ -1,13 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/auth", () => ({ auth: vi.fn() }));
-vi.mock("@/lib/dal/posts", () => ({ getPostById: vi.fn() }));
+vi.mock("@/lib/dal/posts", () => ({ getPostOwnership: vi.fn() }));
+vi.mock("@/lib/tenancy/active", () => ({ getRequiredTenant: vi.fn() }));
 
 import { redirect } from "next/navigation";
-import { draftMode } from "next/headers";
+import { cookies, draftMode } from "next/headers";
+import { PREVIEW_SCOPE_COOKIE } from "@/lib/preview/scope";
 import type { Session } from "next-auth";
 import { auth } from "@/auth";
-import { getPostById } from "@/lib/dal/posts";
+import { getPostOwnership } from "@/lib/dal/posts";
+import { getRequiredTenant } from "@/lib/tenancy/active";
 import { verifyPreviewToken } from "@/lib/preview/token";
 import { setRequestHeaders } from "@/test/request-headers";
 import { ORIGIN_REJECTED_MESSAGE } from "@/lib/actions/origin";
@@ -28,11 +31,13 @@ import { createPreviewLinkAction, exitPreviewAction } from "./preview";
 // NextAuth v5's `auth` is overloaded (middleware, route wrapper, bare call).
 // Narrowing to the no-argument form is what makes the stub types work.
 const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
-const mockGetPostById = vi.mocked(getPostById);
+const mockGetPostOwnership = vi.mocked(getPostOwnership);
+const mockGetRequiredTenant = vi.mocked(getRequiredTenant);
 const mockRedirect = vi.mocked(redirect);
 const mockDraftMode = vi.mocked(draftMode);
 
 const AUTHOR = "user-author";
+const TENANT = "tenant-mock-a";
 
 function session(userId: string, role: "USER" | "ADMIN" = "USER") {
   mockAuth.mockResolvedValue({
@@ -42,18 +47,25 @@ function session(userId: string, role: "USER" | "ADMIN" = "USER") {
 }
 
 function post(authorId: string, id = "post-1") {
-  mockGetPostById.mockResolvedValue({
-    id,
-    authorId,
-    title: "A post",
-    published: false,
-  } as unknown as Awaited<ReturnType<typeof getPostById>>);
+  mockGetPostOwnership.mockResolvedValue({ id, authorId });
+}
+
+/** The workspace the caller is acting in, resolved from a cookie and a membership. */
+function tenant(tenantId = TENANT) {
+  mockGetRequiredTenant.mockResolvedValue({
+    tenantId,
+    slug: `${tenantId}-slug`,
+    name: "A workspace",
+    role: "OWNER",
+    scope: { tenantId, userId: AUTHOR },
+  } as unknown as Awaited<ReturnType<typeof getRequiredTenant>>);
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockAuth.mockResolvedValue(null);
-  mockGetPostById.mockResolvedValue(null);
+  mockGetPostOwnership.mockResolvedValue(null);
+  tenant();
 });
 
 describe("createPreviewLinkAction", () => {
@@ -72,6 +84,7 @@ describe("createPreviewLinkAction", () => {
       valid: true,
       payload: {
         path: "/blog/post-1",
+        tenantId: TENANT,
         exp: expect.any(Number),
         nonce: expect.any(String),
       },
@@ -102,7 +115,7 @@ describe("createPreviewLinkAction", () => {
     });
     // Nothing was even looked up: an unauthenticated caller must not be able to
     // use this endpoint to probe which post ids exist.
-    expect(mockGetPostById).not.toHaveBeenCalled();
+    expect(mockGetPostOwnership).not.toHaveBeenCalled();
   });
 
   it("refuses a signed-in caller who does not own the post", async () => {
@@ -132,7 +145,7 @@ describe("createPreviewLinkAction", () => {
     const forbidden = await createPreviewLinkAction("post-1");
 
     session("user-someone-else");
-    mockGetPostById.mockResolvedValue(null);
+    mockGetPostOwnership.mockResolvedValue(null);
     const missing = await createPreviewLinkAction("post-1");
 
     // Distinguishing them would turn this action into an oracle for which post
@@ -148,7 +161,57 @@ describe("createPreviewLinkAction", () => {
     expect(result.success).toBe(false);
     if (result.success) return;
     expect(result.error).toBe("A post id is required.");
-    expect(mockGetPostById).not.toHaveBeenCalled();
+    expect(mockGetPostOwnership).not.toHaveBeenCalled();
+  });
+
+  it("reads the post through the workspace the caller is acting in", async () => {
+    // The authorisation read and the scoping are the same read, which is what
+    // makes it impossible for the post checked and the tenant signed to disagree.
+    session(AUTHOR);
+    tenant("tenant-mock-b");
+    post(AUTHOR);
+
+    await createPreviewLinkAction("post-1");
+
+    expect(mockGetPostOwnership).toHaveBeenCalledExactlyOnceWith(
+      "tenant-mock-b",
+      AUTHOR,
+      "post-1",
+    );
+  });
+
+  it("signs the workspace it resolved, not one the caller named", async () => {
+    // There is no input for a tenant and there must never be: a caller-supplied
+    // workspace would be a request for a capability, answered by the thing whose
+    // job is to decide whether they may have one.
+    session(AUTHOR);
+    tenant("tenant-mock-b");
+    post(AUTHOR);
+
+    const result = await createPreviewLinkAction("post-1");
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const token = new URL(result.data.url).searchParams.get("token");
+    const verification = await verifyPreviewToken(token as string);
+    expect(verification.valid && verification.payload.tenantId).toBe(
+      "tenant-mock-b",
+    );
+  });
+
+  it("answers not-found for a post in another workspace", async () => {
+    // Indistinguishable from an id that was never real, because the scoped read
+    // cannot see the row: a member of two workspaces acting in A cannot mint a
+    // link for their own post in B, which would name two workspaces at once.
+    session(AUTHOR);
+    mockGetPostOwnership.mockResolvedValue(null);
+
+    const result = await createPreviewLinkAction("post-in-other-workspace");
+
+    expect(result).toEqual({
+      success: false,
+      error: "That post does not exist, or you cannot preview it.",
+    });
   });
 
   it("refuses a request posted from another origin", async () => {
@@ -168,7 +231,7 @@ describe("createPreviewLinkAction", () => {
       success: false,
       error: ORIGIN_REJECTED_MESSAGE,
     });
-    expect(mockGetPostById).not.toHaveBeenCalled();
+    expect(mockGetPostOwnership).not.toHaveBeenCalled();
   });
 
   it("builds the path from the stored id, not from the caller's string", async () => {
@@ -210,6 +273,28 @@ describe("exitPreviewAction", () => {
 
     expect(disable).toHaveBeenCalledOnce();
     expect(mockRedirect).toHaveBeenCalledExactlyOnceWith("/blog/post-1");
+  });
+
+  it("clears the scope cookie as well as the session", async () => {
+    // The banner's exit button and `DELETE /api/preview` have to leave the same
+    // state behind; leaving the scope would mean a stale capability in the jar.
+    // By name *and* path, because that is how a browser matches a deletion.
+    const jar = { delete: vi.fn() };
+    vi.mocked(cookies).mockResolvedValue(
+      jar as unknown as Awaited<ReturnType<typeof cookies>>,
+    );
+    mockDraftMode.mockResolvedValue({
+      isEnabled: true,
+      enable: vi.fn(),
+      disable: vi.fn(),
+    } as unknown as Awaited<ReturnType<typeof draftMode>>);
+
+    await exitPreviewAction(form("/blog/post-1"));
+
+    expect(jar.delete).toHaveBeenCalledExactlyOnceWith({
+      name: PREVIEW_SCOPE_COOKIE,
+      path: "/",
+    });
   });
 
   it("falls back to /blog when given nowhere to go", async () => {
