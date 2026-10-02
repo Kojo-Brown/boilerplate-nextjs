@@ -69,8 +69,8 @@ export const getPublishedPosts = requestMemo(async (): Promise<PostSummary[]> =>
 );
 
 /**
- * Every post, published or not, newest first — the blog index as an author
- * previewing the site should see it.
+ * One workspace's posts, published or not, newest first — the blog index as an
+ * author previewing that workspace should see it.
  *
  * Separate from `getPublishedPosts` rather than a `{ includeDrafts }` flag on
  * it. The flag version has one call site that must never pass `true`
@@ -79,15 +79,23 @@ export const getPublishedPosts = requestMemo(async (): Promise<PostSummary[]> =>
  * apart. Two functions make "the cached read cannot return a draft" something
  * you can see at the import.
  *
- * Deliberately not scoped to an author. Draft mode is a whole-site preview —
- * see `docs/draft-mode.md` for who can open one and what that grants.
+ * Deliberately not scoped to an *author*: draft mode is a whole-site preview, so
+ * a reader holding a preview link sees their colleagues' drafts too. It is
+ * scoped to a *tenant*, which is the half that used to be missing — and the
+ * `tenantId` is not a `where` clause, it is the capability itself. See
+ * `withPreviewRead` and `docs/draft-mode.md` for who can open one and what that
+ * grants.
+ *
+ * `tenantId` first and a string, so this memoises: see the note on argument
+ * identity in this module's header.
  */
 export const getPostsForPreview = requestMemo(
-  async (): Promise<PostSummary[]> =>
-    // Unscoped, and the one read that may see a draft without a tenant. The
-    // preview transaction is what the `posts_preview_read` policy requires;
-    // without it this returns exactly what the public blog returns.
-    withPreviewRead((tx) =>
+  async (tenantId: string): Promise<PostSummary[]> =>
+    // Unscoped by `tenantClient`'s reckoning, and the one read that may see a
+    // draft without one. The preview transaction is what the
+    // `posts_preview_read` policy requires; without it this returns nothing, and
+    // with it this returns `tenantId`'s rows and no other workspace's.
+    withPreviewRead(tenantId, (tx) =>
       tx.post.findMany({
         select: POST_SUMMARY_SELECT,
         orderBy: { createdAt: "desc" },
@@ -105,17 +113,63 @@ export const getPostsByUser = requestMemo(
 );
 
 /**
- * One post with its author, with no access filter.
+ * One post with its author, published or not, from one workspace.
  *
  * Reads through the request-scoped batch loader rather than issuing its own
  * `findUnique`, which changes nothing for a single call and means N of them —
  * one per row of a list, the shape this whole layer exists to prevent — leave
  * as one `… WHERE "id" IN (…)`. See `@/lib/dal/batch` for why Prisma's own
  * batcher does not cover that case.
+ *
+ * It was `getPostById(id)` and the rename is the point rather than tidying.
+ * "By id, with no access filter" described a read that could return any
+ * workspace's draft, and read at a call site as the ordinary way to fetch a
+ * post; a name that says *preview* and a parameter that says *which workspace*
+ * make both facts visible at the call. There is one caller — the preview branch
+ * of `getBlogPost`. The minting path in `src/actions/preview.ts` used to be the
+ * second, and now reads through `getPostOwnership` instead: it has a session and
+ * therefore a workspace, so it has no business on the capability that exists for
+ * readers who have neither.
  */
-export function getPostById(id: string): Promise<PostWithAuthor | null> {
-  return loadPost(id);
+export function getPostForPreview(
+  tenantId: string,
+  id: string,
+): Promise<PostWithAuthor | null> {
+  return loadPost(tenantId, id);
 }
+
+/**
+ * Who owns one post, inside the workspace the caller is acting in.
+ *
+ * The authorisation read behind `createPreviewLinkAction`, and scoped rather
+ * than unfiltered on purpose. A post in another workspace is `null` here, which
+ * the action answers with the same "does not exist, or you cannot preview it" it
+ * gives for an id that was never real — so a link can only ever name a post in
+ * the workspace whose tenant it will be signed with, and the two halves of the
+ * token cannot disagree.
+ *
+ * Two fields, because that is what the decision needs. `authorId` is the
+ * ownership question the tenant scope does not answer (a workspace has several
+ * members); `id` is what the handler builds the path from, taken from the row
+ * rather than from the input so that the thing authorised and the thing signed
+ * are the same string.
+ *
+ * `findUnique` is enough here — `id` is unique, and the policy, not the `where`,
+ * is what confines the row to this tenant.
+ */
+export type PostOwnership = Pick<Post, "id" | "authorId">;
+
+export const getPostOwnership = requestMemo(
+  async (
+    tenantId: string,
+    userId: string,
+    id: string,
+  ): Promise<PostOwnership | null> =>
+    tenantClient(tenantScope(tenantId, userId)).post.findUnique({
+      where: { id },
+      select: { id: true, authorId: true },
+    }),
+);
 
 /**
  * One post, but only if the public may read it.

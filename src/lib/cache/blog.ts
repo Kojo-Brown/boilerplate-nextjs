@@ -1,12 +1,12 @@
 import { cacheLife, cacheTag } from "next/cache";
 import {
-  getPostById,
+  getPostForPreview,
   getPostsForPreview,
   getPublishedPostById,
   getPublishedPosts,
 } from "@/lib/dal/posts";
 import { BLOG_POSTS_TAG, blogPostTag } from "@/lib/cache/tags";
-import { isPreviewEnabled } from "@/lib/preview/draft";
+import { getPreviewScope } from "@/lib/preview/draft";
 import type { PostSummary, PostWithAuthor } from "@/lib/dal/posts";
 
 /**
@@ -68,10 +68,20 @@ export interface Stamped<T> {
  * `renderedAt` is `new Date()` here rather than a stamp from a cache fill,
  * which is correct and not an oversight: in preview the data really was
  * computed at request time, and the ISR badge should say so.
+ *
+ * The branch asks `getPreviewScope()` and not `isPreviewEnabled()`, and the
+ * difference is the point: a draft session with no readable workspace takes the
+ * *public* branch. There is no third case to write, because there is no preview
+ * read that does not name a tenant — `withPreviewRead` has no default and the
+ * policy behind it matches nothing without one. See `@/lib/preview/draft`.
  */
 export async function getBlogIndex(): Promise<Stamped<PostSummary[]>> {
-  if (await isPreviewEnabled()) {
-    return { data: await getPostsForPreview(), renderedAt: new Date() };
+  const preview = await getPreviewScope();
+  if (preview) {
+    return {
+      data: await getPostsForPreview(preview.tenantId),
+      renderedAt: new Date(),
+    };
   }
   return getCachedPublishedPosts();
 }
@@ -86,8 +96,12 @@ export async function getBlogIndex(): Promise<Stamped<PostSummary[]>> {
 export async function getBlogPost(
   id: string,
 ): Promise<Stamped<PostWithAuthor | null>> {
-  if (await isPreviewEnabled()) {
-    return { data: await getPostById(id), renderedAt: new Date() };
+  const preview = await getPreviewScope();
+  if (preview) {
+    return {
+      data: await getPostForPreview(preview.tenantId, id),
+      renderedAt: new Date(),
+    };
   }
   return getCachedPost(id);
 }
@@ -123,7 +137,7 @@ export async function getCachedPost(
   cacheLife({ stale: 60, revalidate: 300, expire: 31536000 });
   cacheTag(BLOG_POSTS_TAG, blogPostTag(id));
 
-  // `getPublishedPostById`, not `getPostById`. This entry is shared by every
+  // `getPublishedPostById`, not `getPostForPreview`. This entry is shared by every
   // public reader, so an unpublished post must not be able to enter it — see
   // the note on that function for the leak that taught us so.
   return { data: await getPublishedPostById(id), renderedAt: new Date() };

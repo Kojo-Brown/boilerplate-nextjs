@@ -96,7 +96,7 @@ export const DIRECT_PRISMA_IMPORTERS: readonly { file: string; why: string }[] =
 export const UNSCOPED_READERS: readonly { file: string; why: string }[] = [
   {
     file: "src/lib/dal/posts.ts",
-    why: "the public blog's three reads, which `posts_public_read` confines to published rows, plus the draft-mode list",
+    why: "the public blog's three reads, which `posts_public_read` confines to published rows, plus the draft-mode list, which `posts_preview_read` confines to the one workspace its token named",
   },
   {
     file: "src/lib/dal/users.ts",
@@ -104,7 +104,7 @@ export const UNSCOPED_READERS: readonly { file: string; why: string }[] = [
   },
   {
     file: "src/lib/dal/loaders.ts",
-    why: "the user batch loader (untenanted) and the post batch loader (draft mode)",
+    why: "the user batch loader (untenanted) and the post batch loader, which takes the previewing workspace rather than reading across all of them",
   },
   {
     file: "src/lib/outbox/write.ts",
@@ -272,7 +272,14 @@ export function gucNamesAgree(root: string): Finding[] {
   const scope = readFileSync(scopePath, "utf8");
   const rls = readFileSync(rlsPath, "utf8");
 
-  for (const constant of ["TENANT_GUC", "USER_GUC"]) {
+  // `PREVIEW_GUC` is in this list because it was not, and that is where it was
+  // needed. It lived in `@/lib/tenancy/client` while the preview capability was
+  // the string `'on'`, outside the one rule that compares a name against the
+  // policy file. When the capability acquired a tenant, a misspelling stopped
+  // being "the capability does nothing" and became "the capability names no
+  // workspace", which is the same symptom as a stale cache and no error
+  // anywhere. The constant moved into `scope.ts` to be covered here.
+  for (const constant of ["TENANT_GUC", "USER_GUC", "PREVIEW_GUC"]) {
     const declared = new RegExp(`${constant}\\s*=\\s*["']([^"']+)["']`).exec(
       scope,
     )?.[1];
@@ -380,6 +387,14 @@ export function directPrismaImports(root: string): Finding[] {
  * sure that reaching for the *named* escape hatch is equally deliberate, since
  * `unscopedPrisma.post.findMany` is as unscoped as `prisma.post.findMany` and
  * only says so.
+ *
+ * Comments are stripped first, for the reason R6 strips them from the policy
+ * file: the modules in this repository explain themselves at length, and naming
+ * `withPreviewRead` in a paragraph about why a read does *not* use it was
+ * reported as a use of it. Two such findings arrived the first time the preview
+ * capability's own argument was written down, in `@/lib/cache/blog` and
+ * `@/lib/preview/token` — neither of which touches a database. A gate that makes
+ * prose unwritable gets its prose deleted.
  */
 export function unscopedReaders(root: string): Finding[] {
   const findings: Finding[] = [];
@@ -389,7 +404,10 @@ export function unscopedReaders(root: string): Finding[] {
   for (const file of collectSources(root)) {
     // The client module exports them; importing itself is not a use.
     if (file.relativePath === "src/lib/tenancy/client.ts") continue;
-    if (!/\b(unscopedPrisma|withPreviewRead)\b/.test(file.text)) continue;
+    if (
+      !/\b(unscopedPrisma|withPreviewRead)\b/.test(withoutComments(file.text))
+    )
+      continue;
 
     found.add(file.relativePath);
     if (allowed.has(file.relativePath)) continue;
@@ -418,6 +436,35 @@ export function unscopedReaders(root: string): Finding[] {
   }
 
   return findings;
+}
+
+/**
+ * A module's source with its comment-only lines removed.
+ *
+ * Line-based and deliberately crude: a line whose first non-space characters are
+ * `//`, `/*`, `*` or `*​/` is dropped, and nothing else is touched. That covers
+ * every JSDoc block and every standalone comment, which is where prose lives,
+ * and it cannot remove code — a scanner that tried to strip a trailing `//`
+ * comment has to decide whether the `//` in `"https://…"` is one, and getting
+ * that wrong deletes the statement beside it.
+ *
+ * The limit, stated rather than discovered: a trailing comment on a line of code
+ * is still scanned. That direction is the safe one — the rule over-reports and
+ * never fails open — and the fix for such a report is to move the sentence onto
+ * its own line.
+ */
+function withoutComments(source: string): string {
+  return source
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trimStart();
+      return !(
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("/*") ||
+        trimmed.startsWith("*")
+      );
+    })
+    .join("\n");
 }
 
 /**
@@ -838,21 +885,123 @@ export async function runtimeFindings(
       }
     });
 
-    // T7 — draft mode sees drafts, and only with the capability opened.
+    // T7 — draft mode is the public site plus *one* workspace's drafts.
+    //
+    // The probe this item rewrote, and the expectation is narrower than it
+    // looks in both directions. It used to assert all four rows, which was the
+    // gap: `posts_preview_read` tested a boolean, so a token minted inside
+    // tenant A opened tenant B's drafts too.
+    //
+    // What replaced it is not "tenant A's rows" either, and the first draft of
+    // this probe asserted exactly that and failed — correctly. `/blog` is the
+    // *public* blog and the public blog is deliberately cross-tenant:
+    // `getPublishedPosts` reads unscoped, so every workspace's published posts
+    // are already on it, for anonymous visitors, with no preview involved. A
+    // preview of that page is the question "how would this look once my drafts
+    // were published", so the right answer is the public view **plus** tenant
+    // A's unpublished rows — three of the four. `posts_public_read` ORs in to
+    // supply the first part, which is the policy working rather than leaking:
+    // `publicB` is a row anybody can read without a token.
+    //
+    // So the whole assertion rests on one exclusion, and it is the only one
+    // this item is about: `draftB` must not be there.
     await inScope(app, null, null, async () => {
-      await app.query("SELECT set_config('app.preview', 'on', TRUE)");
+      await app.query("SELECT set_config('app.preview_tenant_id', $1, TRUE)", [
+        FIXTURE.tenantA,
+      ]);
       const seen = await app.query(
-        "SELECT id FROM posts WHERE id LIKE 'rls-probe-%'",
+        "SELECT id FROM posts WHERE id LIKE 'rls-probe-%' ORDER BY id",
       );
+      const ids = seen.rows.map((row) => String(row.id));
+      const expected = [
+        FIXTURE.draftA,
+        FIXTURE.publicA,
+        FIXTURE.publicB,
+      ].sort();
 
-      if (seen.rows.length !== 4) {
+      if (JSON.stringify(ids) !== JSON.stringify(expected)) {
         findings.push({
           rule: "T7",
           where: "posts",
           message:
-            `draft mode saw ${seen.rows.length} of 4 rows. \`posts_preview_read\` ` +
-            "is what lets the blog's preview branch read an unpublished post; " +
-            "without it `/blog` in draft mode shows exactly what the public sees.",
+            `a preview scoped to tenant A saw [${ids.join(", ")}] where it ` +
+            `should have seen [${expected.join(", ")}]. ` +
+            (ids.includes(FIXTURE.draftB)
+              ? "It can read another workspace's drafts, which is the gap " +
+                "`posts_preview_read` was tightened to close: its predicate " +
+                'must compare `"tenantId"` against `app.preview_tenant_id()` ' +
+                "and not merely check that a preview is open."
+              : ids.includes(FIXTURE.draftA)
+                ? "It sees its own drafts and is missing published rows the " +
+                  "public blog already serves, so previewing *subtracts* from " +
+                  "the page — check that `posts_public_read` still applies to a " +
+                  "connection with the preview capability open."
+                : "`posts_preview_read` is not letting the blog's preview " +
+                  "branch read an unpublished post at all, so `/blog` in draft " +
+                  "mode shows exactly what the public sees."),
+        });
+      }
+    });
+
+    // T12 — a preview that names no workspace reads no draft.
+    //
+    // The fail-closed half, and the reason the capability and its tenant are one
+    // setting. A draft session whose scope cookie is missing, truncated or
+    // edited reaches the database with nothing in `app.preview_tenant_id`, and
+    // what it must get is the published site — not every workspace's drafts,
+    // which is what a boolean capability with an absent tenant would have meant.
+    // `"tenantId" = NULL` is NULL rather than true, so this holds by
+    // construction; the probe is here because "by construction" is a claim about
+    // a predicate somebody can rewrite.
+    await inScope(app, null, null, async () => {
+      await app.query("SELECT set_config('app.preview_tenant_id', '', TRUE)");
+      const seen = await app.query(
+        "SELECT id FROM posts WHERE id LIKE 'rls-probe-%' ORDER BY id",
+      );
+      const ids = seen.rows.map((row) => String(row.id));
+      const expected = [FIXTURE.publicA, FIXTURE.publicB].sort();
+
+      if (JSON.stringify(ids) !== JSON.stringify(expected)) {
+        findings.push({
+          rule: "T12",
+          where: "posts",
+          message:
+            `a preview naming no workspace saw [${ids.join(", ")}] where it ` +
+            `should see the published site, [${expected.join(", ")}]. A scope ` +
+            "cookie that is absent or does not verify must read like an " +
+            "anonymous visitor; `posts_preview_read` matching on the mere " +
+            "presence of the setting is how that becomes every workspace's drafts.",
+        });
+      }
+    });
+
+    // T13 — the preview capability cannot widen a tenant scope.
+    //
+    // The `app.current_tenant_id() IS NULL` conjunct, measured. Without it the
+    // dashboard's own connection — which is scoped, and which serves a signed-in
+    // member — would be one `set_config` away from reading another workspace,
+    // and the setting it would need is one the application writes on a
+    // neighbouring code path.
+    await inScope(app, FIXTURE.tenantA, FIXTURE.userA, async () => {
+      await app.query("SELECT set_config('app.preview_tenant_id', $1, TRUE)", [
+        FIXTURE.tenantB,
+      ]);
+      const seen = await app.query(
+        "SELECT id FROM posts WHERE id LIKE 'rls-probe-%' ORDER BY id",
+      );
+      const ids = seen.rows.map((row) => String(row.id));
+      const expected = [FIXTURE.draftA, FIXTURE.publicA].sort();
+
+      if (JSON.stringify(ids) !== JSON.stringify(expected)) {
+        findings.push({
+          rule: "T13",
+          where: "posts",
+          message:
+            `a connection scoped to tenant A, with the preview capability set ` +
+            `to tenant B, saw [${ids.join(", ")}] where it should still see only ` +
+            `[${expected.join(", ")}]. \`posts_preview_read\` must require ` +
+            "`app.current_tenant_id() IS NULL`, or the capability granted to a " +
+            "bearer token also widens every scoped read in the application.",
         });
       }
     });

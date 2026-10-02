@@ -50,8 +50,12 @@ vi.mock("@/lib/tenancy/client", () => {
     tenantClient: (scope: { tenantId: string }) => ({
       post: model(`tenant:${scope.tenantId}`),
     }),
-    withPreviewRead: (fn: (tx: { post: unknown }) => unknown) =>
-      fn({ post: model("preview") }),
+    // The tenant is in the scope label, so `scopeLog` says *which* workspace a
+    // preview read opened and not merely that it opened one.
+    withPreviewRead: (
+      tenantId: string,
+      fn: (tx: { post: unknown }) => unknown,
+    ) => fn({ post: model(`preview:${tenantId}`) }),
   };
 });
 
@@ -59,7 +63,8 @@ import {
   getPublishedPosts,
   getPostsForPreview,
   getPostsByUser,
-  getPostById,
+  getPostForPreview,
+  getPostOwnership,
   getPublishedPostById,
   getPostCountByUser,
   getEditablePost,
@@ -126,7 +131,7 @@ describe("getPostsForPreview", () => {
   it("applies no published filter, which is the whole reason it is separate", async () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([mockPost] as never);
 
-    await getPostsForPreview();
+    await getPostsForPreview(TENANT);
 
     const [args] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
     // Not `where: { published: true }`, and not a `where` at all — an omitted
@@ -138,7 +143,7 @@ describe("getPostsForPreview", () => {
   it("orders newest first, like the published list it stands in for", async () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    await getPostsForPreview();
+    await getPostsForPreview(TENANT);
 
     expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { createdAt: "desc" } }),
@@ -151,7 +156,7 @@ describe("getPostsForPreview", () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
     await getPublishedPosts();
-    await getPostsForPreview();
+    await getPostsForPreview(TENANT);
 
     const [published] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
     const [preview] = vi.mocked(postSpies.findMany).mock.calls[1] ?? [];
@@ -183,14 +188,14 @@ describe("getPostsByUser", () => {
   });
 });
 
-describe("getPostById", () => {
+describe("getPostForPreview", () => {
   // It reads through the request-scoped batch loader, so the statement is a
   // keyed `findMany` rather than a `findUnique`. `loaders.test.ts` covers the
   // batching itself; these two pin the contract callers depend on.
   it("looks up by primary key", async () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([mockFullPost] as never);
 
-    const result = await getPostById("post-1");
+    const result = await getPostForPreview(TENANT, "post-1");
 
     expect(postSpies.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: { in: ["post-1"] } } }),
@@ -203,8 +208,42 @@ describe("getPostById", () => {
     // loader's `fetch` returns fewer rows than it was asked for.
     vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    const result = await getPostById("missing");
+    const result = await getPostForPreview(TENANT, "missing");
     expect(result).toBeNull();
+  });
+});
+
+describe("getPostOwnership", () => {
+  it("reads inside the caller's workspace, so another's post is invisible", async () => {
+    // The authorisation read behind `createPreviewLinkAction`, and the reason it
+    // is not the preview capability: the minter has a session and therefore a
+    // workspace, and reading through the scope is what makes "a post in another
+    // workspace" indistinguishable from "no such post".
+    vi.mocked(postSpies.findUnique).mockResolvedValue({
+      id: "post-1",
+      authorId: "user-1",
+    } as never);
+
+    await getPostOwnership(TENANT, "user-1", "post-1");
+
+    expect(scopeLog).toEqual([`tenant:${TENANT}:findUnique`]);
+  });
+
+  it("selects only what the decision needs", async () => {
+    vi.mocked(postSpies.findUnique).mockResolvedValue(null as never);
+
+    await getPostOwnership(TENANT, "user-1", "post-1");
+
+    expect(postSpies.findUnique).toHaveBeenCalledWith({
+      where: { id: "post-1" },
+      select: { id: true, authorId: true },
+    });
+  });
+
+  it("returns null for a post the scope cannot see", async () => {
+    vi.mocked(postSpies.findUnique).mockResolvedValue(null as never);
+
+    expect(await getPostOwnership(TENANT, "user-1", "elsewhere")).toBeNull();
   });
 });
 
@@ -230,7 +269,7 @@ describe("getPublishedPostById", () => {
     expect(await getPublishedPostById("draft-1")).toBeNull();
   });
 
-  it("includes the same author fields as getPostById", async () => {
+  it("includes the same author fields as getPostForPreview", async () => {
     // The two feed one page. A narrower author here would render a byline that
     // differs between the preview and the published view. Still worth pinning
     // now that the unfiltered read goes through the batch loader: the loader's
@@ -239,7 +278,7 @@ describe("getPublishedPostById", () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([mockFullPost] as never);
     vi.mocked(postSpies.findFirst).mockResolvedValue(mockFullPost as never);
 
-    await getPostById("post-1");
+    await getPostForPreview(TENANT, "post-1");
     await getPublishedPostById("post-1");
 
     const [unfiltered] = vi.mocked(postSpies.findMany).mock.calls[0] ?? [];
@@ -580,16 +619,29 @@ describe("access worlds", () => {
     // it must. `posts_preview_read` is the policy that allows it.
     vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    await getPostsForPreview();
+    await getPostsForPreview(TENANT);
 
-    expect(scopeLog).toEqual(["preview:findMany"]);
+    expect(scopeLog).toEqual([`preview:${TENANT}:findMany`]);
   });
 
-  it("getPostById reads through the preview capability, via the loader", async () => {
+  it("getPostForPreview reads through the preview capability, via the loader", async () => {
     vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
 
-    await getPostById("post-1");
+    await getPostForPreview(TENANT, "post-1");
 
-    expect(scopeLog).toEqual(["preview:findMany"]);
+    expect(scopeLog).toEqual([`preview:${TENANT}:findMany`]);
+  });
+
+  it("opens the preview capability for the workspace it was given", async () => {
+    // The parameter is the capability, not a hint about one: `withPreviewRead`
+    // writes it into `app.preview_tenant_id`, and `posts_preview_read` matches
+    // no row at all without it. A read that passed the wrong workspace here
+    // would return nothing rather than someone else's drafts, which is the
+    // failure direction this design chose.
+    vi.mocked(postSpies.findMany).mockResolvedValue([] as never);
+
+    await getPostsForPreview("tenant-2");
+
+    expect(scopeLog).toEqual(["preview:tenant-2:findMany"]);
   });
 });

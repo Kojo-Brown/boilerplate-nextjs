@@ -22,6 +22,12 @@ there is nothing to claim there is a **Gap** bullet instead, naming the `SPEC.md
 item that tracks it — so the day that item is finished, this gate fails and this
 document has to be revisited.
 
+As of A01's last deferral closing, **there are no `**Gap**` bullets left**. That
+is a statement about today and not an achievement to preserve: the rule stays,
+and the next honest deferral gets a bullet. `C5`'s own tests inject a gap into a
+copy of this tree rather than resting on one that happens to be here, so the rule
+is exercised whether or not this document currently defers anything.
+
 No test is cited by two categories. That rule is in the gate (`C6`) because the
 alternative is a checklist that looks complete while three of its rows rest on
 one assertion.
@@ -75,10 +81,15 @@ not run a handler until they have one.
 - **Mitigation** — the active workspace arrives in a cookie and is checked against `memberships` on every request, in `src/lib/tenancy/active.ts`. A cookie is a request rather than evidence, and signing one would only prove this server issued it — not that the membership still exists. A cookie naming a workspace the user is not in is refused rather than falling back to one they are, because answering a request for workspace B with workspace A's data shows a page on which every value is real and none of it is what the reader believes they are looking at.
   - **Test** `src/lib/tenancy/active.test.ts` › "refuses a cookie naming a tenant the user is not a member of"
   - **Test** `src/lib/tenancy/active.test.ts` › "consults the membership table on every call, not the cookie alone"
-- **Mitigation** — whether the policies are enforced _at all_ is measured rather than assumed. Row-level security is skipped for a superuser and for a role with BYPASSRLS, with no error anywhere, so `scripts/assert-tenant-isolation.ts` creates two tenants against CI's Postgres and probes what a connection scoped to one can reach — and refuses to report on anything else until it has established that the connecting role cannot bypass what it is measuring. `docs/multi-tenancy.md` is the argument; **Gap** below records what it does not cover.
+- **Mitigation** — whether the policies are enforced _at all_ is measured rather than assumed. Row-level security is skipped for a superuser and for a role with BYPASSRLS, with no error anywhere, so `scripts/assert-tenant-isolation.ts` creates two tenants against CI's Postgres and probes what a connection scoped to one can reach — and refuses to report on anything else until it has established that the connecting role cannot bypass what it is measuring. `docs/multi-tenancy.md` is the argument; the two rows below are what it used to record as a gap and no longer does.
   - **Test** `scripts/assert-tenant-isolation.test.ts` › "T1 — reports a bypassing role and stops there"
   - **Test** `scripts/assert-tenant-isolation.test.ts` › "T8 — fires when the scope outlives its transaction"
-- **Gap** — draft mode is a whole-site preview, so a preview token minted inside one workspace opens every workspace's unpublished posts. That is what draft mode has always done here; row-level security made it visible by requiring the access rule to be written down, as `posts_preview_read` in `prisma/rls.sql`. SPEC: Scope draft-mode preview to the tenant that minted the token
+- **Mitigation** — a draft-mode preview is confined to the workspace whose member minted the link. This row was a **Gap** until the open spec item closed it, and the shape of the fix is the point: the capability and its scope are one Postgres setting. `posts_preview_read` in `prisma/rls.sql` compares `"tenantId"` against `app.preview_tenant_id()` rather than testing that a preview is open, so there is no value of that setting meaning "every workspace" and no second setting to forget to write. It fails closed by construction — the accessor maps an unset or empty setting to NULL, `"tenantId" = NULL` is NULL rather than true, and a NULL `USING` result refuses the row — so a release that forgot to open the capability reads the published site instead of everything. `withPreviewRead` in `src/lib/tenancy/client.ts` takes the workspace as a required argument for the same reason: an optional one has a default, and the only possible default is the vulnerability.
+  - **Test** `scripts/assert-tenant-isolation.test.ts` › "T7 — fires when a preview reads another workspace's drafts"
+  - **Test** `scripts/assert-tenant-isolation.test.ts` › "T12 — fires when a preview naming no workspace reads drafts"
+- **Mitigation** — the workspace reaches that setting without ever being a value the holder chose. It is signed into the preview token (`src/lib/preview/token.ts`), which is why editing it is a forgery rather than a re-aim; `/api/preview` writes it into a second signed cookie (`src/lib/preview/scope.ts`) because draft mode itself is a boolean the framework owns and has no room for it; and `src/lib/preview/draft.ts` verifies that cookie on every preview read, answering an absent or edited one with the published site. There is nobody to ask at redemption time — the holder of a preview link may have no account, which is what makes it forwardable to a CMS — so carrying the claim and verifying it is the only available answer. Minting is scoped too: `createPreviewLinkAction` reads the post through the caller's own workspace, so the post it authorises and the workspace it signs cannot be different ones.
+  - **Test** `src/lib/preview/token.test.ts` › "rejects a token whose tenant was swapped for another workspace's"
+  - **Test** `src/actions/preview.test.ts` › "answers not-found for a post in another workspace"
 
 ### A02:2021 — Cryptographic Failures
 

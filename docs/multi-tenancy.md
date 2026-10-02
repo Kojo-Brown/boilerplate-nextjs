@@ -30,11 +30,11 @@ customer.
 
 Three access worlds, and which one a query is in is visible at its import.
 
-| World        | How it is opened                                          | What it can reach                                      |
-| ------------ | --------------------------------------------------------- | ------------------------------------------------------ |
-| Tenant scope | `tenantClient(scope)` / `withTenantTransaction(scope, …)` | every row of one workspace, read and write             |
-| Unscoped     | `unscopedPrisma`                                          | published posts, read only; plus the untenanted tables |
-| Preview      | `withPreviewRead(…)`                                      | every post including drafts, read only, no tenant      |
+| World        | How it is opened                                          | What it can reach                                            |
+| ------------ | --------------------------------------------------------- | ------------------------------------------------------------ |
+| Tenant scope | `tenantClient(scope)` / `withTenantTransaction(scope, …)` | every row of one workspace, read and write                   |
+| Unscoped     | `unscopedPrisma`                                          | published posts, read only; plus the untenanted tables       |
+| Preview      | `withPreviewRead(tenantId, …)`                            | every published post, plus one workspace's drafts; read only |
 
 `src/lib/tenancy/client.ts` owns all three. `scripts/assert-tenant-isolation.ts`
 rule R3 stops anything else importing `@/lib/prisma` directly, and R4 requires
@@ -166,12 +166,15 @@ Static, over the tree:
 - **R1** every model with a `tenantId` has its table enabled, **forced**, and
   policied. This is the rule for the most likely future mistake: adding a
   tenant-scoped model is one line, and `db push` gives it no protection.
-- **R2** the setting names in `src/lib/tenancy/scope.ts` are the ones the
-  policies read. A mismatch has no symptom — `set_config` writes a setting
-  nothing reads, `current_setting` returns NULL, and every scoped query quietly
-  becomes an unscoped one.
+- **R2** the setting names in `src/lib/tenancy/scope.ts` — all three, the
+  preview capability's included — are the ones the policies read. A mismatch has
+  no symptom: `set_config` writes a setting nothing reads, `current_setting`
+  returns NULL, and every scoped query quietly becomes an unscoped one, or every
+  preview quietly names no workspace.
 - **R3** nothing imports `@/lib/prisma` outside the enumerated modules.
 - **R4** every unscoped or preview read is enumerated, with its reason.
+  Comment-only lines are stripped before the scan: a module explaining why its
+  read does _not_ take the preview capability was reported as taking it.
 - **R5** every `writeWithOutbox` in `src/actions/` passes a scope.
 - **R6** no `app.*` function in `rls.sql` is used above its own definition. The
   file is applied as one multi-statement query, so a policy calling a function
@@ -191,11 +194,23 @@ Live, against CI's Postgres, with two tenants and four posts:
 - **T4** a row cannot be moved into another workspace.
 - **T5** an unscoped connection sees published posts only.
 - **T6** an unscoped connection cannot write at all.
-- **T7** draft mode can see drafts.
+- **T7** a preview is the public site **plus one workspace's drafts** — three of
+  the four rows. Not "tenant A's rows": `/blog` is deliberately cross-tenant for
+  anonymous visitors, so a preview of it subtracts nothing. The whole assertion
+  rests on one exclusion, and it is the one this gate is about: the other
+  workspace's draft is not there.
 - **T8** the scope does not survive its transaction.
 - **T9** a member cannot enumerate another workspace's memberships.
 - **T10** the "which workspaces may I open" read returns only the asking user's.
 - **T11** that same read can resolve the tenants it names.
+- **T12** a preview naming **no** workspace reads the published site, not every
+  workspace's drafts. `"tenantId" = NULL` is NULL rather than true, so this holds
+  by construction — and "by construction" is a claim about a predicate somebody
+  can rewrite.
+- **T13** the preview capability cannot widen a tenant scope. Without the
+  `app.current_tenant_id() IS NULL` conjunct, the dashboard's own scoped
+  connection is one `set_config` from another workspace, using a setting the
+  application writes on a neighbouring code path.
 
 Each is checked against the failure it names in
 `scripts/assert-tenant-isolation.test.ts`, and T1, T2, T4, T9 and T10 were also
@@ -263,14 +278,6 @@ the design, it is its boundary — the mitigations for SQL injection are in
   deliberately not by a tenant.
 
 ## Known gaps
-
-**Draft-mode preview reads across tenants.** `/blog` in draft mode shows every
-workspace's unpublished posts to whoever holds a valid preview token, whichever
-workspace minted it. This is not new — it is what draft mode has always done
-here — but row-level security made it visible, by requiring the access rule to
-be written down as `posts_preview_read` rather than being the default behaviour
-of a connection with no restrictions. The fix is to put the tenant in the
-preview token and scope the read to it; tracked in `SPEC.md`.
 
 **Provisioning runs on the administrative connection.** Creating a tenant
 cannot happen inside a tenant scope — there is no scope yet — and `tenants` has

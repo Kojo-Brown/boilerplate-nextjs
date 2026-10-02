@@ -2,7 +2,7 @@ import { cache } from "react";
 // Unscoped on purpose, and only for the two reads below. `createUserLoader`
 // reads `users`, which has no tenant column and no policy — a person is not
 // owned by a workspace. `createPostLoader` is the draft-mode read, which is a
-// whole-site preview and runs inside `withPreviewRead`.
+// whole-site preview of one workspace and runs inside `withPreviewRead`.
 import { unscopedPrisma, withPreviewRead } from "@/lib/tenancy/client";
 import { createBatchLoader } from "@/lib/dal/batch";
 import type { BatchLoader } from "@/lib/dal/batch";
@@ -82,21 +82,29 @@ export function createUserLoader(): BatchLoader<string, UserProfile> {
 }
 
 /**
- * The unfiltered post read, which is the draft-mode one.
+ * The draft-mode post read, for one workspace.
  *
- * `loadPost` is documented below as having no access filter, and under
- * row-level security that is now a statement about a *capability* rather than
- * about the absence of one: an unscoped connection can see published posts and
- * nothing else, so reading a draft takes the preview transaction this batch
- * runs in. Its only callers are `getPostById` and the preview branch of
- * `getBlogPost`. See `withPreviewRead`.
+ * `loadPost` carries no `published` and no `authorId` filter, and under
+ * row-level security that is a statement about a *capability* rather than about
+ * the absence of one: a connection with no scope sees published posts and
+ * nothing else, so reading a draft takes the preview transaction this batch runs
+ * in — and that transaction now names the workspace it may read, so this loader
+ * does too. Its only caller is `getPostForPreview`. See `withPreviewRead`.
+ *
+ * The tenant is a constructor argument rather than a `load` argument, which is
+ * what keeps it out of the batch key: an id is unique across the installation,
+ * so folding the tenant into the key would make two spellings of one row, and
+ * taking it per-call would let one batch mix workspaces and send a single
+ * `set_config` for whichever arrived first.
  */
-export function createPostLoader(): BatchLoader<string, PostWithAuthor> {
+export function createPostLoader(
+  tenantId: string,
+): BatchLoader<string, PostWithAuthor> {
   return createBatchLoader<string, PostWithAuthor>({
     name: "postById",
     keyOf: (post) => post.id,
     fetch: (ids) =>
-      withPreviewRead((tx) =>
+      withPreviewRead(tenantId, (tx) =>
         tx.post.findMany({
           where: { id: { in: [...ids] } },
           include: { author: { select: POST_AUTHOR_SELECT } },
@@ -106,6 +114,17 @@ export function createPostLoader(): BatchLoader<string, PostWithAuthor> {
 }
 
 const getUserLoader = cache(createUserLoader);
+
+/**
+ * One post loader per workspace per request.
+ *
+ * `cache` keys on its arguments, so a request that previews one workspace — the
+ * only kind there is, since the scope comes from one cookie — gets exactly one
+ * loader and exactly one batched statement. Hoisting the loader above the tenant
+ * instead would have meant a loader that could not know which workspace to open,
+ * which is how the parameter would have ended up back on `load` and the batch
+ * back to whichever tenant arrived first.
+ */
 const getPostLoader = cache(createPostLoader);
 
 /**
@@ -126,20 +145,24 @@ export function loadUsers(
 }
 
 /**
- * One post with its author by id, with no access filter.
+ * One post with its author by id, from `tenantId`, published or not.
  *
  * Callers that must not return an unpublished or someone else's post use
  * `getPublishedPostById` or `getEditablePost` instead — those carry their
  * predicate in the `where`, which is what keeps the rule off the component
  * rendering the row. See the notes on both in `./posts`.
  */
-export function loadPost(id: string): Promise<PostWithAuthor | null> {
-  return getPostLoader().load(id);
+export function loadPost(
+  tenantId: string,
+  id: string,
+): Promise<PostWithAuthor | null> {
+  return getPostLoader(tenantId).load(id);
 }
 
 /** Several posts, positionally, `null` where there is no such post. */
 export function loadPosts(
+  tenantId: string,
   ids: readonly string[],
 ): Promise<(PostWithAuthor | null)[]> {
-  return getPostLoader().loadMany(ids);
+  return getPostLoader(tenantId).loadMany(ids);
 }

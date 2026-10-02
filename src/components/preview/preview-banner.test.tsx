@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { draftMode } from "next/headers";
+import { cookies, draftMode } from "next/headers";
+import { PREVIEW_SCOPE_COOKIE, signPreviewScope } from "@/lib/preview/scope";
 import { PreviewBanner } from "./preview-banner";
 
 vi.mock("@/actions/preview", () => ({
@@ -15,12 +16,21 @@ vi.mock("@/actions/preview", () => ({
  */
 const mockDraftMode = vi.mocked(draftMode);
 
-function preview(isEnabled: boolean) {
+async function preview(isEnabled: boolean, { scoped = true } = {}) {
   mockDraftMode.mockResolvedValue({
     isEnabled,
     enable: vi.fn(),
     disable: vi.fn(),
   } as unknown as Awaited<ReturnType<typeof draftMode>>);
+
+  const value = scoped ? await signPreviewScope("tenant-mock-a") : undefined;
+  vi.mocked(cookies).mockResolvedValue({
+    get: vi.fn((name: string) =>
+      name === PREVIEW_SCOPE_COOKIE && value !== undefined
+        ? { name, value }
+        : undefined,
+    ),
+  } as unknown as Awaited<ReturnType<typeof cookies>>);
 }
 
 beforeEach(() => {
@@ -29,7 +39,7 @@ beforeEach(() => {
 
 describe("PreviewBanner", () => {
   it("renders nothing for a public request", async () => {
-    preview(false);
+    await preview(false);
 
     const { container } = render(await PreviewBanner({ returnTo: "/blog" }));
 
@@ -39,7 +49,7 @@ describe("PreviewBanner", () => {
   });
 
   it("announces the draft session without interrupting the reader", async () => {
-    preview(true);
+    await preview(true);
 
     render(await PreviewBanner({ returnTo: "/blog" }));
 
@@ -50,7 +60,7 @@ describe("PreviewBanner", () => {
   });
 
   it("offers a way out that works without JavaScript", async () => {
-    preview(true);
+    await preview(true);
 
     render(await PreviewBanner({ returnTo: "/blog/post-1" }));
 
@@ -62,8 +72,39 @@ describe("PreviewBanner", () => {
     expect(button.closest("form")).not.toBeNull();
   });
 
+  it("says the content is unpublished only when the session can read some", async () => {
+    await preview(true);
+
+    render(await PreviewBanner({ returnTo: "/blog" }));
+
+    // `\u2019`, because the component ships `&rsquo;` — matching on a typewriter
+    // apostrophe would pass only until somebody fixed the punctuation.
+    expect(screen.getByTestId("preview-banner")).toHaveTextContent(
+      /seeing this workspace\u2019s unpublished content/i,
+    );
+  });
+
+  it("still renders, and says so, when the draft session has no workspace", async () => {
+    // The reason this component reads the session and not the scope. The data
+    // layer fails closed here and serves the published site; if the banner
+    // failed closed too, the reader would be in draft mode with no "Exit
+    // preview" button — a mode with no way out. So it appears, and tells the
+    // truth about what is on the page.
+    await preview(true, { scoped: false });
+
+    render(await PreviewBanner({ returnTo: "/blog" }));
+
+    const banner = screen.getByTestId("preview-banner");
+    expect(banner).toHaveTextContent(/unscoped/i);
+    expect(banner).toHaveTextContent(/seeing the published site/i);
+    expect(banner).not.toHaveTextContent(/unpublished content/i);
+    expect(
+      screen.getByRole("button", { name: /exit preview/i }),
+    ).toBeInTheDocument();
+  });
+
   it("carries the caller's returnTo into the form", async () => {
-    preview(true);
+    await preview(true);
 
     const { container } = render(
       await PreviewBanner({ returnTo: "/blog/post-1" }),

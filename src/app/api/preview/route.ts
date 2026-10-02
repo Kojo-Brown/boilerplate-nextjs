@@ -1,6 +1,17 @@
 /**
  * `GET /api/preview?token=…` — redeem a signed preview token and open a draft
- * session. `DELETE /api/preview` — close one.
+ * session scoped to the workspace that minted it. `DELETE /api/preview` — close
+ * one.
+ *
+ * ## Two cookies, not one
+ *
+ * `draftMode().enable()` writes the framework's `__prerender_bypass`, which is
+ * what makes the request a draft and carries nothing of ours. The workspace the
+ * token names goes into a second, signed cookie — see `@/lib/preview/scope` for
+ * why it has to exist and `@/lib/preview/draft` for how the blog reads it. Both
+ * are written here and both are cleared by `DELETE`, because a draft session
+ * whose scope is missing reads the published site and a scope whose session is
+ * gone is a capability sitting in a jar doing nothing.
  *
  * ## Why this is not built on `defineRoute`
  *
@@ -40,6 +51,11 @@ import { draftMode } from "next/headers";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { ApiError } from "@/lib/api/errors";
+import {
+  PREVIEW_SCOPE_COOKIE,
+  PREVIEW_SCOPE_COOKIE_ATTRIBUTES,
+  signPreviewScope,
+} from "@/lib/preview/scope";
 import { verifyPreviewToken } from "@/lib/preview/token";
 import type { PreviewTokenFailure } from "@/lib/preview/token";
 
@@ -76,6 +92,15 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return FAILURES[verification.reason].toResponse();
   }
 
+  // The scope cookie is minted *before* draft mode is enabled, because the one
+  // ordering that must not happen is the reverse. `signPreviewScope` throws on a
+  // tenant id it would not scope to — which a verified payload cannot carry,
+  // since `parsePayload` applies the same check — and if it ever did, enabling
+  // first would leave the caller in a draft session with no scope. Failing
+  // before the mutation means a bad token changes nothing at all, which is what
+  // `e2e/preview.spec.ts` asserts of a forged one.
+  const scope = await signPreviewScope(verification.payload.tenantId);
+
   const draft = await draftMode();
   draft.enable();
 
@@ -86,10 +111,24 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // 307 rather than 302: the method must be preserved, and more practically a
   // 302 here is the kind of thing a CDN will cache and then serve to the next
   // person without the `Set-Cookie` that makes it mean anything.
-  return NextResponse.redirect(
+  const response = NextResponse.redirect(
     new URL(verification.payload.path, request.nextUrl.origin),
     307,
   );
+
+  // Set on the response rather than through `cookies()`. Both reach the browser,
+  // and this one is visible in the object the handler returns — which matters
+  // here because the *other* cookie on this response is written by the framework
+  // into a mutable store it merges in afterwards, and a reader comparing the two
+  // should not have to know that to see that two cookies are being set. It is
+  // also what lets `route.test.ts` assert the value without a framework double.
+  response.cookies.set({
+    name: PREVIEW_SCOPE_COOKIE,
+    value: scope,
+    ...PREVIEW_SCOPE_COOKIE_ATTRIBUTES,
+  });
+
+  return response;
 }
 
 /**
@@ -110,5 +149,19 @@ export async function DELETE(): Promise<NextResponse<{ previewing: false }>> {
   const draft = await draftMode();
   draft.disable();
 
-  return NextResponse.json({ previewing: false } as const);
+  const response = NextResponse.json({ previewing: false } as const);
+
+  // Cleared with the same attributes it was set with, not just by name. A
+  // browser matches a deletion against name, path and domain, so a `delete`
+  // that forgets `path: "/"` leaves the cookie in place on every path but the
+  // one the request happened to arrive on — and the next draft session would
+  // then inherit this one's workspace.
+  response.cookies.set({
+    name: PREVIEW_SCOPE_COOKIE,
+    value: "",
+    ...PREVIEW_SCOPE_COOKIE_ATTRIBUTES,
+    maxAge: 0,
+  });
+
+  return response;
 }

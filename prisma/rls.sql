@@ -95,6 +95,38 @@ $$;
 COMMENT ON FUNCTION app.current_user_id() IS
   'The user the current transaction is acting for, or NULL. Set alongside app.tenant_id by @/lib/tenancy/client.';
 
+-- The tenant whose unpublished posts the current transaction may read, or NULL.
+--
+-- The draft-mode capability, and the reason it is a tenant rather than a flag.
+-- This setting was `app.preview` holding the string `'on'` until the preview was
+-- scoped: a boolean capability has exactly one meaning, "every workspace's
+-- drafts", so a token minted inside one workspace opened all of them. Carrying
+-- the tenant *in* the capability rather than beside it is what makes that
+-- unrepresentable — there is no value of this setting that means "all of them",
+-- and no second setting to forget to write.
+--
+-- A third accessor rather than reusing `app.current_tenant_id()`, because the
+-- two must not be the same value. `app.tenant_id` is a *scope*: it narrows every
+-- statement, on every table, for all four commands. This one widens one table's
+-- SELECT and nothing else. Setting the scope instead would hand a bearer
+-- capability — held, by design, by someone who may have no account — the
+-- dashboard's own INSERT, UPDATE and DELETE rights.
+--
+-- `STABLE`, `SET search_path = ''` and `NULLIF`, for the reasons given above
+-- `app.current_tenant_id()`; the `NULLIF` matters most here, since `set_config`
+-- cannot store a NULL and releasing the capability therefore writes `''`.
+CREATE OR REPLACE FUNCTION app.preview_tenant_id()
+  RETURNS text
+  LANGUAGE sql
+  STABLE
+  SET search_path = ''
+AS $$
+  SELECT NULLIF(pg_catalog.current_setting('app.preview_tenant_id', true), '')
+$$;
+
+COMMENT ON FUNCTION app.preview_tenant_id() IS
+  'The tenant whose drafts the current transaction may read, or NULL. Set by withPreviewRead in @/lib/tenancy/client, from the signed cookie @/lib/preview/scope mints.';
+
 -- ---------------------------------------------------------------------------
 -- The application role
 -- ---------------------------------------------------------------------------
@@ -131,6 +163,7 @@ GRANT USAGE ON SCHEMA public TO app_rls;
 GRANT USAGE ON SCHEMA app TO app_rls;
 GRANT EXECUTE ON FUNCTION app.current_tenant_id() TO app_rls;
 GRANT EXECUTE ON FUNCTION app.current_user_id() TO app_rls;
+GRANT EXECUTE ON FUNCTION app.preview_tenant_id() TO app_rls;
 
 -- DML only. The application never issues DDL: `prisma db push` and this file
 -- are applied by an administrative connection, which is what keeps a
@@ -208,25 +241,39 @@ CREATE POLICY posts_public_read ON public.posts
   FOR SELECT
   USING (published AND app.current_tenant_id() IS NULL);
 
--- Draft mode, which is a whole-site preview and therefore reads across tenants.
+-- Draft mode: a whole-site preview of exactly one workspace.
 --
--- This policy grants nothing new: it is what `getPostsForPreview` and the
--- preview branch of `getBlogPost` already did before this file existed, which
--- is to read every post including unpublished ones. Writing it down as a
--- policy changes two things. It becomes *explicit* — a capability with a name,
--- a comment and a gate, rather than the default behaviour of a connection that
--- happened to have no restrictions — and it becomes *narrow*: SELECT only, on
--- an unscoped connection only, and only inside a transaction that deliberately
--- opened it via `withPreviewRead`. A query that did not ask for preview cannot
--- reach a draft, which is the part that was previously untrue of every query
--- in the application.
+-- Whole-site because that is what draft mode is — a preview link shows a
+-- reader their colleagues' drafts as well as their own, which is the point of
+-- previewing a *site* rather than a post. One workspace because the alternative
+-- is every workspace, and for as long as this policy tested a boolean
+-- (`app.preview = 'on'`) that is what it meant: a token minted inside one
+-- workspace opened every other workspace's unpublished posts. That was recorded
+-- here and in docs/multi-tenancy.md as an open gap, tracked against A01 in
+-- docs/owasp-top-10.md, and this predicate is what closes it. The tenant travels
+-- in the signed token (`@/lib/preview/token`) and then in a signed cookie
+-- (`@/lib/preview/scope`), because there is nobody to ask at read time: the
+-- holder of a preview link may have no account at all.
 --
--- It is also a recorded gap rather than a resolved one. A whole-site preview
--- in a multi-tenant deployment shows tenant A's drafts to whoever holds a
--- preview token minted by tenant B, and the fix is to put the tenant in the
--- token — see the open item in SPEC.md and docs/multi-tenancy.md. That was not
--- introduced here; it is what draft mode has always done, made visible by
--- writing the access rule down.
+-- Three conjuncts' worth of narrowness, and each one is load-bearing.
+--
+-- **`FOR SELECT`.** The capability is granted to a bearer token, so it must not
+-- carry a write. There is no INSERT, UPDATE or DELETE policy an unscoped
+-- connection matches, which is what makes that true rather than intended.
+--
+-- **`app.current_tenant_id() IS NULL`.** The preview capability cannot be used
+-- from inside a tenant scope, so it can never widen one: a connection scoped to
+-- tenant A that also set this setting to tenant B still sees only A's rows,
+-- which rule T13 in `scripts/assert-tenant-isolation.ts` measures against a live
+-- server. Without the conjunct, the dashboard's own connection would be one
+-- `set_config` away from reading another workspace.
+--
+-- **`"tenantId" = app.preview_tenant_id()`.** Fails closed by construction, and
+-- not by a check somebody remembered to write: the accessor maps an unset or
+-- empty setting to NULL, `"tenantId" = NULL` is NULL rather than true, and a
+-- NULL `USING` result refuses the row. So a preview that names no workspace —
+-- a missing scope cookie, a forged one, a release that forgot to set the
+-- setting — reads the published site rather than everything. T12 is that probe.
 --
 -- The threat model this is honest about: row-level security defends against
 -- the application's own missing `where` clauses, not against an attacker who
@@ -237,7 +284,7 @@ CREATE POLICY posts_preview_read ON public.posts
   FOR SELECT
   USING (
     app.current_tenant_id() IS NULL
-    AND pg_catalog.current_setting('app.preview', true) = 'on'
+    AND "tenantId" = app.preview_tenant_id()
   );
 
 -- ---------------------------------------------------------------------------

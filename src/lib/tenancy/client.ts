@@ -4,7 +4,12 @@
 import "server-only";
 
 import { prisma } from "@/lib/prisma";
-import { assertScopeId, TENANT_GUC, USER_GUC } from "@/lib/tenancy/scope";
+import {
+  assertScopeId,
+  PREVIEW_GUC,
+  TENANT_GUC,
+  USER_GUC,
+} from "@/lib/tenancy/scope";
 import type { TenantScope } from "@/lib/tenancy/scope";
 import type { Prisma, PrismaClient } from "@prisma/client";
 
@@ -200,36 +205,44 @@ export async function withUserTransaction<T>(
 }
 
 /**
- * The name of the setting that opens a draft-mode read.
- *
- * Separate from the two in `@/lib/tenancy/scope` because it is not part of a
- * scope: it does not identify a principal, it names a capability, and it is
- * the only one of the three that widens what a connection can see rather than
- * narrowing it.
- */
-export const PREVIEW_GUC = "app.preview";
-
-/**
- * Runs `fn` on an unscoped connection that may read unpublished posts.
+ * Runs `fn` on a connection that may read one tenant's unpublished posts.
  *
  * Draft mode is a whole-site preview — see `docs/draft-mode.md` — so the read
- * behind it has no tenant and has to see rows the `posts_public_read` policy
- * hides. This is that capability, and it is deliberately shaped so that it can
- * only be used on purpose: the policy it satisfies is SELECT-only and requires
- * the absence of a tenant, so a scoped caller cannot reach it and no caller
- * can write through it.
+ * behind it has no tenant *scope* and has to see rows the `posts_public_read`
+ * policy hides. This is that capability, and it is deliberately shaped so that
+ * it can only be used on purpose: the policy it satisfies is SELECT-only and
+ * requires the absence of a scope, so no caller can write through it and a
+ * scoped caller cannot reach it at all.
  *
- * It grants exactly what the preview reads already did before row-level
- * security existed. What is new is that it is now the *only* way to reach a
- * draft without a tenant, where previously every query in the application
- * could. See the comment above `posts_preview_read` in `prisma/rls.sql`,
- * including the gap it records.
+ * ## The tenant is an argument, not an option
+ *
+ * This used to take no tenant and set the capability to the string `"on"`,
+ * which meant a preview read saw every workspace's drafts: a token minted
+ * inside one workspace opened all of them. That was recorded as a gap against
+ * A01 in `docs/owasp-top-10.md` and against `posts_preview_read` in
+ * `prisma/rls.sql`, and this parameter is what closes it.
+ *
+ * Making it required rather than optional is the whole of the fix. An optional
+ * tenant has a default, the only possible default is "all of them", and that
+ * default is the vulnerability — reachable from every call site that did not
+ * think about it, which is every call site that is written next. With no
+ * default there is no unscoped preview to fall back to: the capability and its
+ * tenant are one setting, so the database has no way to spell "preview
+ * everything" either.
+ *
+ * `assertScopeId` rather than trusting the caller, for the reason it exists:
+ * the empty string is a *successful* `set_config`, and `app.preview_tenant_id()`
+ * maps it back to NULL — so an empty tenant here would not fail, it would
+ * quietly return the published site and look like a stale cache.
  */
 export async function withPreviewRead<T>(
+  tenantId: string,
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
 ): Promise<T> {
+  assertScopeId(tenantId, "tenantId");
+
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config(${PREVIEW_GUC}, ${"on"}, TRUE)`;
+    await tx.$executeRaw`SELECT set_config(${PREVIEW_GUC}, ${tenantId}, TRUE)`;
     return fn(tx);
   });
 }

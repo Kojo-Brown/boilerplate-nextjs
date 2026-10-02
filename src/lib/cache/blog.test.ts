@@ -8,14 +8,15 @@ vi.mock("next/cache", () => ({
 vi.mock("@/lib/dal/posts", () => ({
   getPublishedPosts: vi.fn(),
   getPostsForPreview: vi.fn(),
-  getPostById: vi.fn(),
+  getPostForPreview: vi.fn(),
   getPublishedPostById: vi.fn(),
 }));
 
 import { cacheLife, cacheTag } from "next/cache";
-import { draftMode } from "next/headers";
+import { cookies, draftMode } from "next/headers";
+import { PREVIEW_SCOPE_COOKIE, signPreviewScope } from "@/lib/preview/scope";
 import {
-  getPostById,
+  getPostForPreview,
   getPostsForPreview,
   getPublishedPostById,
   getPublishedPosts,
@@ -40,26 +41,51 @@ const mockCacheLife = vi.mocked(cacheLife);
 const mockCacheTag = vi.mocked(cacheTag);
 const mockGetPublishedPosts = vi.mocked(getPublishedPosts);
 const mockGetPostsForPreview = vi.mocked(getPostsForPreview);
-const mockGetPostById = vi.mocked(getPostById);
+const mockGetPostForPreview = vi.mocked(getPostForPreview);
 const mockGetPublishedPostById = vi.mocked(getPublishedPostById);
 const mockDraftMode = vi.mocked(draftMode);
 
-/** Puts the request in (or out of) a draft session. */
-function preview(isEnabled: boolean) {
+const TENANT = "tenant-mock-a";
+
+/**
+ * Puts the request in (or out of) a draft session scoped to `tenantId`.
+ *
+ * Both halves, because the branch now takes both: `draftMode()` is the session
+ * and the signed cookie is the workspace. `scoped: false` is the third state —
+ * a real draft session whose scope cookie is missing — which takes the *public*
+ * branch, and which only exists as a case to test because it used to mean
+ * "every workspace".
+ */
+async function preview(
+  isEnabled: boolean,
+  {
+    scoped = true,
+    tenantId = TENANT,
+  }: { scoped?: boolean; tenantId?: string } = {},
+) {
   mockDraftMode.mockResolvedValue({
     isEnabled,
     enable: vi.fn(),
     disable: vi.fn(),
   } as unknown as Awaited<ReturnType<typeof draftMode>>);
+
+  const value = scoped ? await signPreviewScope(tenantId) : undefined;
+  vi.mocked(cookies).mockResolvedValue({
+    get: vi.fn((name: string) =>
+      name === PREVIEW_SCOPE_COOKIE && value !== undefined
+        ? { name, value }
+        : undefined,
+    ),
+  } as unknown as Awaited<ReturnType<typeof cookies>>);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   mockGetPublishedPosts.mockResolvedValue([]);
   mockGetPostsForPreview.mockResolvedValue([]);
-  mockGetPostById.mockResolvedValue(null);
+  mockGetPostForPreview.mockResolvedValue(null);
   mockGetPublishedPostById.mockResolvedValue(null);
-  preview(false);
+  await preview(false);
 });
 
 describe("getCachedPublishedPosts", () => {
@@ -168,7 +194,7 @@ describe("getBlogIndex", () => {
   });
 
   it("serves drafts too inside a preview", async () => {
-    preview(true);
+    await preview(true);
     const all = [{ id: "p1" }, { id: "draft" }] as unknown as Awaited<
       ReturnType<typeof getPostsForPreview>
     >;
@@ -178,6 +204,36 @@ describe("getBlogIndex", () => {
 
     expect(result.data).toBe(all);
     expect(mockGetPublishedPosts).not.toHaveBeenCalled();
+    // The workspace out of the cookie, not a default: `getPostsForPreview` has
+    // no unscoped form to fall back to.
+    expect(mockGetPostsForPreview).toHaveBeenCalledExactlyOnceWith(TENANT);
+  });
+
+  it("reads the workspace the cookie names, whichever one it is", async () => {
+    await preview(true, { tenantId: "tenant-mock-b" });
+
+    await getBlogIndex();
+
+    expect(mockGetPostsForPreview).toHaveBeenCalledExactlyOnceWith(
+      "tenant-mock-b",
+    );
+  });
+
+  it("serves the published site to a draft session with no scope", async () => {
+    // The gap this closed, from the other side. A draft session whose scope
+    // cookie is missing or forged used to be the case that read *every*
+    // workspace's drafts; it now takes the public branch, cache entry and all.
+    await preview(true, { scoped: false });
+    const published = [{ id: "p1" }] as unknown as Awaited<
+      ReturnType<typeof getPublishedPosts>
+    >;
+    mockGetPublishedPosts.mockResolvedValue(published);
+
+    const result = await getBlogIndex();
+
+    expect(result.data).toBe(published);
+    expect(mockGetPostsForPreview).not.toHaveBeenCalled();
+    expect(mockCacheTag).toHaveBeenCalledExactlyOnceWith(BLOG_POSTS_TAG);
   });
 
   it("never caches or tags the preview branch", async () => {
@@ -185,7 +241,7 @@ describe("getBlogIndex", () => {
     // also refuses to save a cache entry in draft mode, but that is a framework
     // internal — this asserts the shape of our own code, which is what the
     // guarantee should rest on.
-    preview(true);
+    await preview(true);
 
     await getBlogIndex();
 
@@ -206,26 +262,39 @@ describe("getBlogPost", () => {
   });
 
   it("reads the post uncached inside a preview", async () => {
-    preview(true);
+    await preview(true);
     const draftPost = {
       id: "post-1",
       published: false,
-    } as unknown as Awaited<ReturnType<typeof getPostById>>;
-    mockGetPostById.mockResolvedValue(draftPost);
+    } as unknown as Awaited<ReturnType<typeof getPostForPreview>>;
+    mockGetPostForPreview.mockResolvedValue(draftPost);
 
     const result = await getBlogPost("post-1");
 
     expect(result.data).toBe(draftPost);
+    expect(mockGetPostForPreview).toHaveBeenCalledExactlyOnceWith(
+      TENANT,
+      "post-1",
+    );
     expect(mockCacheTag).not.toHaveBeenCalled();
     expect(mockCacheLife).not.toHaveBeenCalled();
   });
 
+  it("serves the cached published post to a draft session with no scope", async () => {
+    await preview(true, { scoped: false });
+
+    await getBlogPost("post-1");
+
+    expect(mockGetPostForPreview).not.toHaveBeenCalled();
+    expect(mockGetPublishedPostById).toHaveBeenCalledExactlyOnceWith("post-1");
+  });
+
   it("returns an unpublished post rather than hiding it, so the page can label it", async () => {
-    preview(true);
-    mockGetPostById.mockResolvedValue({
+    await preview(true);
+    mockGetPostForPreview.mockResolvedValue({
       id: "post-1",
       published: false,
-    } as unknown as Awaited<ReturnType<typeof getPostById>>);
+    } as unknown as Awaited<ReturnType<typeof getPostForPreview>>);
 
     const result = await getBlogPost("post-1");
 
@@ -244,7 +313,7 @@ describe("getBlogPost", () => {
  * `e2e/preview.spec.ts` caught it.
  *
  * These pin the invariant at the layer that now owns it, so the next person to
- * simplify `getCachedPost` back to `getPostById` fails here rather than in a
+ * simplify `getCachedPost` back to `getPostForPreview` fails here rather than in a
  * browser.
  */
 describe("the public read cannot return an unpublished post", () => {
@@ -252,20 +321,20 @@ describe("the public read cannot return an unpublished post", () => {
     await getCachedPost("post-1");
 
     expect(mockGetPublishedPostById).toHaveBeenCalledExactlyOnceWith("post-1");
-    expect(mockGetPostById).not.toHaveBeenCalled();
+    expect(mockGetPostForPreview).not.toHaveBeenCalled();
   });
 
   it("getBlogPost never touches the unfiltered read outside a preview", async () => {
     // Belt and braces: the branch above plus the read below are the two ways an
     // unpublished post could reach a public reader, and neither is exercised.
-    mockGetPostById.mockResolvedValue({
+    mockGetPostForPreview.mockResolvedValue({
       id: "post-1",
       published: false,
-    } as unknown as Awaited<ReturnType<typeof getPostById>>);
+    } as unknown as Awaited<ReturnType<typeof getPostForPreview>>);
 
     const result = await getBlogPost("post-1");
 
-    expect(mockGetPostById).not.toHaveBeenCalled();
+    expect(mockGetPostForPreview).not.toHaveBeenCalled();
     expect(result.data).toBeNull();
   });
 });

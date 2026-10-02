@@ -265,27 +265,35 @@ external CMS's preview button would carry.
 
 ```
 createPreviewLinkAction  →  /api/preview?token=…  →  307 to the signed path
-   session + ownership        verify + enable()        drafts, uncached
+ session + workspace +      verify + scope cookie    that workspace's drafts,
+     ownership in it             + enable()                  uncached
 ```
 
-Two decisions carry the design. The **destination is inside the signature**, so
+Three decisions carry the design. The **destination is inside the signature**, so
 a preview link is not an open redirect and cannot be repointed at another post —
-Next's own guide reads it from the query string, which is both. And the read
-layer branches **outside** `"use cache"`, so a draft response can never become a
-cache entry the public shares.
+Next's own guide reads it from the query string, which is both. The **workspace
+is inside it too**, so a link minted in one workspace opens that workspace's
+drafts and no other's; it travels in a signed cookie for the life of the session,
+because there is nobody to ask at redemption time — the holder may have no
+account, which is what makes a preview link forwardable. And the read layer
+branches **outside** `"use cache"`, so a draft response can never become a cache
+entry the public shares.
 
 Reading `draftMode().isEnabled` is not a tracked dynamic access — unlike
-`cookies()`, `headers()` or `searchParams` — which is the whole reason this
-works without costing `/blog` its static prerender. `cookies()` in a page body
-would have.
+`cookies()`, `headers()` or `searchParams` — which is the whole reason this works
+without costing `/blog` its static prerender. The scope cookie _is_ a `cookies()`
+read, and it is placed below the draft-mode check for exactly that reason: during
+a prerender the early return is taken and the jar is never touched. A draft
+session whose scope cookie is missing or edited reads the published site, and the
+banner still renders so there is a way out of it.
 
 The unit suite cannot prove the parts that matter (that the cookie survives the
 redirect, that it actually changes what the server sends, that a reader without
 one sees nothing), so `e2e/preview.spec.ts` drives the flow in a real browser
 against a production build. It earned its keep on the first run: it caught an
 unpublished post being served to an anonymous request with a 200.
-[docs/draft-mode.md](./docs/draft-mode.md) has the flow, the leak, and what the
-token's expiry does and does not bound.
+[docs/draft-mode.md](./docs/draft-mode.md) has the flow, the leak, why there are
+two cookies, and what the token's expiry does and does not bound.
 
 ## Optimistic UI
 

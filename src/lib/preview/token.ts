@@ -4,12 +4,28 @@
  * ## What a token is
  *
  * `base64url(payload).base64url(HMAC-SHA256(payload))`, where the payload names
- * the one path the token authorises, when it stops working, and a nonce. It is
- * a bearer capability: whoever holds it may read that path as a draft, and
- * nothing else about them is checked at redemption time. Authorisation happens
- * once, at *minting* — `createPreviewLinkAction` requires a session and post
- * ownership — which is what makes redemption cheap enough to hand to an
- * external CMS's preview button.
+ * the one path the token authorises, **the workspace it was minted in**, when
+ * it stops working, and a nonce. It is a bearer capability: whoever holds it
+ * may read that workspace's drafts, and nothing else about them is checked at
+ * redemption time. Authorisation happens once, at *minting* —
+ * `createPreviewLinkAction` requires a session, an active workspace and post
+ * ownership *within* it — which is what makes redemption cheap enough to hand
+ * to an external CMS's preview button.
+ *
+ * ## Why the tenant is inside the signature too
+ *
+ * Draft mode is a whole-site preview, so for as long as the payload named only
+ * a path, redeeming any valid token opened *every* workspace's unpublished
+ * posts — `posts_preview_read` in `prisma/rls.sql` says so in SQL, and
+ * `docs/owasp-top-10.md` recorded it as A01's last open gap. The tenant has to
+ * travel with the capability because there is nobody to ask at redemption time:
+ * the holder may have no account, which is the property that makes a preview
+ * link forwardable in the first place.
+ *
+ * Signed rather than appended, for the same reason the path is: a tenant in the
+ * query string is a tenant the holder chooses, which would turn one leaked link
+ * into a reader for every workspace in the deployment — strictly worse than the
+ * gap it was meant to close.
  *
  * ## Why the path is inside the signature
  *
@@ -50,6 +66,7 @@
 import "server-only";
 
 import { deriveHmacKey } from "@/lib/crypto/hmac";
+import { assertScopeId } from "@/lib/tenancy/scope";
 import { clientEnv } from "@/lib/env/client";
 import { serverEnv } from "@/lib/env/server";
 import { isSiteRelativePath } from "@/lib/security/safe-redirect";
@@ -89,6 +106,15 @@ const HKDF_SALT = "boilerplate-nextjs/preview-token/salt/v1";
 export interface PreviewTokenPayload {
   /** The application path this token authorises a preview of. */
   path: string;
+  /**
+   * The workspace whose unpublished posts this token opens.
+   *
+   * Carried rather than derived, and it is what bounds the draft session the
+   * token buys: `/api/preview` writes it into the signed scope cookie that
+   * `@/lib/preview/scope` mints, and `withPreviewRead` turns that into the one
+   * tenant `posts_preview_read` will match.
+   */
+  tenantId: string;
   /** Expiry, as whole unix seconds. */
   exp: number;
   /**
@@ -123,17 +149,47 @@ export interface SignPreviewTokenOptions {
   now?: Date;
 }
 
+/**
+ * What a link is minted *for* — the two values that end up signed.
+ *
+ * An object rather than two positional strings, because two adjacent
+ * parameters of the same type that must not be swapped is a bug waiting for a
+ * refactor, and swapping these two produces a token that verifies: the path
+ * check would reject a tenant id, but a path in the tenant field is a scope
+ * naming no workspace, which fails closed at read time and looks like an empty
+ * preview rather than like an error.
+ */
+export interface PreviewSubject {
+  /** The application path the link opens. */
+  path: string;
+  /** The workspace the minting session was acting in. */
+  tenantId: string;
+}
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** Mints a token for `path`. Throws if the path is not one we would redirect to. */
+/**
+ * Mints a token for one path in one workspace.
+ *
+ * Throws if the path is not one we would redirect to, or if the tenant is not
+ * something the database could be told about — the same check
+ * `@/lib/tenancy/client` applies before writing a scope, imported rather than
+ * restated so that "what a tenant id may be" has one definition. Refusing here
+ * is what keeps an unusable scope out of a *signed* payload, where it would
+ * otherwise be indistinguishable from a legitimate one for fifteen minutes.
+ */
 export async function signPreviewToken(
-  path: string,
+  subject: PreviewSubject,
   options: SignPreviewTokenOptions = {},
 ): Promise<string> {
+  const { path, tenantId } = subject;
+
   if (!isSiteRelativePath(path)) {
     throw new Error(`Refusing to sign a preview token for path "${path}".`);
   }
+
+  assertScopeId(tenantId, "tenantId");
 
   const ttlSeconds = options.ttlSeconds ?? PREVIEW_TOKEN_TTL_SECONDS;
   if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
@@ -143,6 +199,7 @@ export async function signPreviewToken(
   const issuedAt = options.now ?? new Date();
   const payload: PreviewTokenPayload = {
     path,
+    tenantId,
     exp: Math.floor(issuedAt.getTime() / 1000) + Math.floor(ttlSeconds),
     nonce: randomNonce(),
   };
@@ -197,10 +254,12 @@ export async function verifyPreviewToken(
   );
   if (!signatureMatches) return { valid: false, reason: "bad-signature" };
 
-  // Everything from here on is our own bytes, so a parse failure is a bug in
-  // this module rather than an attack — but it is still answered rather than
-  // thrown, because a key rotation that happens to produce a colliding
-  // signature is not a reason to 500.
+  // Everything from here on is our own bytes, so a parse failure is not an
+  // attack — but it is answered rather than thrown, and it now has a cause
+  // other than a bug: a token minted before the payload carried a `tenantId`
+  // signs and verifies and has no tenant, so the deploy that added the field
+  // turns every outstanding link into one of these for up to its TTL. See
+  // `parsePayload`.
   let payload: PreviewTokenPayload;
   try {
     payload = parsePayload(decoder.decode(fromBase64Url(encodedPayload)));
@@ -227,10 +286,10 @@ export async function verifyPreviewToken(
  * advertises itself on.
  */
 export async function createPreviewLink(
-  path: string,
+  subject: PreviewSubject,
   options: SignPreviewTokenOptions = {},
 ): Promise<{ url: string; expiresAt: Date }> {
-  const token = await signPreviewToken(path, options);
+  const token = await signPreviewToken(subject, options);
   const url = new URL(PREVIEW_ENTER_PATH, clientEnv.NEXT_PUBLIC_APP_URL);
   url.searchParams.set("token", token);
 
@@ -257,10 +316,22 @@ function parsePayload(json: string): PreviewTokenPayload {
     throw new Error("Preview token payload is not an object.");
   }
 
-  const { path, exp, nonce } = value as Record<string, unknown>;
+  const { path, tenantId, exp, nonce } = value as Record<string, unknown>;
   if (typeof path !== "string" || path.length === 0) {
     throw new Error("Preview token payload has no path.");
   }
+  // A token minted before the payload carried a workspace lands here, and is
+  // answered as `malformed` — the same 401 as a forgery. That is the intended
+  // migration: such a token would open an unscoped preview, which is the thing
+  // this field exists to make unrepresentable, and the longest any of them can
+  // outlive a deploy is `PREVIEW_TOKEN_TTL_SECONDS`. `assertScopeId` rather
+  // than a bare string check, because by this point the value is on its way to
+  // `set_config` and a newline in it is an isolation failure that looks like an
+  // empty page.
+  if (typeof tenantId !== "string") {
+    throw new Error("Preview token payload has no tenant.");
+  }
+  assertScopeId(tenantId, "tenantId");
   if (typeof exp !== "number" || !Number.isFinite(exp)) {
     throw new Error("Preview token payload has no expiry.");
   }
@@ -268,7 +339,7 @@ function parsePayload(json: string): PreviewTokenPayload {
     throw new Error("Preview token payload has no nonce.");
   }
 
-  return { path, exp, nonce };
+  return { path, tenantId, exp, nonce };
 }
 
 /**

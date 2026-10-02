@@ -1,5 +1,5 @@
 import { exitPreviewAction } from "@/actions/preview";
-import { isPreviewEnabled } from "@/lib/preview/draft";
+import { getPreviewScope, isPreviewEnabled } from "@/lib/preview/draft";
 
 /**
  * The band across the top of every page being served as a draft.
@@ -15,6 +15,17 @@ import { isPreviewEnabled } from "@/lib/preview/draft";
  * and the markup ships already rendered. It reads `isPreviewEnabled()`, which
  * is safe in a statically prerendered route — see `@/lib/preview/draft` for why
  * that is true of `draftMode()` and of nothing else request-scoped.
+ *
+ * ## It renders on the session, not on the scope
+ *
+ * `isPreviewEnabled()` and not `getPreviewScope()`, which is the opposite of
+ * what the data layer does and deliberately so. A draft session whose scope
+ * cookie is missing or unreadable reads the published site — that is the fix for
+ * A01's last gap — and if this component keyed on the same answer, such a reader
+ * would be in draft mode with no banner and therefore no way out of it. So the
+ * banner appears whenever the framework says the request is a draft, and the
+ * sentence inside it is what changes: there is no honest version of "you are
+ * seeing unpublished content" to show someone who is not.
  *
  * Exiting is a plain `<form>` posting to a Server Action rather than a button
  * with a click handler. It costs nothing, needs no `"use client"`, and works
@@ -33,6 +44,10 @@ export async function PreviewBanner({
   returnTo: string;
 }) {
   if (!(await isPreviewEnabled())) return null;
+
+  // Null when the scope cookie is absent, truncated or edited. The session is
+  // real either way; what it can read is not.
+  const scope = await getPreviewScope();
 
   return (
     <div
@@ -56,9 +71,20 @@ export async function PreviewBanner({
           aria-hidden="true"
         />
         <span>
-          <strong className="font-semibold">Draft mode.</strong> You are seeing
-          unpublished content, served fresh on every request. Readers without a
-          preview link see the published site.
+          {scope ? (
+            <>
+              <strong className="font-semibold">Draft mode.</strong> You are
+              seeing this workspace&rsquo;s unpublished content, served fresh on
+              every request. Readers without a preview link see the published
+              site.
+            </>
+          ) : (
+            <>
+              <strong className="font-semibold">Draft mode, unscoped.</strong>{" "}
+              This preview session names no workspace, so you are seeing the
+              published site. Open a new preview link from the dashboard.
+            </>
+          )}
         </span>
       </p>
 
