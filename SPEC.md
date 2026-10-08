@@ -475,8 +475,32 @@ scoped, and `docs/multi-tenancy.md` no longer lists it under "Known gaps"._
 
 ## Phase 12 — Accessibility & TDD
 
-- [ ] WCAG 2.2 AA audit with axe in CI, zero-violation gate
+- [x] WCAG 2.2 AA audit with axe in CI, zero-violation gate — axe-core over all 31 prerendered documents in both themes, failing on violations and on undecidable results (PR #73)
 - [ ] Focus management across App Router navigations with route announcements
 - [ ] i18n with `next-intl`: locale routing, plurals, and an RTL pass
 - [ ] TDD kata: one Server Action built red→green→refactor, one commit per step
 - [ ] Playwright a11y + visual regression suite on the critical journey
+
+_The first version of item 1 ran axe in jsdom and passed the whole application.
+It was measuring nothing: with no layout engine, `color-contrast` and
+`target-size` — between them most of what AA adds over A — come back
+`incomplete` for every element on every page, and an `incomplete` is not a
+failure. The gate now runs Chromium over the build output and asserts, per
+document, that CSS actually parsed and that `body` has a resolved background,
+and per theme that those two rules were evaluated at all._
+
+_It found two defects on its first honest run. `--primary` had no `.dark`
+override, so `#0071df` sat at 4.37:1 on the dark background — under AA for the
+14px links on `/login` and `/register`, since the palette was written; a brighter
+primary cannot carry white text, so the dark theme now inverts
+`--primary-foreground` too and both directions are 6.42:1. And the document a
+visitor reaches when the root layout throws had no `lang` at all;
+`src/app/global-error.tsx` fixes the runtime boundary, while
+`_global-error.html` stays Next's own markup and is the one allowance that
+cannot be fixed from here._
+
+_What the gate does not claim is in `docs/accessibility.md` at the same length as
+what it does: nothing is clicked or focused, streamed content is audited as its
+fallback, `target-size` runs only at desktop width, and axe automates exactly
+one of WCAG 2.2's new success criteria. The three items above are where the rest
+belongs._
