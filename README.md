@@ -627,6 +627,39 @@ the theme toggle still proving the bundle ran.
 [docs/csp.md](./docs/csp.md) has both measurements in full, the Zod `eval` probe
 the enforced policy surfaced, and why `style-src` keeps `'unsafe-inline'`.
 
+## Accessibility
+
+Every document the build prerenders is audited with axe-core in Chromium —
+thirty-one of them, in both themes, against every WCAG level-A and level-AA rule
+set up to 2.2. `pnpm exec tsx scripts/assert-accessibility.ts` runs in CI after
+the build and fails on any violation **and on any result axe could not decide**,
+which is the part that matters: an `incomplete` is where a regression hides.
+
+It is a real browser for a reason. The first version ran axe in jsdom and
+reported the whole application clean, because jsdom performs no layout — so
+`color-contrast` and `target-size`, between them most of what AA adds over A,
+come back `incomplete` on every element of every page, and a run that measures
+nothing is indistinguishable from a run that passes. The gate now checks
+directly that it is not in that state: per document, that the browser parsed CSS
+rules and that `body` has a resolved background; per theme, that those two rules
+were evaluated somewhere at all.
+
+**Both themes, because the dark palette is a different set of colours.**
+`--primary` was `oklch(55% 0.2 250)` with no `.dark` override — 4.74:1 on the
+light background, **4.37:1** on the dark one, under AA for the 14px links on
+`/login` and `/register`, and there since the palette was written. A brighter
+primary cannot keep white text on it, so the dark theme inverts
+`--primary-foreground` too and both directions land at 6.42:1.
+
+The four allowances are each pinned to a rule, a route and the offending markup,
+and an allowance that stops matching anything fails the job: an exemption nobody
+needs is a hole waiting for the next regression.
+[docs/accessibility.md](./docs/accessibility.md) has the arithmetic, the
+allowance table, and — at the same length — what this gate does **not** support:
+nothing is clicked or focused, streamed content is audited as its fallback,
+`target-size` runs only at desktop width, and axe automates exactly one of
+WCAG 2.2's new criteria.
+
 ## CI
 
 Every gate is warning-fatal — a warning fails the job rather than scrolling past:

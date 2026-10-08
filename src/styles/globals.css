@@ -121,6 +121,19 @@
     --radius: 0.5rem;
   }
   .dark {
+    /* `--primary` has to be re-stated here, and for a while was not: the light
+       value `oklch(55% 0.2 250)` is `#0071df`, which is 4.74:1 on white and
+       4.37:1 on the `oklch(9%)` background below — under AA for the 14px links
+       that use it, on `/login` and `/register`, from the day the palette was
+       written. `scripts/assert-accessibility.ts` is what found it; nothing in a
+       light-mode audit could have.
+
+       `oklch(65%)` is 6.42:1 against this background. Raising it costs the other
+       pairing: white on `oklch(65% 0.2 250)` is 3.23:1, so a dark-mode primary
+       button needs dark text, which is why `--primary-foreground` inverts here
+       too. Both directions are then 6.42:1. See docs/accessibility.md. */
+    --primary: oklch(65% 0.2 250);
+    --primary-foreground: oklch(9% 0 0);
     --background: oklch(9% 0 0);
     --foreground: oklch(98% 0 0);
     --muted: oklch(15% 0 0);

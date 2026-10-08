@@ -771,6 +771,38 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The accessibility gate, and the only step in this workflow that needs a
+      # browser. It goes last because of that: the install below is around a
+      # minute, and every cheaper gate above should have had its chance to fail
+      # first.
+      #
+      # `--with-deps` installs the shared libraries Chromium needs via apt as
+      # well as the browser itself. The pinned build comes from the
+      # `@playwright/test` version in the lockfile, so this step needs no
+      # version of its own and cannot drift from it.
+      - name: Install Chromium for the accessibility audit
+        run: pnpm exec playwright install --with-deps chromium
+
+      # A real browser, because the first version of this gate ran axe in jsdom
+      # and passed the whole application: with no layout engine,
+      # `color-contrast` and `target-size` — between them most of what AA adds
+      # over A — come back `incomplete` on every page and are silently not
+      # checked. Chromium with the build's own stylesheet attached evaluates
+      # both, and found `--primary` sitting at 4.37:1 against the dark
+      # background on `/login` and `/register`, where it had been since the
+      # palette was written.
+      #
+      # It audits the documents under `.next/server/app` rather than a running
+      # server, which is why it is in this job and not one of its own: those
+      # bytes are what a visitor receives first, they exist for routes no
+      # unauthenticated request can reach, and a server would answer
+      # `/dashboard` with a redirect to `/login` — covering thirteen routes
+      # instead of thirty-one. See docs/accessibility.md.
+      - name: Assert accessibility
+        run: pnpm exec tsx scripts/assert-accessibility.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # `include-hidden-files` is required: upload-artifact v4 skips dotfiles
       # and dot-directories by default, and the whole build output lives under
       # `.next/`. Without it the glob matches nothing and `if-no-files-found:
