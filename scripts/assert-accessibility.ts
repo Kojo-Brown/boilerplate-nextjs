@@ -202,12 +202,14 @@ export const ALLOWED_VIOLATIONS: readonly Allowance[] = [
  * `incomplete` colour-contrast results and zero violations.
  */
 export const ALLOWED_INCOMPLETE: readonly Allowance[] = [
-  {
-    route: "/posts/[id]",
-    rule: "bypass",
-    because:
-      "this fallback shell has no landmark yet: `NavLinks` calls `usePathname`, which a document prerendered for an unknown id cannot answer, so the whole nav subtree streams — the same property `assert-streaming-boundaries.ts` asserts for this route",
-  },
+  // The `bypass` allowance for `/posts/[id]` was here, and is gone because it
+  // stopped matching anything — which is how this list is supposed to end.
+  // That shell has no landmark and still cannot have one, because `NavLinks`
+  // calls `usePathname` and a document prerendered for an unknown id cannot
+  // answer it, so the nav subtree streams. What changed is that `bypass` is
+  // satisfied by a skip link as well as by a landmark, and there is now one in
+  // every document — see docs/focus-management.md. The rule passes on its
+  // merits rather than by exemption.
   {
     // Seeded slugs rather than a fixed list: `prisma/seed.ts` owns the titles,
     // and a gate that named them would fail the next time the seed changed.

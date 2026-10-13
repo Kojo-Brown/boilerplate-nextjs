@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { MainContent } from "@/components/a11y/main-content";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { NavLinks } from "./nav-links";
 import { MobileDrawer } from "./mobile-drawer";
@@ -93,9 +94,9 @@ export function AppShell({
           </div>
         </header>
 
-        <main className="flex-1 px-4 py-6 lg:px-6 lg:py-8">
+        <MainContent className="flex-1 px-4 py-6 lg:px-6 lg:py-8">
           <div className="mx-auto max-w-5xl">{children}</div>
-        </main>
+        </MainContent>
       </div>
     </div>
   );

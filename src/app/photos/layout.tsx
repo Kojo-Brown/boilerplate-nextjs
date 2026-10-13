@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { MainContent } from "@/components/a11y/main-content";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export const metadata: Metadata = {
@@ -49,7 +50,9 @@ export default function PhotosLayout({
           </nav>
         </div>
       </header>
-      <main className="mx-auto max-w-4xl px-4 py-10">{children}</main>
+      <MainContent className="mx-auto max-w-4xl px-4 py-10">
+        {children}
+      </MainContent>
     </div>
   );
 }

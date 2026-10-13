@@ -1,9 +1,10 @@
 import Link from "next/link";
+import { MainContent } from "@/components/a11y/main-content";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export default function HomePage() {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center gap-6 p-8">
+    <MainContent className="relative flex min-h-screen flex-col items-center justify-center gap-6 p-8">
       {/*
         The landing page renders directly under the root layout — there is no
         shell between them — so the toggle is mounted here rather than inherited.
@@ -48,6 +49,6 @@ export default function HomePage() {
           Pricing (A/B bucketed)
         </Link>
       </div>
-    </main>
+    </MainContent>
   );
 }

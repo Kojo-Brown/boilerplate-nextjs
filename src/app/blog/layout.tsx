@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { MainContent } from "@/components/a11y/main-content";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
 
 export const metadata: Metadata = {
@@ -40,7 +41,9 @@ export default function BlogLayout({
           </nav>
         </div>
       </header>
-      <main className="mx-auto max-w-3xl px-4 py-10">{children}</main>
+      <MainContent className="mx-auto max-w-3xl px-4 py-10">
+        {children}
+      </MainContent>
     </div>
   );
 }

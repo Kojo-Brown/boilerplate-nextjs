@@ -88,8 +88,15 @@ absorb a second element failing the same rule on the same page.
 | `/_global-error`      | `html-has-lang`  | Next generates this static 500 document itself, as `<html id="__next_error__">` with no `lang`, whether or not the app defines `global-error.tsx`. Pinned to Next's own markup.                                                   |
 | `/blog/[slug]`        | `document-title` | A fallback shell is prerendered before the slug exists, so `generateMetadata` has not run and the title streams into the real response. The concrete seeded posts all carry theirs.                                               |
 | `/photos/[id]`        | `document-title` | The same property.                                                                                                                                                                                                                |
-| `/posts/[id]`         | `bypass`         | `NavLinks` calls `usePathname`, which a shell for an unknown id cannot answer, so the nav streams and the document has no landmark yet — the same fact `assert-streaming-boundaries.ts` asserts.                                  |
 | `/blog/<seeded slug>` | `color-contrast` | The video facade's caption sits on `from-black/80 to-transparent` over a thumbnail; axe reports a gradient as undecidable. Reviewed: the text is inside the ≥80%-black region, 12.6:1 against white even over the lightest frame. |
+
+A fourth entry has been retired: `/posts/[id]` was exempt from `bypass`,
+because that shell's nav subtree streams and the document had no landmark. The
+shell still has no landmark and still cannot have one — but `bypass` is
+satisfied by a skip link as well, and every document now carries one, so the
+rule passes on its merits. The gate found the dead exemption itself and failed
+until it was deleted, which is what that behaviour is for. See
+docs/focus-management.md.
 
 The `/_global-error` entry is the only one that is not a property of Next's
 fallback shells, and the only one that cannot be fixed from this repository.
@@ -128,8 +135,15 @@ Not a list of things to get to eventually — a list of the claims this gate doe
 **Interaction.** Nothing is clicked, focused, or typed into. A dialog's focus
 trap, a drawer's `Escape` handler, the focus ring on a control two tabs in, a
 validation message announced after a failed submit: none of it is audited here.
-The interactive suite is the next item in `SPEC.md`, and the one after that is
-focus management across App Router navigations.
+Focus management across navigations is now covered — by a gate of its own over
+these same documents, plus an end-to-end suite, see docs/focus-management.md —
+and the rest of the interactive surface is still in `SPEC.md`.
+
+That gate is where this one's blind spot showed: all 31 documents below were
+clean while `/login`, `/register` and `/_not-found` had no `<main>` landmark at
+all, because axe's `region` rule is `best-practice` and deliberately not in the
+rule sets here. A document can satisfy every level-A and level-AA rule axe
+automates and still have nowhere for a skip link to go.
 
 **Streamed content.** The documents are audited as served, so what sits behind a
 Suspense boundary is the fallback, not the content. A table rendered after the
@@ -145,7 +159,9 @@ against them today, by inspection rather than by gate:
 
 - **2.4.11 Focus Not Obscured (AA)** — needs scroll position and a sticky
   header. The dashboard has a sticky sidebar, not a sticky top bar, so there is
-  nothing above a focused control to hide it. Not asserted anywhere.
+  nothing above a focused control to hide it. Not asserted anywhere. The
+  landmark focused after a navigation is at the top of the content, which is
+  below the header rather than under it.
 - **2.5.7 Dragging Movements (AA)** — nothing in the application is
   drag-operated; the image upload is a file input with a drop zone, and the
   input is the single-pointer path.

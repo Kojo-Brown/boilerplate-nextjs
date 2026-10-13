@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
+import { RouteFocus } from "@/components/a11y/route-focus";
+import { SkipLink } from "@/components/a11y/skip-link";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
@@ -69,6 +71,27 @@ export const metadata: Metadata = {
  *
  * ---
  *
+ * `<SkipLink>` is the first element in `<body>` and that position is the whole
+ * feature: a skip link rendered after the navigation it exists to skip is
+ * decoration. It is above `<ThemeProvider>` rather than inside it for the same
+ * reason — the providers are where a wrapper gets added, and a wrapper that
+ * renders a banner, a cookie notice or a layout grid above its children moves
+ * the skip link down without anyone editing this line.
+ *
+ * `<RouteFocus>` is here for the reason the reporter above it is: it compares
+ * the pathname against the previous one, and a layout does not re-render when
+ * the visitor moves between sibling routes inside it, so a copy mounted in a
+ * route group would see a first render — and decline to move focus — at every
+ * crossing between groups. One mount, at the only node every route shares.
+ *
+ * It needs no `<Suspense>` boundary and must not have one: it does not read
+ * the router until the client has hydrated, which is what keeps
+ * `usePathname()` out of the four dynamic-segment fallback shells it cannot be
+ * answered in. The component itself explains why a boundary was the wrong fix
+ * for that; see also docs/focus-management.md and docs/streaming.md.
+ *
+ * ---
+ *
  * `fontVariables` is on `<html>` because that is the only element the rules
  * that read it are in scope for: `globals.css` resolves `--font-sans` and
  * `--font-mono` from these variables inside `@theme`, which is emitted at
@@ -89,6 +112,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={fontVariables} suppressHydrationWarning>
       <body>
+        <SkipLink />
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -100,6 +124,7 @@ export default function RootLayout({
               {children}
               {modal}
               <Toaster richColors closeButton />
+              <RouteFocus />
               <WebVitalsReporter />
               <ThirdPartyScripts
                 config={{

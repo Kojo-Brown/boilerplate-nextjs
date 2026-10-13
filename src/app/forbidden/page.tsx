@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { MainContent } from "@/components/a11y/main-content";
 
 export const metadata: Metadata = {
   title: "403 — Forbidden",
@@ -8,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function ForbiddenPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
+    <MainContent className="flex min-h-screen flex-col items-center justify-center gap-4 px-6 text-center">
       <p
         className="text-7xl font-bold"
         style={{ color: "var(--primary)" }}
@@ -16,8 +17,13 @@ export default function ForbiddenPage() {
       >
         403
       </p>
-      <h1 className="text-2xl font-semibold tracking-tight">Access Forbidden</h1>
-      <p className="max-w-sm text-sm" style={{ color: "var(--muted-foreground)" }}>
+      <h1 className="text-2xl font-semibold tracking-tight">
+        Access Forbidden
+      </h1>
+      <p
+        className="max-w-sm text-sm"
+        style={{ color: "var(--muted-foreground)" }}
+      >
         You do not have the required permissions to view this page. Contact an
         administrator if you believe this is a mistake.
       </p>
@@ -31,6 +37,6 @@ export default function ForbiddenPage() {
       >
         Back to Dashboard
       </Link>
-    </div>
+    </MainContent>
   );
 }
