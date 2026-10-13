@@ -476,10 +476,37 @@ scoped, and `docs/multi-tenancy.md` no longer lists it under "Known gaps"._
 ## Phase 12 — Accessibility & TDD
 
 - [x] WCAG 2.2 AA audit with axe in CI, zero-violation gate — axe-core over all 31 prerendered documents in both themes, failing on violations and on undecidable results (PR #73)
-- [ ] Focus management across App Router navigations with route announcements
+- [x] Focus management across App Router navigations with route announcements — a skip link, one focusable `<main>` landmark per route, and a focus manager in the root layout; no second live region, because Next's own announcer already speaks the title (PR #75)
 - [ ] i18n with `next-intl`: locale routing, plurals, and an RTL pass
 - [ ] TDD kata: one Server Action built red→green→refactor, one commit per step
 - [ ] Playwright a11y + visual regression suite on the critical journey
+
+_Item 2 was three defects deep before a browser saw it, and each was invisible
+to jsdom by construction. `popstate` arrives **after** React commits the popped
+route — Next registers its listener first and dispatches the router update from
+inside it, and React flushes a popstate update synchronously — so the flag read
+in the effect body was always `false` and every Back press looked like a forward
+navigation. `usePathname()` changes **before** the destination's DOM exists, and
+React hides outgoing content with `display: none`, which makes `focus()` a
+silent no-op on an element that is still connected and still answers to
+`getElementById`; one frame of waiting focused the outgoing landmark and
+reported success. And `isConnected` is not a liveness test at all, because Next
+keeps the page you navigated away from mounted and hidden so Back can be
+instant. The unit suite had set the pop flag and then re-rendered, which is the
+one order that cannot happen; it now covers both, and `focus()` is checked by
+reading `activeElement` afterwards, since it neither throws nor returns
+anything._
+
+_The gate it added found three routes with no `<main>` at all — `/login`,
+`/register` and `/_not-found`, the last of which had the skip link and nothing
+for it to point at — while item 1's audit reported all 31 documents clean, since
+axe's `region` rule is `best-practice` and deliberately out of scope there. It
+also retired that audit's `bypass` exemption for `/posts/[id]`: `bypass` is
+satisfied by a skip link as well as by a landmark, and the accessibility gate
+failed until the dead allowance was deleted. A `<Suspense fallback={null}>`
+around the manager was rejected by `assert-streaming-boundaries.ts` for leaving
+an empty pending hole in four shells, so the router read is gated on hydration
+instead. See `docs/focus-management.md`._
 
 _The first version of item 1 ran axe in jsdom and passed the whole application.
 It was measuring nothing: with no layout engine, `color-contrast` and
