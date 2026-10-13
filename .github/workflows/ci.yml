@@ -754,6 +754,22 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # Static analysis plus the build's own documents, so it needs no browser
+      # and sits above the Chromium install below.
+      #
+      # Its failure mode is the reason it exists: a `<main>` that loses its
+      # `tabindex`, a route that wraps its content in a bare `<div>`, a
+      # provider inserted above the skip link, or a focus manager whose
+      # `usePathname` is refactored away all build, render identically, pass
+      # every other gate — the accessibility audit included, which found all 31
+      # documents clean while three of them had no landmark at all — and leave
+      # keyboard navigation broken after the first client-side navigation.
+      # None of it is visible to a mouse. See docs/focus-management.md.
+      - name: Assert focus management
+        run: pnpm exec tsx scripts/assert-focus-management.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.
