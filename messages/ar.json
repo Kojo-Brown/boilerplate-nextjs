@@ -1,0 +1,40 @@
+{
+  "common": {
+    "appName": "التطبيق",
+    "skipToContent": "تخطَّ إلى المحتوى الرئيسي",
+    "theme": {
+      "toggle": "تبديل المظهر",
+      "light": "فاتح",
+      "dark": "داكن",
+      "system": "النظام"
+    }
+  },
+  "nav": {
+    "label": "التنقل الرئيسي",
+    "open": "فتح قائمة التنقل",
+    "close": "إغلاق قائمة التنقل",
+    "dashboard": "لوحة التحكم",
+    "posts": "المنشورات",
+    "upload": "الرفع",
+    "images": "الصور",
+    "admin": "الإدارة",
+    "security": "الأمان"
+  },
+  "posts": {
+    "recentTitle": "أحدث المنشورات",
+    "empty": "لا توجد منشورات بعد",
+    "status": {
+      "live": "مُنشور",
+      "draft": "مسودة"
+    },
+    "count": "{count, plural, zero {لا توجد منشورات} one {منشور واحد} two {منشوران} few {# منشورات} many {# منشورًا} other {# منشور}}",
+    "draftCount": "{count, plural, zero {لا توجد مسودات} one {مسودة واحدة} two {مسودتان} few {# مسودات} many {# مسودةً} other {# مسودة}}"
+  },
+  "auth": {
+    "signIn": "تسجيل الدخول",
+    "signOut": "تسجيل الخروج",
+    "register": "إنشاء حساب",
+    "email": "البريد الإلكتروني",
+    "password": "كلمة المرور"
+  }
+}

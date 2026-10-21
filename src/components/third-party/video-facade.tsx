@@ -198,14 +198,14 @@ export function VideoFacade({
         <svg
           viewBox="0 0 24 24"
           fill="currentColor"
-          className="ml-1 h-7 w-7"
+          className="ms-1 h-7 w-7"
           role="presentation"
         >
           <path d="M8 5v14l11-7z" />
         </svg>
       </span>
 
-      <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8 text-left text-sm font-medium text-white">
+      <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-4 pb-3 pt-8 text-start text-sm font-medium text-white">
         {title}
       </span>
     </button>

@@ -24,7 +24,7 @@ export default function AuthLayout({
 }) {
   return (
     <div className="relative flex min-h-screen items-center justify-center bg-muted p-4">
-      <ThemeToggle className="absolute top-4 right-4" />
+      <ThemeToggle className="absolute top-4 end-4" />
       <MainContent className="w-full max-w-sm">{children}</MainContent>
     </div>
   );

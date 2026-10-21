@@ -79,7 +79,7 @@ export async function RecentPosts({ userId }: RecentPostsProps) {
               </div>
               <time
                 dateTime={post.createdAt.toISOString()}
-                className="ml-4 shrink-0 text-xs"
+                className="ms-4 shrink-0 text-xs"
                 style={{ color: "var(--muted-foreground)" }}
               >
                 {post.createdAt.toLocaleDateString()}

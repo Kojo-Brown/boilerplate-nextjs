@@ -11,7 +11,7 @@ export default function HomePage() {
         This is the application's front door; a visitor who arrives in the wrong
         theme should not have to navigate into `/blog` to fix it.
       */}
-      <ThemeToggle className="absolute top-4 right-4" />
+      <ThemeToggle className="absolute top-4 end-4" />
       <h1 className="text-4xl font-bold tracking-tight">Next.js Boilerplate</h1>
       <p className="max-w-md text-center text-muted-foreground">
         Next.js 16 · App Router · TypeScript 6 · TailwindCSS 4 · Prisma 7 ·

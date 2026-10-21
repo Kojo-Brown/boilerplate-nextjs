@@ -1,0 +1,40 @@
+{
+  "common": {
+    "appName": "App",
+    "skipToContent": "Skip to main content",
+    "theme": {
+      "toggle": "Toggle theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    }
+  },
+  "nav": {
+    "label": "Main navigation",
+    "open": "Open navigation",
+    "close": "Close navigation",
+    "dashboard": "Dashboard",
+    "posts": "Posts",
+    "upload": "Upload",
+    "images": "Images",
+    "admin": "Admin",
+    "security": "Security"
+  },
+  "posts": {
+    "recentTitle": "Recent posts",
+    "empty": "No posts yet",
+    "status": {
+      "live": "Live",
+      "draft": "Draft"
+    },
+    "count": "{count, plural, =0 {No posts yet} one {# post} other {# posts}}",
+    "draftCount": "{count, plural, =0 {No drafts} one {# draft} other {# drafts}}"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "register": "Create account",
+    "email": "Email",
+    "password": "Password"
+  }
+}
