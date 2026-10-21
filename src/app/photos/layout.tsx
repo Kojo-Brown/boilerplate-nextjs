@@ -46,7 +46,7 @@ export default function PhotosLayout({
             >
               ← Home
             </Link>
-            <ThemeToggle className="ml-auto" />
+            <ThemeToggle className="ms-auto" />
           </nav>
         </div>
       </header>

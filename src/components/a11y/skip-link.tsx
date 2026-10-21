@@ -39,7 +39,7 @@ export function SkipLink({ children = "Skip to main content" }: SkipLinkProps) {
     <a
       href={SKIP_LINK_HREF}
       data-skip-link-target={MAIN_CONTENT_ID}
-      className="sr-only rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:outline-2 focus:outline-offset-2 focus:outline-[var(--foreground)]"
+      className="sr-only rounded-md bg-[var(--primary)] px-4 py-2 text-sm font-medium text-[var(--primary-foreground)] focus:not-sr-only focus:absolute focus:top-2 focus:start-2 focus:z-50 focus:outline-2 focus:outline-offset-2 focus:outline-[var(--foreground)]"
     >
       {children}
     </a>

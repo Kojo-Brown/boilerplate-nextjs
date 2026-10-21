@@ -7,6 +7,7 @@ import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ThirdPartyScripts } from "@/components/third-party/third-party-scripts";
 import { WebVitalsReporter } from "@/components/vitals/web-vitals-reporter";
+import { DEFAULT_LOCALE, textDirection } from "@/i18n/locales";
 import { clientEnv } from "@/lib/env/client";
 import { fontVariables } from "@/styles/fonts";
 import "@/styles/globals.css";
@@ -101,6 +102,21 @@ export const metadata: Metadata = {
  * adds and removes its own class with `classList` rather than assigning
  * `className` — so the two coexist on the same element. See docs/fonts.md and
  * `scripts/assert-font-loading.ts`.
+ *
+ * ---
+ *
+ * `lang` and `dir` come from the locale registry rather than being written as
+ * literals, and `dir` is on this element at all because the logical CSS the
+ * components now use resolves against it. `ms-4` compiles to
+ * `margin-inline-start`, and `inline-start` is whichever side the *document*
+ * says it is — so with no `dir` here every logical utility in the application
+ * silently resolves left-to-right, and `scripts/assert-logical-properties.ts`
+ * would be guarding a property nothing reads.
+ *
+ * It is `DEFAULT_LOCALE` and not the request's locale because there is no
+ * `[locale]` segment yet: this application serves one locale, and naming it
+ * here is what makes adding the second one a routing change rather than a hunt
+ * for hard-coded `"en"`. See docs/i18n.md.
  */
 export default function RootLayout({
   children,
@@ -110,7 +126,12 @@ export default function RootLayout({
   modal: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={fontVariables} suppressHydrationWarning>
+    <html
+      lang={DEFAULT_LOCALE}
+      dir={textDirection(DEFAULT_LOCALE)}
+      className={fontVariables}
+      suppressHydrationWarning
+    >
       <body>
         <SkipLink />
         <ThemeProvider

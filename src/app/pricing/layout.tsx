@@ -51,7 +51,7 @@ export default function PricingLayout({
             >
               ← Home
             </Link>
-            <ThemeToggle className="ml-auto" />
+            <ThemeToggle className="ms-auto" />
           </nav>
         </div>
       </header>

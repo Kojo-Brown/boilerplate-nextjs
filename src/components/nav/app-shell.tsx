@@ -23,7 +23,7 @@ export function AppShell({
     <div className="flex min-h-screen">
       {/* Desktop sidebar */}
       <aside
-        className="hidden lg:flex lg:w-60 lg:flex-shrink-0 lg:flex-col lg:border-r"
+        className="hidden lg:flex lg:w-60 lg:flex-shrink-0 lg:flex-col lg:border-e"
         style={{ backgroundColor: "var(--background)" }}
       >
         <div className="border-b px-4 py-3">
@@ -87,7 +87,7 @@ export function AppShell({
               it would have the control shift sideways when the session
               resolves.
             */}
-            <div className="ml-auto flex items-center gap-3">
+            <div className="ms-auto flex items-center gap-3">
               <ThemeToggle />
               {headerSlot}
             </div>

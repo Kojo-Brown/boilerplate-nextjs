@@ -148,7 +148,7 @@ export const DialogContent = React.forwardRef<
         <button
           type="button"
           aria-label="Close"
-          className="absolute right-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-offset-2"
+          className="absolute end-4 top-4 rounded-sm opacity-70 transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-offset-2"
           onClick={() => onOpenChange(false)}
         >
           <svg
@@ -181,7 +181,7 @@ export const DialogHeader = React.forwardRef<
   <div
     ref={ref}
     className={cn(
-      "mb-4 flex flex-col gap-1.5 text-center sm:text-left",
+      "mb-4 flex flex-col gap-1.5 text-center sm:text-start",
       className,
     )}
     {...props}

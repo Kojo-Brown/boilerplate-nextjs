@@ -37,7 +37,7 @@ export default function BlogLayout({
             >
               ← Home
             </Link>
-            <ThemeToggle className="ml-auto" />
+            <ThemeToggle className="ms-auto" />
           </nav>
         </div>
       </header>

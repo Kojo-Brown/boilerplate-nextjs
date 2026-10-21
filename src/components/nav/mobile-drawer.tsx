@@ -47,7 +47,7 @@ export function MobileDrawer({
         role="dialog"
         aria-modal="true"
         aria-label="Navigation"
-        className="absolute inset-y-0 left-0 flex w-64 flex-col border-r shadow-xl"
+        className="absolute inset-y-0 start-0 flex w-64 flex-col border-e shadow-xl"
         style={{ backgroundColor: "var(--background)" }}
       >
         <div className="flex items-center justify-between border-b px-4 py-3">

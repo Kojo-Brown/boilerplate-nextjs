@@ -770,6 +770,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The two i18n gates. Both read source rather than build output, so
+      # neither needs the build above and both are seconds of work; they sit in
+      # this job because this is where every gate in this repository lives and
+      # splitting them out would mean a reader has to look in two places.
+      #
+      # The catalogue gate's sharp case is an `ar` plural carrying English's two
+      # branches: valid ICU, formats without error, and grammatically wrong for
+      # 2, 3 and 11. The logical-properties gate's is a new `ml-4`, which is
+      # identical to `ms-4` in every locale anyone on the team reads and wrong
+      # in the one they do not. Neither is visible to tsc, ESLint, the unit
+      # suite, the build or the accessibility audit. See docs/i18n.md.
+      - name: Assert i18n catalogues
+        run: pnpm exec tsx scripts/assert-i18n-catalogues.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
+      - name: Assert logical properties
+        run: pnpm exec tsx scripts/assert-logical-properties.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.
