@@ -1,4 +1,16 @@
+import createNextIntlPlugin from "next-intl/plugin";
 import type { NextConfig } from "next";
+
+/**
+ * Points `next-intl` at `src/i18n/request.ts`.
+ *
+ * The default location the plugin looks in is `./i18n/request.ts` relative to
+ * the project root, and this repository keeps its sources under `src/`. The
+ * path is passed explicitly rather than relying on the plugin's `src/`
+ * fallback, because the failure when it misses is a build that succeeds and an
+ * application in which every translated string renders as its own key path.
+ */
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 const config: NextConfig = {
   output: "standalone",
@@ -84,7 +96,34 @@ const config: NextConfig = {
   async headers() {
     return [
       {
+        // `en`, which `localePrefix: "as-needed"` serves unprefixed — so this
+        // is the same entry it was before the `[locale]` segment existed.
         source: "/pricing",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, max-age=0, must-revalidate",
+          },
+        ],
+      },
+      {
+        // Every prefixed locale, and the reason this is a pattern rather than
+        // one entry per locale: this file is compiled to CommonJS by
+        // `next typegen` without the `@/` alias, so it cannot import the locale
+        // registry to iterate it (the same constraint the comment above
+        // records for the experiment registry). A literal `/ar/pricing` would
+        // be a third place that has to be edited when a locale is added, and
+        // the one whose omission is invisible — a missing entry here is a
+        // shared-cacheable experiment page, which looks exactly like a working
+        // one.
+        //
+        // `:locale` matches one segment, so this is wider than the locale
+        // registry: `/xx/pricing` matches it too. That is harmless in this
+        // direction — it pins `private` on a path that 404s — and
+        // `scripts/assert-experiment-wiring.ts` is what holds the narrow end,
+        // checking that every routed experiment's canonical path is covered
+        // for every locale the registry declares.
+        source: "/:locale/pricing",
         headers: [
           {
             key: "Cache-Control",
@@ -109,4 +148,4 @@ const config: NextConfig = {
   },
 };
 
-export default config;
+export default withNextIntl(config);

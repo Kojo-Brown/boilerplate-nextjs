@@ -35,6 +35,9 @@ importers:
       next-auth:
         specifier: 5.0.0-beta.32
         version: 5.0.0-beta.32(next@16.2.12(@babel/core@7.29.7)(@playwright/test@1.62.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
+      next-intl:
+        specifier: 4.14.9
+        version: 4.14.9(@types/react@19.2.17)(next@16.2.12(@babel/core@7.29.7)(@playwright/test@1.62.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -123,9 +126,6 @@ importers:
       msw:
         specifier: ^2.7.6
         version: 2.15.0(@types/node@24.13.3)(typescript@6.0.3)
-      next-intl:
-        specifier: 4.14.9
-        version: 4.14.9(@types/react@19.2.17)(next@16.2.12(@babel/core@7.29.7)(@playwright/test@1.62.0)(babel-plugin-react-compiler@1.0.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8))(react@19.2.8)
       prettier:
         specifier: ^3.5.3
         version: 3.9.6
