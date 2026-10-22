@@ -20,6 +20,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { CATALOGUES } from "../src/i18n/catalogues.js";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath, splitLocalePath } from "../src/i18n/path.js";
 
 /** The subset of `.next/prerender-manifest.json` this gate reads. */
 export interface PrerenderManifest {
@@ -74,8 +77,52 @@ export interface RouteExpectation {
  *
  * The API handlers are deliberately absent — they are pure request/response and
  * have no shell to speak of.
+ *
+ * ## These are public paths; the build output is keyed by segment path
+ *
+ * `/dashboard` below becomes two expectations, `/en/dashboard` and
+ * `/ar/dashboard`, because that is how the prerender manifest keys them now
+ * that the tree is under `src/app/[locale]`. `EXPECTED_ROUTES` at the bottom of
+ * this block is that cross product.
+ *
+ * The locale axis is derived from the registry and the per-route expectation is
+ * not, and that split is deliberate rather than a weakening of the rule above.
+ * What this gate exists to catch is a route whose *shape* changed — a static
+ * page that went dynamic, an ISR window that stopped taking effect — and shape
+ * is a property of the route, not of the locale it is rendered in. Writing the
+ * product out by hand would mean every entry appearing once per locale, so
+ * adding a third locale would be fourteen edits, and the one that gets
+ * forgotten is a route nobody is checking the shape of in the locale nobody on
+ * the team reads. Deriving the axis makes that impossible and leaves the
+ * assertion — "this route is a shell containing the navigation" — written down
+ * exactly once, independently of the code.
+ *
+ * `localised: false` is for the documents Next generates outside the segment.
  */
-export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
+interface BaseRouteExpectation extends RouteExpectation {
+  /** `false` for a document that exists once, not once per locale. */
+  localised?: false;
+  /**
+   * Navigation items whose *label in this document's own locale* must appear in
+   * the shell, as keys under `nav` in the message catalogues.
+   *
+   * This is `shellMustContain` for the one kind of needle that is not the same
+   * string in every locale, and it had to be separated from it the moment the
+   * navigation was wired to the catalogues: `"Dashboard"` is not in the Arabic
+   * document, so the six shell expectations failed for `ar` on a shell that was
+   * entirely correct.
+   *
+   * Resolving the needle per locale is sharper than the literal was, not just
+   * equivalent. `/ar/dashboard` reported `"Dashboard"` as *present* — the
+   * English label is nowhere in that document, but the string is, in the
+   * `/dashboard` href next to the Arabic label. A needle that a URL can satisfy
+   * is a needle that cannot tell a prerendered navigation from a prerendered
+   * link to one.
+   */
+  shellMustContainNav?: readonly (keyof typeof CATALOGUES.en.nav)[];
+}
+
+const BASE_ROUTES: readonly BaseRouteExpectation[] = [
   {
     route: "/",
     kind: "static",
@@ -84,6 +131,12 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
   {
     route: "/_not-found",
     kind: "static",
+    // Next generates this one itself, above the `[locale]` segment, so there is
+    // exactly one of it and it has no locale. `src/app/[locale]/not-found.tsx`
+    // is a different thing — the not-found *boundary* for routes inside the
+    // segment — and it is covered by the documents it renders into rather than
+    // by a route of its own.
+    localised: false,
     because: "the 404 page is pure markup",
   },
   {
@@ -162,16 +215,45 @@ export const EXPECTED_ROUTES: readonly RouteExpectation[] = [
       ["/upload", "the upload shell"],
       ["/settings/security", "the security settings shell"],
     ] as const
-  ).map(([route, what]): RouteExpectation => ({
+  ).map(([route, what]): BaseRouteExpectation => ({
     route,
     kind: "shell",
     // The sidebar links, which `AppShell` renders without touching the
     // session. If a session read creeps back into `(dashboard)/layout.tsx`
-    // these vanish from the shell and this fails.
-    shellMustContain: ["Dashboard", "Posts", "Upload"],
+    // these vanish from the shell and this fails. By catalogue key, so each
+    // locale's document is checked for its own labels — see
+    // `shellMustContainNav`.
+    shellMustContainNav: ["dashboard", "posts", "upload"],
     because: `${what} must prerender its navigation; only <UserChip> may stream`,
   })),
 ];
+
+/**
+ * `BASE_ROUTES`, crossed with the locale registry.
+ *
+ * `internalPath` and not string concatenation: it is the same function the
+ * proxy composes a rewrite with, so "the path the gate looks for" and "the path
+ * the application sends the request to" cannot disagree. It is also what gets
+ * `/` right — the root of a locale is `/en`, not `/en/`.
+ */
+export const EXPECTED_ROUTES: readonly RouteExpectation[] = BASE_ROUTES.flatMap(
+  ({ localised, shellMustContainNav, ...expectation }): RouteExpectation[] => {
+    if (localised === false) return [expectation];
+
+    return LOCALES.map((locale) => {
+      const navNeedles = (shellMustContainNav ?? []).map(
+        (key) => CATALOGUES[locale].nav[key],
+      );
+      const needles = [...(expectation.shellMustContain ?? []), ...navNeedles];
+
+      return {
+        ...expectation,
+        route: internalPath(locale, expectation.route),
+        ...(needles.length > 0 ? { shellMustContain: needles } : {}),
+      };
+    });
+  },
+);
 
 export interface Violation {
   route: string;
@@ -291,8 +373,22 @@ export function checkRouteShape(
     // `srcRoute` is how a concrete page points back at the segment that
     // produced it, so this counts real prerendered instances rather than
     // trusting that generateStaticParams returned something.
+    //
+    // The segment it points back at carries the literal `[locale]`:
+    // `/en/blog/seed-post-cache-life` and `/ar/blog/seed-post-cache-life` both
+    // name `/[locale]/blog/[slug]`. So the comparison is against that form, and
+    // the locale is applied to the *concrete* side instead — which is what
+    // makes this assert per locale rather than once for both. A locale whose
+    // `generateStaticParams` returned `[]` while the other's did not would
+    // otherwise be invisible here: the segment would still have prebuilt pages,
+    // just none of them in that language.
+    const { locale, pathname } = splitLocalePath(route);
+    const segment = locale === null ? route : internalPathSegment(pathname);
+    const prefix = locale === null ? "/" : `/${locale}/`;
+
     const prebuilt = Object.entries(manifest.routes).filter(
-      ([, entry]) => entry.srcRoute === route,
+      ([concrete, entry]) =>
+        entry.srcRoute === segment && concrete.startsWith(prefix),
     );
 
     if (prebuilt.length === 0) {
@@ -316,6 +412,18 @@ export function checkRouteShape(
   }
 
   return violations;
+}
+
+/**
+ * The `srcRoute` form of a public path: `/blog/[slug]` -> `/[locale]/blog/[slug]`.
+ *
+ * `internalPath` with the segment's own name in place of a locale. Not written
+ * as a template literal at the call site so that the one place this repository
+ * spells the root segment is `src/app/[locale]`, and a rename is a failing gate
+ * rather than a silent mismatch.
+ */
+function internalPathSegment(pathname: string): string {
+  return pathname === "/" ? "/[locale]" : `/[locale]${pathname}`;
 }
 
 function pushRevalidateViolation(

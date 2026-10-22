@@ -1,5 +1,6 @@
-import { Link } from "@/i18n/navigation";
 "use client";
+
+import { Link } from "@/i18n/navigation";
 
 
 /**

@@ -20,6 +20,27 @@ const config: NextConfig = {
   cacheComponents: true,
   // Promoted out of `experimental` in Next 16.
   typedRoutes: true,
+  experimental: {
+    /**
+     * Enables `src/app/global-not-found.tsx`.
+     *
+     * Needed because the `[locale]` restructure took the landmark out of the
+     * one document that cannot get it back any other way. `not-found.tsx` is
+     * now inside the segment, where it covers an unmatched *single* segment
+     * (`/nope` is read as a locale, fails the layout's `isLocale` check, and
+     * renders that boundary). It does not cover a path the segment cannot match
+     * at all — `/a/b/c` — whose document Next writes above the whole layout
+     * hierarchy, as its own built-in 404 with no `<main>` and no skip link.
+     * `scripts/assert-focus-management.ts` failed on exactly that.
+     *
+     * The flag is experimental and that is a cost taken deliberately: the
+     * alternatives were a root `layout.tsx` above the segment, which cannot
+     * exist because `<html lang>` is the locale and the locale is that segment,
+     * or leaving a 404 that fails WCAG 3.1.1 and 2.4.1 in the tree with an
+     * exemption. See `src/app/global-not-found.tsx`.
+     */
+    globalNotFound: true,
+  },
   /**
    * React Compiler, on for every client component.
    *

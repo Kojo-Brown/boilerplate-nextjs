@@ -33,6 +33,8 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import ts from "typescript";
 import { MAIN_CONTENT_ID, SKIP_LINK_HREF } from "../src/lib/a11y/route-focus";
 
@@ -51,10 +53,18 @@ export const ROUTE_FOCUS_COMPONENT = "RouteFocus";
  * to be the target of, carries its own inline styles, and cannot import a
  * component that reaches for Tailwind. It is a standalone document that
  * happens to contain a `<main>`, not a route in this application's tree.
+ *
+ * `global-not-found.tsx` is the same kind of document for the same reason: it
+ * renders outside every layout, so the stylesheet is not in it and
+ * `<MainContent>` — a Client Component using Tailwind utilities — cannot be
+ * imported. It does carry a skip link and does set `tabIndex={-1}` by hand,
+ * which is what R4 and R5 check for and what this exemption does *not* cover;
+ * all this list forgives is the spelling of the element.
  */
 export const RAW_MAIN_ALLOWED = [
   LANDMARK_MODULE,
   "src/app/global-error.tsx",
+  "src/app/global-not-found.tsx",
 ] as const;
 
 /**
@@ -71,16 +81,13 @@ export interface DocumentAllowance {
   readonly because: string;
 }
 
-export const ALLOWANCES: readonly DocumentAllowance[] = [
-  {
-    document: "/_global-error",
-    because:
-      "Next generates this static 500 document itself and it does not nest " +
-      "inside the root layout, so it has neither the skip link nor the " +
-      "landmark the skip link targets. `src/app/global-error.tsx` is what " +
-      "fixes the runtime boundary a visitor actually lands on, and it " +
-      "renders its own <main>",
-  },
+/**
+ * The interception shells, which exist once per locale.
+ *
+ * `collectDocuments` reports the `[id]` fallback and one document per seeded
+ * photo, so the exemption covers the same four paths under every locale.
+ */
+const INTERCEPTION_SHELLS: readonly DocumentAllowance[] = [
   {
     document: "/(.)photos/[id]",
     because:
@@ -105,6 +112,85 @@ export const ALLOWANCES: readonly DocumentAllowance[] = [
 ];
 
 /**
+ * The fallback shells for the `[locale]` segment itself.
+ *
+ * These are new with the restructure and they are genuinely empty, for a reason
+ * worth writing down. Next prerenders a fallback shell for every dynamic
+ * segment, including the root one — `.next/server/app/[locale]/upload.html` is
+ * the document it would stream for a locale it has not seen. The root layout
+ * narrows the segment with `isLocale` and calls `notFound()` when it fails, and
+ * that check is above everything the layout renders, so for an unknown param
+ * there is nothing it *can* prerender: no skip link, no landmark.
+ *
+ * That is the right trade rather than a regression. The alternative is a layout
+ * that renders the chrome before deciding whether the locale exists, which
+ * means `/xx/upload` serves a complete, plausible, 200-answering page — and
+ * `next-intl`'s request config does fall back to the default locale, so every
+ * string in it would be present and correct. A visitor who reaches one of these
+ * shells is served the 404 boundary into it, and
+ * `src/app/[locale]/not-found.tsx` renders the landmark; what this gate
+ * measures is the prerendered part, which by construction has none.
+ *
+ * `dynamicParams = false` would remove these documents and is not available:
+ * `cacheComponents` rejects that route segment config outright — see the note
+ * on `generateStaticParams` in `src/app/[locale]/pricing/v/[variant]/page.tsx`.
+ */
+const SEGMENT_FALLBACK_SHELLS: readonly DocumentAllowance[] = [
+  "/",
+  "/login",
+  "/register",
+  "/forbidden",
+  "/blog",
+  "/blog/[slug]",
+  "/photos",
+  "/photos/[id]",
+  "/pricing",
+  "/pricing/v/[variant]",
+  "/dashboard",
+  "/posts",
+  "/posts/[id]",
+  "/admin",
+  "/settings/security",
+  "/upload",
+  "/images",
+  "/(.)photos/[id]",
+].map((document) => ({
+  document: internalPathSegment(document),
+  because:
+    "the prerendered fallback shell for an unknown `[locale]` param. The root " +
+    "layout narrows the segment and calls notFound() above everything it " +
+    "renders, so there is nothing in this document to carry the landmark — " +
+    "see SEGMENT_FALLBACK_SHELLS",
+}));
+
+export const ALLOWANCES: readonly DocumentAllowance[] = [
+  {
+    document: "/_global-error",
+    because:
+      "Next generates this static 500 document itself and it does not nest " +
+      "inside the root layout, so it has neither the skip link nor the " +
+      "landmark the skip link targets. `src/app/global-error.tsx` is what " +
+      "fixes the runtime boundary a visitor actually lands on, and it " +
+      "renders its own <main>",
+  },
+  ...INTERCEPTION_SHELLS.flatMap((allowance) =>
+    LOCALES.map((locale) => ({
+      ...allowance,
+      document: internalPath(locale, allowance.document),
+    })),
+  ),
+  ...SEGMENT_FALLBACK_SHELLS,
+];
+
+/**
+ * The `[locale]` form of a public path, which is how Next names a fallback
+ * shell for the root dynamic segment.
+ */
+function internalPathSegment(pathname: string): string {
+  return pathname === "/" ? "/[locale]" : `/[locale]${pathname}`;
+}
+
+/**
  * Documents that must exist and must be audited.
  *
  * The direction R4 cannot check: it covers whatever the build wrote, so a
@@ -113,9 +199,8 @@ export const ALLOWANCES: readonly DocumentAllowance[] = [
  * whose only purpose is to carry the landmark, and deleting it restores
  * Next's built-in 404, which renders perfectly and has no `<main>`.
  */
-export const REQUIRED_DOCUMENTS = [
-  "/index",
-  "/_not-found",
+const LOCALISED_DOCUMENTS = [
+  "/",
   "/login",
   "/register",
   "/forbidden",
@@ -129,6 +214,26 @@ export const REQUIRED_DOCUMENTS = [
   "/upload",
   "/images",
 ] as const;
+
+/**
+ * Every document R4 must have seen, once per locale.
+ *
+ * The landmark and the skip link are rendered by the root layout, which is now
+ * inside the `[locale]` segment — so there is one of each per locale, and a
+ * locale whose layout stopped rendering them would leave this gate green over
+ * the other one. `/_not-found` is the exception: Next generates it above the
+ * segment, so there is exactly one.
+ *
+ * `/` maps to `/en` and `/ar` rather than to `/index`, because that is what the
+ * build writes now: the locale root is `.next/server/app/en.html`, where it used
+ * to be `index.html`.
+ */
+export const REQUIRED_DOCUMENTS = [
+  "/_not-found",
+  ...LOCALISED_DOCUMENTS.flatMap((document) =>
+    LOCALES.map((locale) => internalPath(locale, document)),
+  ),
+] as readonly string[];
 
 export interface Finding {
   readonly file: string;

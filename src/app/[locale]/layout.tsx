@@ -1,5 +1,4 @@
 import { notFound } from "next/navigation";
-import { NextIntlClientProvider } from "next-intl";
 import { setRequestLocale } from "next-intl/server";
 import type { Metadata } from "next";
 import { Toaster } from "sonner";
@@ -10,6 +9,8 @@ import { SessionProvider } from "@/components/providers/session-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ThirdPartyScripts } from "@/components/third-party/third-party-scripts";
 import { WebVitalsReporter } from "@/components/vitals/web-vitals-reporter";
+import { IntlProvider } from "@/components/providers/intl-provider";
+import { CATALOGUES } from "@/i18n/catalogues";
 import { LOCALES, isLocale, textDirection } from "@/i18n/locales";
 import { clientEnv } from "@/lib/env/client";
 import { fontVariables } from "@/styles/fonts";
@@ -203,8 +204,21 @@ export default async function RootLayout({
                 * mounting it higher would not add a string to the bundle, but
                 * it would put the one component that must stay a pure
                 * pass-through above the ones that have state.
+                *
+                * It is `@/components/providers/intl-provider` and not
+                * `next-intl`'s `NextIntlClientProvider` directly, because from
+                * a Server Component that name resolves to an *async* component
+                * that awaits the request config — which under
+                * `cacheComponents` ends the build on every page in the
+                * application. The wrapper is a `"use client"` module, so it
+                * gets the synchronous provider and takes the locale and the
+                * catalogue as props. Both are statically known: the locale
+                * comes from `generateStaticParams` and the catalogue is a
+                * static import. See that file and `@/i18n/catalogues`.
                 */}
-              <NextIntlClientProvider>{children}</NextIntlClientProvider>
+              <IntlProvider locale={locale} messages={CATALOGUES[locale]}>
+                {children}
+              </IntlProvider>
               {modal}
               <Toaster richColors closeButton />
               <RouteFocus />

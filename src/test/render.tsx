@@ -3,20 +3,13 @@ import { render, type RenderOptions, type RenderResult } from "@testing-library/
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
-import ar from "../../messages/ar.json";
-import en from "../../messages/en.json";
+// The real catalogues the application ships, not a fixture. A test that
+// rendered against `{nav: {dashboard: "Dashboard"}}` written here would pass
+// whether or not `messages/en.json` still contained that key, which makes it a
+// test of the fixture; this way a renamed key breaks the component test that
+// depends on it.
+import { CATALOGUES } from "@/i18n/catalogues";
 import { DEFAULT_LOCALE, type Locale } from "@/i18n/locales";
-
-/**
- * The real catalogues, not a fixture.
- *
- * A test that renders against `{nav: {dashboard: "Dashboard"}}` written here
- * passes whether or not `messages/en.json` still contains that key — which
- * makes it a test of the fixture. Importing the shipped files means a renamed
- * key breaks the component test that depends on it, which is the only place a
- * rename *can* break before it reaches a page.
- */
-const CATALOGUES: Record<Locale, typeof en> = { en, ar };
 
 export function makeQueryClient(): QueryClient {
   return new QueryClient({

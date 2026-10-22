@@ -43,6 +43,8 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import axe from "axe-core";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import { chromium } from "@playwright/test";
 
 /**
@@ -234,10 +236,8 @@ export const ALLOWED_INCOMPLETE: readonly Allowance[] = [
  * Seed-derived paths are deliberately absent: they come and go with
  * `prisma/seed.ts` and are audited without being required.
  */
-export const REQUIRED_DOCUMENTS: readonly string[] = [
+const LOCALISED_DOCUMENTS: readonly string[] = [
   "/",
-  "/_global-error",
-  "/_not-found",
   "/(.)photos/[id]",
   "/admin",
   "/blog",
@@ -256,6 +256,31 @@ export const REQUIRED_DOCUMENTS: readonly string[] = [
   "/settings/security",
   "/upload",
 ];
+
+/**
+ * The two documents Next generates above the `[locale]` segment, which exist
+ * once rather than once per locale.
+ */
+const UNLOCALISED_DOCUMENTS: readonly string[] = ["/_global-error", "/_not-found"];
+
+/**
+ * Every document the audit must have covered.
+ *
+ * The localised half is crossed with the locale registry, because each locale
+ * is a *different document* for this gate's purposes and not a copy of one. An
+ * `ar` page is laid out right-to-left and carries different text, so it has its
+ * own reading order, its own contrast against the same palette, and its own
+ * target sizes — which is the entire reason `ar` was chosen as the second
+ * locale rather than another left-to-right placeholder. Requiring only the `en`
+ * documents would have left the direction-safe layout audited in the one
+ * direction that cannot show a direction bug.
+ */
+export const REQUIRED_DOCUMENTS: readonly string[] = [
+  ...UNLOCALISED_DOCUMENTS,
+  ...LOCALISED_DOCUMENTS.flatMap((document) =>
+    LOCALES.map((locale) => internalPath(locale, document)),
+  ),
+].sort();
 
 /**
  * Rules that must have been evaluated somewhere in each theme.
