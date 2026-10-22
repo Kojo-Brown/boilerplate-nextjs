@@ -46,6 +46,7 @@ import {
   serialiseAssignments,
   type CookieAttributes,
 } from "@/lib/experiments/cookies";
+import { splitLocalePath } from "@/i18n/path";
 import { EXPERIMENTS, type Experiment } from "@/lib/experiments/definitions";
 import { readGeo, type RequestGeo } from "@/lib/experiments/geo";
 import {
@@ -124,7 +125,22 @@ export function resolveExperimentContext(
   options: ResolveContextOptions = {},
 ): ExperimentContext {
   const experiments = options.experiments ?? EXPERIMENTS;
-  const { pathname } = request.nextUrl;
+  // The locale comes off before anything is matched against the registry.
+  //
+  // An experiment's `route.path` is a public path — `/pricing` — and the URL of
+  // that page in `ar` is `/ar/pricing`, which equals it for no experiment and
+  // so took part in none. Every visitor on a prefixed locale would have been
+  // served the canonical arm, and because `canonicalPath` would also have been
+  // `undefined`, with no exposure header to say so: the experiment would have
+  // gone on reporting a difference between two populations one of which was
+  // never split, and the only evidence would have been a traffic split that did
+  // not add up.
+  //
+  // The paths in `rewrite` stay public for the same reason they are public in
+  // the registry — this module is the one that holds a `NextRequest` and the
+  // one below it is strings in, strings out. `src/proxy.ts` is what turns the
+  // decision into a segment path with `internalPath`.
+  const { pathname } = splitLocalePath(request.nextUrl.pathname);
   const participating = participates(pathname);
 
   if (!participating) {
@@ -288,6 +304,24 @@ export function carryOverHeaders(from: Response, to: Response): void {
  */
 export interface ApplyExperimentsOptions {
   /**
+   * The segment path this request must be rewritten to, or `undefined` for a
+   * request that is passed straight through.
+   *
+   * This used to be derived here, from `context.rewrite?.to`, and it cannot be
+   * any more: with the `[locale]` segment every page request needs a rewrite,
+   * not only a bucketed one. `/pricing` is answered by
+   * `src/app/[locale]/pricing/page.tsx`, so the path that renders it is
+   * `/en/pricing` — a `NextResponse.next()` here would hand Next a path with
+   * no route behind it and 404 the whole application at the default locale.
+   *
+   * So the caller computes it, because the caller is the only place that knows
+   * both halves: the locale `next-intl` settled on, and the arm this visitor
+   * was assigned. `src/proxy.ts` composes the two with `internalPath`.
+   * `undefined` is for the paths that live outside the segment — `/api/*` — and
+   * for requests this module is asked about directly in a test.
+   */
+  readonly rewriteTo?: string | undefined;
+  /**
    * The request headers the pass-through or rewrite should carry.
    *
    * Defaults to `sanitisedRequestHeaders(request, context)`, which is all this
@@ -333,11 +367,12 @@ export function applyExperiments(
   const headers =
     options.requestHeaders ?? sanitisedRequestHeaders(request, context);
 
-  const response = context.rewrite
-    ? NextResponse.rewrite(rewriteUrl(request, context.rewrite), {
-        request: { headers },
-      })
-    : NextResponse.next({ request: { headers } });
+  const response =
+    options.rewriteTo === undefined
+      ? NextResponse.next({ request: { headers } })
+      : NextResponse.rewrite(rewriteUrl(request, options.rewriteTo), {
+          request: { headers },
+        });
 
   carryOverHeaders(gateResponse, response);
   writeCookies(response);
@@ -366,8 +401,8 @@ export function applyExperiments(
  * the `?bkt_…` override that produced the rewrite in the first place, so a
  * forced arm would survive exactly one render.
  */
-function rewriteUrl(request: NextRequest, rewrite: RewriteDecision): URL {
+function rewriteUrl(request: NextRequest, pathname: string): URL {
   const url = request.nextUrl.clone();
-  url.pathname = rewrite.to;
+  url.pathname = pathname;
   return url;
 }

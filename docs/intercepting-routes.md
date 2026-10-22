@@ -118,7 +118,7 @@ a photo does a full page load instead of opening the modal:
 - `app/layout.tsx` stops rendering `{modal}`
 - a tile becomes a `<button onClick={router.push}>`
 
-`src/app/photos/interception.test.ts` asserts the file paths and the layout
+`src/app/[locale]/photos/interception.test.ts` asserts the file paths and the layout
 wiring directly, for exactly that reason — the same reason
 `scripts/assert-route-shape.ts` exists one level up.
 
@@ -126,7 +126,7 @@ wiring directly, for exactly that reason — the same reason
 
 | Claim                                                         | Where                                 |
 | ------------------------------------------------------------- | ------------------------------------- |
-| The interceptor and slot are at the paths the router requires | `src/app/photos/interception.test.ts` |
+| The interceptor and slot are at the paths the router requires | `src/app/[locale]/photos/interception.test.ts` |
 | Dismissal navigates rather than hiding                        | `photo-modal.test.tsx`                |
 | Tiles are links carrying the photo's own URL                  | `photo-grid.test.tsx`                 |
 | Modal and page render the same photo                          | `photo-detail.test.tsx`               |

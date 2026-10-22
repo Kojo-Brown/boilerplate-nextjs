@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+// The component renders `<Link>` from `@/i18n/navigation`, which reads the
+// active locale from context — so it needs a provider even in a test that is
+// not about translation. `renderWithProviders` supplies it.
+import { renderWithProviders as render } from "@/test/render";
 import userEvent from "@testing-library/user-event";
 import { togglePublishAction, updatePostAction } from "@/actions/posts";
 import { toast } from "@/lib/toast";

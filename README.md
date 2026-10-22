@@ -146,7 +146,7 @@ reloaded, or closed with the Back button. Here closing the modal _is_ a
 
 Every way of breaking this is silent — a wrong `(.)` marker, a misplaced
 `@modal`, or a root layout that stops rendering `{modal}` all still compile and
-still serve the right URLs. `src/app/photos/interception.test.ts` asserts the
+still serve the right URLs. `src/app/[locale]/photos/interception.test.ts` asserts the
 wiring for that reason.
 [docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
 walkthrough.

@@ -111,7 +111,7 @@ describe("assert-log-redaction", () => {
     // browser's console. On a server the same line is a collected stream.
     const rules = await rulesFiring([
       {
-        file: "src/app/blog/error.tsx",
+        file: "src/app/[locale]/blog/error.tsx",
         edit: (source) => source.replace('"use client";', ""),
       },
     ]);
@@ -140,7 +140,7 @@ describe("assert-log-redaction", () => {
   it("R3 — fails an exception that no longer writes to the console", async () => {
     const rules = await rulesFiring([
       {
-        file: "src/app/blog/error.tsx",
+        file: "src/app/[locale]/blog/error.tsx",
         edit: (source) =>
           source.replace("console.error(error);", "void error;"),
       },

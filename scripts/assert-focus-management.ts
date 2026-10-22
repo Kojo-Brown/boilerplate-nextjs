@@ -36,7 +36,7 @@ import { pathToFileURL } from "node:url";
 import ts from "typescript";
 import { MAIN_CONTENT_ID, SKIP_LINK_HREF } from "../src/lib/a11y/route-focus";
 
-export const ROOT_LAYOUT = "src/app/layout.tsx";
+export const ROOT_LAYOUT = "src/app/[locale]/layout.tsx";
 export const ROUTE_FOCUS_MODULE = "src/components/a11y/route-focus.tsx";
 export const LANDMARK_MODULE = "src/components/a11y/main-content.tsx";
 export const SKIP_LINK_COMPONENT = "SkipLink";

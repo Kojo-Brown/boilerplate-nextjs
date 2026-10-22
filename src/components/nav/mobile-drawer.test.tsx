@@ -1,16 +1,28 @@
 // @vitest-environment jsdom
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { screen, cleanup } from "@testing-library/react";
+// The drawer renders `<NavLinks>`, which calls `useTranslations`, so it needs
+// the catalogue in context. `renderWithProviders` is where that lives.
+import { renderWithProviders as render } from "@/test/render";
 import userEvent from "@testing-library/user-event";
 import { MobileDrawer } from "./mobile-drawer";
 
-vi.mock("next/navigation", () => ({
+/**
+ * `@/i18n/navigation`, which is what the components under test import now.
+ *
+ * Mocking `next/link` and a one-export `next/navigation` was enough until the
+ * locale-aware wrappers arrived. It stopped being enough in two ways at once:
+ * the components no longer import either module, so the mocks were inert, and
+ * replacing `next/navigation` wholesale with `{usePathname}` removed the
+ * `redirect` and `permanentRedirect` that `next-intl`'s own wrappers import at
+ * module scope — so the file failed to import rather than failing an
+ * assertion. `src/test/setup.ts` has the complete `next/navigation` stand-in;
+ * this mock is only about the two things these tests steer.
+ */
+vi.mock("@/i18n/navigation", () => ({
   usePathname: () => "/dashboard",
-}));
-
-vi.mock("next/link", () => ({
-  default: ({
+  Link: ({
     href,
     children,
     ...props
@@ -24,6 +36,7 @@ vi.mock("next/link", () => ({
     </a>
   ),
 }));
+
 
 describe("MobileDrawer", () => {
   const onClose = vi.fn();

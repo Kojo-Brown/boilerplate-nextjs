@@ -1,11 +1,19 @@
 /**
  * The first thing every request reaches.
  *
- * Five concerns, in a fixed order: the rate limit, the session gate, experiment
- * routing, the Content Security Policy, then the fixed hardening headers. The
- * first is the whole point of doing the limiting here — see
- * `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
+ * Six concerns, in a fixed order: the rate limit, locale negotiation, the
+ * session gate, experiment routing, the Content Security Policy, then the fixed
+ * hardening headers. The first is the whole point of doing the limiting here —
+ * see `@/lib/rate-limit/enforce` for why "at the edge" is delivered as "before
  * anything else" in Next 16, which has no edge runtime to offer this file.
+ *
+ * The second is second because every concern after it needs to know which
+ * locale this request is for, and because the answer is sometimes "none of
+ * them, send a redirect" — a request that is about to be bounced to `/ar` has
+ * no session to gate, no arm to bucket and no document whose digests a policy
+ * could carry. `next-intl`'s middleware is used for its *redirects* only, and
+ * the rewrite it would have produced is rebuilt below; see
+ * `negotiateLocale`.
  *
  * The third is third for a reason of its own. Bucketing decides which *variant*
  * of a page to render, which is only a question worth answering for a request
@@ -27,18 +35,25 @@
  * same name. Every return path goes through it, refusals included — a 429 that
  * is missing `nosniff` is still a response a browser will sniff.
  */
+import createIntlMiddleware from "next-intl/middleware";
 import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
 import type { NextAuthRequest } from "next-auth";
 import type { NextFetchEvent, NextMiddleware, NextRequest } from "next/server";
 import { authConfig } from "@/auth.config";
+import { DEFAULT_LOCALE, type Locale } from "@/i18n/locales";
+import { internalPath, splitLocalePath } from "@/i18n/path";
+import { routing } from "@/i18n/routing";
+import { USE_SECURE_COOKIES } from "@/lib/auth/deployment";
 import { hardenSessionToken, reportSessionEvent } from "@/lib/auth/harden";
 import { sessionRegistry } from "@/lib/auth/registry";
 import {
   applyExperiments,
+  carryOverHeaders,
   resolveExperimentContext,
   sanitisedRequestHeaders,
 } from "@/lib/experiments/edge";
+import { participates } from "@/lib/experiments/routing";
 import {
   applyRateLimitHeaders,
   enforceRateLimit,
@@ -132,6 +147,100 @@ function isAuthEndpoint(pathname: string): boolean {
   return pathname === "/api/auth" || pathname.startsWith("/api/auth/");
 }
 
+/**
+ * `next-intl`'s middleware, and the one thing this file takes from it.
+ *
+ * It does three jobs: it redirects when the URL is not the canonical one for
+ * the locale it resolved (`/en/blog` -> `/blog`, and `/` -> `/ar` for a visitor
+ * whose cookie or `Accept-Language` says so), it writes the `NEXT_LOCALE`
+ * cookie, and it rewrites the request onto the `[locale]` segment.
+ *
+ * Only the first two are used here. The rewrite is rebuilt by `proxy` below,
+ * and has to be, because this file already owns a rewrite — `/pricing` becomes
+ * `/pricing/v/<variant>` for a bucketed visitor — and two middlewares cannot
+ * each return the response. Letting `next-intl` return its own would mean
+ * either losing the experiment arm or losing the Content Security Policy's
+ * request header, which is what carries the nonce into the render.
+ *
+ * So the composition is: honour the redirect if there is one, keep the cookie
+ * either way, and otherwise compute the segment path here with `internalPath`.
+ */
+const intlMiddleware = createIntlMiddleware({
+  ...routing,
+  /**
+   * `Secure` on a deployment whose own URL is `https:`, which `next-intl` does
+   * not do by default — its default is `{name: "NEXT_LOCALE", sameSite: "lax"}`
+   * and nothing else, so the cookie would be sent over plaintext by a browser
+   * that had ever been talked into one.
+   *
+   * It is configured here rather than in `@/i18n/routing` because that module
+   * is imported by `@/i18n/navigation`, which reaches client bundles, and
+   * `USE_SECURE_COOKIES` comes from `@/lib/auth/deployment` — which reads
+   * `NEXTAUTH_URL`. The cookie is only ever written by this middleware, so this
+   * is the only place that needs to know.
+   *
+   * There is no `httpOnly` to set: `next-intl` does not accept one, and this is
+   * a display preference rather than a credential. Everything that decides
+   * anything from it re-derives the locale from the path.
+   */
+  localeCookie: { secure: USE_SECURE_COOKIES },
+});
+
+interface Negotiated {
+  /** `next-intl`'s own response, kept for the headers it set. */
+  readonly response: NextResponse;
+  /** Set when `next-intl` wants the browser somewhere else. */
+  readonly redirect: NextResponse | undefined;
+  /** The locale every later step works in. */
+  readonly locale: Locale;
+  /** The request path with the locale prefix removed. */
+  readonly pathname: string;
+}
+
+/**
+ * Which locale this request is for, and whether it should be here at all.
+ *
+ * The locale is read back off the path rather than out of `next-intl`'s
+ * response, and that is sound rather than a shortcut: under
+ * `localePrefix: "as-needed"` a request whose locale differs from the one the
+ * path implies is *redirected*, never passed through. So a pass-through at a
+ * prefixed path is that prefix's locale, and a pass-through at an unprefixed
+ * path is the default — there is no third case, and reading
+ * `x-middleware-rewrite` back out of the response to find out would be
+ * depending on an internal header to learn something the path already says.
+ *
+ * `DEFAULT_LOCALE` is the fallback for a path with no prefix. An unknown first
+ * segment (`/favicon.png`) is not a locale and not a redirect either; it
+ * resolves to the default here and is answered by the `notFound()` in
+ * `src/app/[locale]/layout.tsx`.
+ */
+function negotiateLocale(request: NextRequest): Negotiated {
+  const { locale, pathname } = splitLocalePath(request.nextUrl.pathname);
+
+  // `/api/*` is not under `src/app/[locale]`, so it has no locale to negotiate
+  // and must not be redirected into one. `next-intl`'s middleware does not know
+  // that: the first segment of `/api/health` is not a locale, so it reads the
+  // path as unprefixed and answers with a rewrite to `/en/api/health` — or, for
+  // a visitor whose cookie says `ar`, a *redirect* to `/ar/api/health`. Either
+  // one is a route handler that does not exist, and the second would have
+  // turned every `fetch` from an Arabic page into a 404, `/api/auth/callback`
+  // included. `participates` is the existing answer to "is this a page", and
+  // the same list is the right one here.
+  if (!participates(pathname)) {
+    return {
+      response: NextResponse.next(),
+      redirect: undefined,
+      locale: locale ?? DEFAULT_LOCALE,
+      pathname,
+    };
+  }
+
+  const response = intlMiddleware(request);
+  const redirect = response.headers.has("location") ? response : undefined;
+
+  return { response, redirect, locale: locale ?? DEFAULT_LOCALE, pathname };
+}
+
 export default async function proxy(
   request: NextRequest,
   event: NextFetchEvent,
@@ -156,6 +265,22 @@ export default async function proxy(
     );
   }
 
+  // Before the session gate, because a request that is about to be redirected
+  // to another locale has no session worth reading — and before the experiment
+  // context, which needs the locale-stripped path to match the registry at all.
+  const negotiated = negotiateLocale(request);
+
+  if (negotiated.redirect) {
+    // Hardened and given a policy like every other return path. A redirect
+    // renders no document, so there is nothing for a nonce to stamp; the
+    // argument is the one the 429 above makes — one policy on every response is
+    // a property a reader can check.
+    return applyHardeningHeaders(
+      applyCspHeaders(negotiated.redirect, decideCsp(request)),
+      request,
+    );
+  }
+
   const gated = isAuthEndpoint(request.nextUrl.pathname)
     ? NextResponse.next()
     : ((await withSessionGate(request, event)) ?? NextResponse.next());
@@ -168,10 +293,38 @@ export default async function proxy(
   // not inside a branch.
   const experiments = resolveExperimentContext(request);
 
-  // The policy is decided here rather than inside `applyExperiments` because it
-  // needs the rewrite target: `/pricing` renders `/pricing/v/control`, and it is
-  // the *rendered* document whose inline scripts have to be authorised.
-  const csp = decideCsp(request, { served: experiments.rewrite?.to });
+  // The segment path that will actually render, which is what both the rewrite
+  // and the policy need.
+  //
+  // Two substitutions, in this order: the arm replaces the canonical path
+  // (`/pricing` -> `/pricing/v/annual-first`), and then the locale is put on
+  // the front (`-> /ar/pricing/v/annual-first`). Composed the other way round
+  // the arm would be appended to a path that already carries a locale, which is
+  // the same string here but stops being one the moment an experiment's
+  // `rewritePrefix` is not a suffix of its canonical path.
+  //
+  // `undefined` for the paths outside the `[locale]` segment. `participates`
+  // is the existing answer to "is this a page or an API route", and it is the
+  // right one for this question too — `/api/health` has no locale, no shell and
+  // nothing to rewrite.
+  const served = participates(negotiated.pathname)
+    ? internalPath(
+        negotiated.locale,
+        experiments.rewrite?.to ?? negotiated.pathname,
+      )
+    : undefined;
+
+  // The policy needs the rendered document, not the one in the address bar:
+  // `/pricing` renders `/en/pricing/v/control`, and it is the *rendered*
+  // document whose inline scripts have to be authorised. Before the `[locale]`
+  // segment this was `experiments.rewrite?.to` and `undefined` for every
+  // unbucketed request, because the two paths were the same string; they are
+  // not any more, so every page request has to say which document it serves or
+  // the manifest lookup misses and the shell's scripts go unauthorised.
+  const csp = decideCsp(
+    request,
+    served === undefined ? {} : { served },
+  );
 
   // The request headers the rewrite (or the pass-through) carries. Built here so
   // the policy can be added to them before the render reads it; `applyExperiments`
@@ -183,7 +336,14 @@ export default async function proxy(
 
   const response = applyExperiments(request, experiments, gated, {
     requestHeaders,
+    rewriteTo: served,
   });
+
+  // `next-intl`'s `NEXT_LOCALE` cookie and its `Link` alternate-links header.
+  // The response was rebuilt above, so they do not survive on their own — and
+  // without the cookie a visitor who was redirected to `/ar` once is
+  // renegotiated from `Accept-Language` on every later request.
+  carryOverHeaders(negotiated.response, response);
 
   return applyHardeningHeaders(
     applyCspHeaders(applyRateLimitHeaders(response, outcome, now), csp),

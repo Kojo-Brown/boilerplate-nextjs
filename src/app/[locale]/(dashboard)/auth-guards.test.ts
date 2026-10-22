@@ -199,3 +199,71 @@ describe("(dashboard)/layout", () => {
     expect(DashboardLayout.constructor.name).toBe("Function");
   });
 });
+
+/**
+ * The same gate, at a prefixed locale.
+ *
+ * Every prefix in `PROTECTED_PREFIXES` is a public path, and the URL of that
+ * route in `ar` is `/ar/<path>` — which starts with none of them. Before
+ * `splitLocalePath` was in `authorized`, this whole describe block returned
+ * `true`: the proxy handed `/ar/admin` to the renderer for an anonymous
+ * request. The routes still refuse, because each one reads the session next to
+ * its data, but the refusal arrives one streamed boundary later instead of
+ * before the response — and nothing else in this suite looks at a prefixed
+ * path, so there was no test to fail.
+ */
+describe("the session gate at a prefixed locale", () => {
+  it.for(["/posts", "/images", "/upload", "/dashboard"] as const)(
+    "/ar%s is gated, not handed to the renderer",
+    (route) => {
+      const result = authorized(anonymousRequestFor(`/ar${route}`));
+
+      expect(result).toBeInstanceOf(Response);
+    },
+  );
+
+  it("sends an anonymous visitor to the login page of their own locale", () => {
+    // `/login` would drop them into English on the one page they are
+    // guaranteed to be sent to.
+    const result = authorized(anonymousRequestFor("/ar/dashboard"));
+
+    const location = new URL((result as Response).headers.get("location")!);
+    expect(location.pathname).toBe("/ar/login");
+  });
+
+  it("keeps the prefixed path in callbackUrl so they come back to it", () => {
+    const result = authorized(anonymousRequestFor("/ar/posts"));
+
+    const location = new URL((result as Response).headers.get("location")!);
+    expect(location.searchParams.get("callbackUrl")).toBe("/ar/posts");
+  });
+
+  it("refuses a non-admin at a prefixed admin route, in their locale", () => {
+    const result = authorized({
+      auth: { user: { id: "u1", role: "USER" } } as AuthorizedParams["auth"],
+      request: {
+        nextUrl: new URL("/ar/admin", "http://localhost:3000"),
+      } as AuthorizedParams["request"],
+    });
+
+    const location = new URL((result as Response).headers.get("location")!);
+    expect(location.pathname).toBe("/ar/forbidden");
+  });
+
+  it("does not gate a path whose first segment merely starts like a locale", () => {
+    // `/arabic` is not an `ar` path. A `startsWith("/ar")` strip would have
+    // turned it into `/abic` and matched nothing, which is the harmless
+    // direction — but `/article` would become `/ticle`, and a route named
+    // `/ar/ticle` existing is all it takes for that to matter.
+    expect(authorized(anonymousRequestFor("/arabic"))).toBe(true);
+  });
+
+  it("gates the default locale's prefix too, though it is never served", () => {
+    // next-intl redirects `/en/dashboard` to `/dashboard`, but this gate runs
+    // first. If it did not recognise the prefix, the protection of every route
+    // would depend on which middleware ran first.
+    const result = authorized(anonymousRequestFor("/en/dashboard"));
+
+    expect(result).toBeInstanceOf(Response);
+  });
+});

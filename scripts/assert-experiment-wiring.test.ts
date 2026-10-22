@@ -112,14 +112,14 @@ describe("R2 — the route files", () => {
 
   it("asks for every segment file both arms need", () => {
     expect(requiredFiles(ROUTED)).toEqual([
-      "src/app/demo/page.tsx",
-      "src/app/demo/layout.tsx",
-      "src/app/demo/loading.tsx",
-      "src/app/demo/error.tsx",
-      "src/app/demo/v/[variant]/page.tsx",
-      "src/app/demo/v/[variant]/loading.tsx",
-      "src/app/demo/v/[variant]/error.tsx",
-      "src/app/demo/v/[variant]/not-found.tsx",
+      "src/app/[locale]/demo/page.tsx",
+      "src/app/[locale]/demo/layout.tsx",
+      "src/app/[locale]/demo/loading.tsx",
+      "src/app/[locale]/demo/error.tsx",
+      "src/app/[locale]/demo/v/[variant]/page.tsx",
+      "src/app/[locale]/demo/v/[variant]/loading.tsx",
+      "src/app/[locale]/demo/v/[variant]/error.tsx",
+      "src/app/[locale]/demo/v/[variant]/not-found.tsx",
     ]);
   });
 
@@ -130,16 +130,16 @@ describe("R2 — the route files", () => {
 
   it("reports a missing variant page", () => {
     const files = completeTree(ROUTED);
-    delete files["src/app/demo/v/[variant]/page.tsx"];
+    delete files["src/app/[locale]/demo/v/[variant]/page.tsx"];
 
     const findings = checkRouteFiles(reader(files), [ROUTED]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.file).toBe("src/app/demo/v/[variant]/page.tsx");
+    expect(findings[0]?.file).toBe("src/app/[locale]/demo/v/[variant]/page.tsx");
   });
 
   it("reports a missing loading segment", () => {
     const files = completeTree(ROUTED);
-    delete files["src/app/demo/loading.tsx"];
+    delete files["src/app/[locale]/demo/loading.tsx"];
     expect(checkRouteFiles(reader(files), [ROUTED])).toHaveLength(1);
   });
 });
@@ -246,7 +246,7 @@ describe("R4 — header sanitising", () => {
 describe("R5 — the variant lists", () => {
   const location = {
     experimentId: "demo",
-    module: "src/app/demo/_components/variants.ts",
+    module: "src/app/[locale]/demo/_components/variants.ts",
     constant: "DEMO_VARIANT_IDS",
   };
 
@@ -311,7 +311,7 @@ describe("R5 — the variant lists", () => {
 });
 
 describe("R6 — the variant page", () => {
-  const file = "src/app/demo/v/[variant]/page.tsx";
+  const file = "src/app/[locale]/demo/v/[variant]/page.tsx";
   const good = `
     export function generateStaticParams() { return []; }
     export const metadata = { robots: { index: false, follow: true } };
@@ -412,7 +412,7 @@ describe("R7 — no request-scoped reads in the subtree", () => {
     // The tempting way to write this feature, and the one that gives up the
     // prerender while keeping the rewrite.
     const findings = checkNoRequestReads(process.cwd(), (relativePath) =>
-      relativePath === "src/app/pricing/page.tsx"
+      relativePath === "src/app/[locale]/pricing/page.tsx"
         ? "import { headers } from 'next/headers'; export default async function P(){ const h = await headers(); return null; }"
         : createFileReader(process.cwd())(relativePath),
     );

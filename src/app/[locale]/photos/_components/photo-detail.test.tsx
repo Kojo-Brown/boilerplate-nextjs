@@ -1,6 +1,10 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+// The component renders `<Link>` from `@/i18n/navigation`, which reads the
+// active locale from context — so it needs a provider even in a test that is
+// not about translation. `renderWithProviders` supplies it.
+import { renderWithProviders as render } from "@/test/render";
 import { PHOTOS, type Photo } from "@/lib/photos";
 import { PhotoDetail } from "./photo-detail";
 

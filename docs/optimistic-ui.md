@@ -9,7 +9,7 @@ Both hooks are about a mutation in flight, and they own different halves of it:
 | `useActionState` | the **result** — pending flag, field errors, message | React, when the action resolves |
 | `useOptimistic`  | the **displayed server state** during the round trip | React, when the transition ends |
 
-`src/app/(dashboard)/posts/[id]/_components/post-editor.tsx` uses both against
+`src/app/[locale]/(dashboard)/posts/[id]/_components/post-editor.tsx` uses both against
 two real mutations: `updatePostAction` (a form save) and `togglePublishAction`
 (a button).
 
@@ -108,7 +108,7 @@ the decision.
 Assertions about an optimistic value are assertions about a _frame_: it exists
 only while the transition is pending. So the tests hand the mocked action a
 promise they settle by hand
-(`src/app/(dashboard)/posts/[id]/_components/post-editor.test.tsx`), which is
+(`src/app/[locale]/(dashboard)/posts/[id]/_components/post-editor.test.tsx`), which is
 what makes the pending state observable at all. A mock that resolves
 immediately would leave every one of those tests passing vacuously.
 

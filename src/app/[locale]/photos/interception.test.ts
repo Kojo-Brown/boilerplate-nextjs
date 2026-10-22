@@ -17,16 +17,26 @@ import { describe, expect, it } from "vitest";
  * the same thing one level up, for the same reason: the interesting failures
  * in this application are the ones that leave everything green.
  */
-const APP = path.join(process.cwd(), "src", "app");
+/**
+ * The routing root, which is the `[locale]` segment and not `src/app`.
+ *
+ * `@modal` and `photos` have to be siblings for `(.)photos/[id]` to resolve,
+ * and they are siblings *inside* the segment — moving the tree under `[locale]`
+ * moved the anchor with it. `src/app` itself now holds only `api/` and
+ * `global-error.tsx`, neither of which takes part in the interception, so a
+ * version of this file that kept looking there reported the slot as missing
+ * while the slot was working.
+ */
+const APP = path.join(process.cwd(), "src", "app", "[locale]");
 
 /**
  * Written out longhand rather than composed from variables. A constant shared
  * with the code under test would follow it wherever it drifted to, which is
  * exactly what this file is here to prevent.
  */
-const INTERCEPTOR = "src/app/@modal/(.)photos/[id]/page.tsx";
-const SLOT_DEFAULT = "src/app/@modal/default.tsx";
-const INTERCEPTED_ROUTE = "src/app/photos/[id]/page.tsx";
+const INTERCEPTOR = "src/app/[locale]/@modal/(.)photos/[id]/page.tsx";
+const SLOT_DEFAULT = "src/app/[locale]/@modal/default.tsx";
+const INTERCEPTED_ROUTE = "src/app/[locale]/photos/[id]/page.tsx";
 
 function repoFile(relative: string): string {
   return path.join(process.cwd(), relative);

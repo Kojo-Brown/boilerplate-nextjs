@@ -57,6 +57,22 @@ export const PROXY_MODULE = "src/proxy.ts";
 export const EDGE_MODULE = "src/lib/experiments/edge.ts";
 export const NEXT_CONFIG = "next.config.ts";
 
+/**
+ * Where an experiment's route path resolves to on disk.
+ *
+ * `route.path` in the registry is a *public* path — `/pricing` — because that
+ * is what the proxy matches a request against and what `next.config.ts` pins a
+ * `Cache-Control` on. The page that answers it lives under the `[locale]`
+ * segment, so the two differ by this prefix and the gate has to apply it
+ * before it looks for a file.
+ *
+ * One constant rather than three `path.posix.join("src/app", …)` calls: it was
+ * three, and a restructure that moved the tree has to be able to miss none of
+ * them. Missing one means the gate reports a page as absent and the build fails
+ * with a message pointing at a path that was never where the file was.
+ */
+export const APP_SEGMENT_ROOT = "src/app/[locale]";
+
 /** The two calls that make bucketing happen at all. */
 export const REQUIRED_PROXY_CALLS = [
   "resolveExperimentContext",
@@ -96,7 +112,7 @@ export interface VariantListLocation {
 export const VARIANT_LISTS: readonly VariantListLocation[] = [
   {
     experimentId: "pricing-cta",
-    module: "src/app/pricing/_components/variants.ts",
+    module: "src/app/[locale]/pricing/_components/variants.ts",
     constant: "PRICING_VARIANT_IDS",
   },
 ];
@@ -303,9 +319,9 @@ export function requiredFiles(experiment: Experiment): string[] {
   const { route } = experiment;
   if (!route) return [];
 
-  const canonicalSegment = path.posix.join("src/app", route.path);
+  const canonicalSegment = path.posix.join(APP_SEGMENT_ROOT, route.path);
   const variantSegment = path.posix.join(
-    "src/app",
+    APP_SEGMENT_ROOT,
     route.rewritePrefix,
     "[variant]",
   );
@@ -530,7 +546,7 @@ export function checkVariantPage(
     if (!route) continue;
 
     const file = path.posix.join(
-      "src/app",
+      APP_SEGMENT_ROOT,
       route.rewritePrefix,
       "[variant]",
       "page.tsx",
@@ -621,7 +637,7 @@ export function checkNoRequestReads(
     const { route } = experiment;
     if (!route) continue;
 
-    const directory = path.posix.join("src/app", route.path);
+    const directory = path.posix.join(APP_SEGMENT_ROOT, route.path);
     for (const file of collectSourceFiles(root, directory)) {
       const text = read(file);
       if (text === null) continue;

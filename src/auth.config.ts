@@ -1,5 +1,7 @@
 import { SESSION_COOKIE_NAME, USE_SECURE_COOKIES } from "@/lib/auth/deployment";
 import { SESSION_IDLE_MAX_AGE_S } from "@/lib/auth/policy";
+import { DEFAULT_LOCALE, type Locale } from "@/i18n/locales";
+import { localisePath, splitLocalePath } from "@/i18n/path";
 import { safeRedirectPath } from "@/lib/security/safe-redirect";
 import type { NextAuthConfig } from "next-auth";
 
@@ -48,8 +50,8 @@ export const POST_LOGIN_PATH = "/dashboard";
  * here. Writing the check on both sides means that argument does not have to be
  * re-derived by whoever adds the next prefix.
  */
-function loginRedirect(nextUrl: URL): Response {
-  const loginUrl = new URL("/login", nextUrl);
+function loginRedirect(nextUrl: URL, locale: Locale): Response {
+  const loginUrl = new URL(localisePath(locale, "/login"), nextUrl);
   loginUrl.searchParams.set(
     "callbackUrl",
     safeRedirectPath(nextUrl.pathname + nextUrl.search, POST_LOGIN_PATH),
@@ -119,7 +121,22 @@ export const authConfig = {
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const isAdmin = auth?.user?.role === "ADMIN";
-      const { pathname } = nextUrl;
+
+      // The locale comes off the front before anything is matched against it.
+      //
+      // Every prefix in the two lists below is a *public* path — `/dashboard`,
+      // `/admin` — and the URL of that route in a prefixed locale is
+      // `/ar/dashboard`, which starts with none of them. Matching the raw
+      // pathname stopped gating every route in every locale but the default
+      // the moment the `[locale]` segment existed, and nothing in the suite
+      // would have said so: the pages still refuse, one streamed boundary
+      // later. See the header of `@/i18n/path`.
+      //
+      // `locale` is also what the refusals below are built at, so an anonymous
+      // visitor to `/ar/dashboard` is sent to `/ar/login` and stays in the
+      // language they were reading.
+      const { locale: prefix, pathname } = splitLocalePath(nextUrl.pathname);
+      const locale = prefix ?? DEFAULT_LOCALE;
 
       const isAdminRoute = ADMIN_PREFIXES.some((prefix) =>
         pathname.startsWith(prefix),
@@ -131,14 +148,16 @@ export const authConfig = {
 
       // Admin routes: must be authenticated AND have ADMIN role.
       if (isAdminRoute) {
-        if (!isLoggedIn) return loginRedirect(nextUrl);
+        if (!isLoggedIn) return loginRedirect(nextUrl, locale);
         if (!isAdmin) {
-          return Response.redirect(new URL("/forbidden", nextUrl));
+          return Response.redirect(
+            new URL(localisePath(locale, "/forbidden"), nextUrl),
+          );
         }
       }
 
       // Regular protected routes: must be authenticated.
-      if (isProtected && !isLoggedIn) return loginRedirect(nextUrl);
+      if (isProtected && !isLoggedIn) return loginRedirect(nextUrl, locale);
 
       // Authenticated users are redirected away from auth pages, to wherever
       // the gate above said they were going.
@@ -156,9 +175,15 @@ export const authConfig = {
       // reason to trust it — it arrives back over the network like anything else
       // in a URL, and nothing stops a caller from putting their own value there.
       if (isLoggedIn && isAuthPage) {
+        // `callbackUrl` is a full public path and already carries whatever
+        // locale the gate put in it, so it is used as-is. Only the fallback is
+        // localised — `POST_LOGIN_PATH` is a literal in this file, so it has
+        // no locale of its own and would otherwise send an `ar` visitor who
+        // arrived at `/ar/login` with no `callbackUrl` to the English
+        // dashboard.
         const destination = safeRedirectPath(
           nextUrl.searchParams.get("callbackUrl"),
-          POST_LOGIN_PATH,
+          localisePath(locale, POST_LOGIN_PATH),
         );
         return Response.redirect(new URL(destination, nextUrl));
       }

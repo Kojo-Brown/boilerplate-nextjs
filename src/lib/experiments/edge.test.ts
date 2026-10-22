@@ -300,6 +300,22 @@ describe("carryOverHeaders", () => {
 });
 
 describe("applyExperiments", () => {
+  /**
+   * `rewriteTo` is the caller's, not this module's.
+   *
+   * It used to be derived here from `context.rewrite?.to`, and the `[locale]`
+   * segment is what took that away: every page request needs a rewrite now,
+   * not only a bucketed one, because `/demo` is answered by
+   * `src/app/[locale]/demo` and the path that reaches it carries a locale.
+   * Only `src/proxy.ts` knows both halves — the locale `next-intl` settled on
+   * and the arm this visitor was assigned — so it composes them with
+   * `internalPath` and passes the result. These tests pass the same thing the
+   * proxy would, which is what keeps them about the cookies and the headers
+   * rather than about path arithmetic that `@/i18n/path` already covers.
+   */
+  const servedBy = (context: { rewrite?: { to: string } | undefined }, pathname: string): string =>
+    `/en${context.rewrite?.to ?? pathname}`;
+
   it("rewrites to the variant path", () => {
     const { request, context } = contextFor("/demo", {
       cookies: {
@@ -307,7 +323,9 @@ describe("applyExperiments", () => {
         [ASSIGNMENT_COOKIE]: "demo:treatment",
       },
     });
-    const response = applyExperiments(request, context, NextResponse.next());
+    const response = applyExperiments(request, context, NextResponse.next(), {
+      rewriteTo: servedBy(context, "/demo"),
+    });
     expect(response.headers.get("x-middleware-rewrite")).toContain(
       "/demo/v/treatment",
     );
@@ -315,13 +333,19 @@ describe("applyExperiments", () => {
 
   it("keeps the query string on a rewrite, so an override survives a reload", () => {
     const { request, context } = contextFor("/demo?bkt_demo=treatment");
-    const response = applyExperiments(request, context, NextResponse.next());
+    const response = applyExperiments(request, context, NextResponse.next(), {
+      rewriteTo: servedBy(context, "/demo"),
+    });
     expect(response.headers.get("x-middleware-rewrite")).toContain(
       "bkt_demo=treatment",
     );
   });
 
-  it("does not rewrite the canonical arm", () => {
+  it("does not rewrite when the caller names no target", () => {
+    // What `undefined` means: a path outside the `[locale]` segment, which is
+    // `/api/*`. The canonical arm is no longer one of these cases — it is a
+    // rewrite to the canonical page's own segment path, which the proxy's own
+    // tests assert because only the proxy composes it.
     const { request, context } = contextFor("/demo", {
       cookies: {
         [VISITOR_COOKIE]: KNOWN_VISITOR,

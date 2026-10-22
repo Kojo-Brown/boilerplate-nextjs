@@ -42,6 +42,12 @@ vi.mock("next/navigation", () => ({
   usePathname: vi.fn(() => "/"),
   useSearchParams: vi.fn(() => new URLSearchParams()),
   redirect: vi.fn(),
+  // Used by `next-intl`'s navigation wrappers and by nothing this repository
+  // wrote. This mock is a complete stand-in for the module, not a list of the
+  // exports our own code happens to call: next-intl's `createNavigation`
+  // imports it at module scope, so its absence was not a failing assertion but
+  // two unrelated tests of the dashboard layout refusing to import.
+  permanentRedirect: vi.fn(),
   notFound: vi.fn(),
   useParams: vi.fn(() => ({})),
 }));

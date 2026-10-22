@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import * as React from "react";
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+// Every shell here renders the navigation, which reads the catalogue.
+import { renderWithProviders as render } from "@/test/render";
 
 /**
  * Every shell in the application must mount the theme control.
@@ -21,8 +23,27 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "system", setTheme: vi.fn() }),
 }));
 
-vi.mock("next/link", () => ({
-  default: ({
+import { AppShell } from "@/components/nav/app-shell";
+import AuthLayout from "@/app/[locale]/(auth)/layout";
+import BlogLayout from "@/app/[locale]/blog/layout";
+import PhotosLayout from "@/app/[locale]/photos/layout";
+import HomePage from "@/app/[locale]/page";
+
+/**
+ * `@/i18n/navigation`, which is what the components under test import now.
+ *
+ * Mocking `next/link` and a one-export `next/navigation` was enough until the
+ * locale-aware wrappers arrived. It stopped being enough in two ways at once:
+ * the components no longer import either module, so the mocks were inert, and
+ * replacing `next/navigation` wholesale with `{usePathname}` removed the
+ * `redirect` and `permanentRedirect` that `next-intl`'s own wrappers import at
+ * module scope — so the file failed to import rather than failing an
+ * assertion. `src/test/setup.ts` has the complete `next/navigation` stand-in;
+ * this mock is only about the two things these tests steer.
+ */
+vi.mock("@/i18n/navigation", () => ({
+  usePathname: () => "/",
+  Link: ({
     href,
     children,
     ...props
@@ -37,15 +58,6 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-vi.mock("next/navigation", () => ({
-  usePathname: () => "/",
-}));
-
-import { AppShell } from "@/components/nav/app-shell";
-import AuthLayout from "@/app/[locale]/(auth)/layout";
-import BlogLayout from "@/app/[locale]/blog/layout";
-import PhotosLayout from "@/app/[locale]/photos/layout";
-import HomePage from "@/app/[locale]/page";
 
 const CHILD = <p>page content</p>;
 
