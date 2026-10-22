@@ -313,8 +313,10 @@ describe("applyExperiments", () => {
    * proxy would, which is what keeps them about the cookies and the headers
    * rather than about path arithmetic that `@/i18n/path` already covers.
    */
-  const servedBy = (context: { rewrite?: { to: string } | undefined }, pathname: string): string =>
-    `/en${context.rewrite?.to ?? pathname}`;
+  const servedBy = (
+    context: { rewrite?: { to: string } | undefined },
+    pathname: string,
+  ): string => `/en${context.rewrite?.to ?? pathname}`;
 
   it("rewrites to the variant path", () => {
     const { request, context } = contextFor("/demo", {

@@ -261,7 +261,10 @@ const LOCALISED_DOCUMENTS: readonly string[] = [
  * The two documents Next generates above the `[locale]` segment, which exist
  * once rather than once per locale.
  */
-const UNLOCALISED_DOCUMENTS: readonly string[] = ["/_global-error", "/_not-found"];
+const UNLOCALISED_DOCUMENTS: readonly string[] = [
+  "/_global-error",
+  "/_not-found",
+];
 
 /**
  * Every document the audit must have covered.

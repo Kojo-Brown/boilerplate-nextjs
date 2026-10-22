@@ -2,7 +2,6 @@
 
 import { Link } from "@/i18n/navigation";
 
-
 /**
  * The editor's own boundary.
  *

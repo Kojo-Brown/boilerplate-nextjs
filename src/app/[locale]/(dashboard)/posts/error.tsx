@@ -10,7 +10,10 @@ export default function PostsError({
   return (
     <div className="flex flex-col items-center justify-center gap-4 py-16">
       <h2 className="text-lg font-semibold">Something went wrong</h2>
-      <p className="max-w-sm text-center text-sm" style={{ color: "var(--muted-foreground)" }}>
+      <p
+        className="max-w-sm text-center text-sm"
+        style={{ color: "var(--muted-foreground)" }}
+      >
         {error.message || "Failed to load posts. Please try again."}
       </p>
       <button

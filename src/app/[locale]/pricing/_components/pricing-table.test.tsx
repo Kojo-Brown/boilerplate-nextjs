@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
+// The call to action is a `Link` from `@/i18n/navigation` now — it was a bare
+// `<a href="/register">`, which rule R4 of `scripts/assert-locale-hrefs.ts`
+// caught as internal navigation that drops the visitor's locale — so the
+// component needs the intl context.
+import { renderWithProviders as render } from "@/test/render";
 import { PLANS, annualMonthlyEquivalentCents, formatUsd } from "./plans";
 import { PricingTable } from "./pricing-table";
 import { PRICING_VARIANT_IDS } from "./variants";

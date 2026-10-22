@@ -20,7 +20,9 @@ const variantStyles: Record<NotificationVariant, { dot: string }> = {
   warning: { dot: "bg-yellow-500" },
 };
 
-export function NotificationsWidget({ notifications }: NotificationsWidgetProps) {
+export function NotificationsWidget({
+  notifications,
+}: NotificationsWidgetProps) {
   return (
     <div
       className="rounded-xl border p-6"

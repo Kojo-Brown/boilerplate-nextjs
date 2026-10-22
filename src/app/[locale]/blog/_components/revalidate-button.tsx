@@ -3,7 +3,13 @@
 import { useTransition } from "react";
 import { revalidateBlogAction } from "@/actions/blog";
 
-export function RevalidateButton({ path, label }: { path: string; label: string }) {
+export function RevalidateButton({
+  path,
+  label,
+}: {
+  path: string;
+  label: string;
+}) {
   const [isPending, startTransition] = useTransition();
 
   function handleClick() {

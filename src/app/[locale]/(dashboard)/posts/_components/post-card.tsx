@@ -22,7 +22,9 @@ export function PostCard({ post, className }: PostCardProps) {
       style={{ backgroundColor: "var(--background)" }}
     >
       <div className="flex items-start justify-between gap-3">
-        <h3 className="line-clamp-2 text-sm font-semibold leading-snug">{post.title}</h3>
+        <h3 className="line-clamp-2 text-sm font-semibold leading-snug">
+          {post.title}
+        </h3>
         <span
           className={cn(
             "shrink-0 rounded-full px-2 py-0.5 text-xs font-medium",
@@ -35,7 +37,10 @@ export function PostCard({ post, className }: PostCardProps) {
         </span>
       </div>
 
-      <div className="mt-auto flex items-center justify-between text-xs" style={{ color: "var(--muted-foreground)" }}>
+      <div
+        className="mt-auto flex items-center justify-between text-xs"
+        style={{ color: "var(--muted-foreground)" }}
+      >
         <span>{post.author.name ?? post.author.email}</span>
         <time dateTime={post.createdAt.toISOString()}>{formatted}</time>
       </div>

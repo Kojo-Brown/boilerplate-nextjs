@@ -40,6 +40,34 @@ const config: NextConfig = {
      * exemption. See `src/app/global-not-found.tsx`.
      */
     globalNotFound: true,
+    /**
+     * Enables `next/root-params`, which is how `src/i18n/request.ts` learns the
+     * locale.
+     *
+     * The alternative is `requestLocale`, which `next-intl` documents and
+     * deprecates, and which does not work for a prerender: it is request-scoped,
+     * so during a build it resolves to `undefined` and the request config falls
+     * back to `DEFAULT_LOCALE`. The visible consequence was that every
+     * server-rendered `<Link>` outside the root layout emitted an *unprefixed*
+     * href — `/ar` was prerendered with `href="/blog"` on every link, so one
+     * click took an Arabic visitor to the English document. `e2e/locale.spec.ts`
+     * is what found it.
+     *
+     * `setRequestLocale` is next-intl's own answer to that, and it has to be
+     * called in every layout *and every page*, because the cache it writes is
+     * scoped to one render entry point. That meant `await params` at the top of
+     * twenty-two page components — which would have made each one async, and an
+     * async page is a page whose entire body sits behind an await. Three of them
+     * are asserted to be synchronous functions in
+     * `src/app/[locale]/(dashboard)/auth-guards.test.ts` for exactly that
+     * reason, and `scripts/assert-streaming-boundaries.ts` measures the shells
+     * it would have collapsed.
+     *
+     * Root params are provided per prerendered variant, so they are available
+     * at build time and the locale resolves once, in the request config, for
+     * every render in the tree.
+     */
+    rootParams: true,
   },
   /**
    * React Compiler, on for every client component.

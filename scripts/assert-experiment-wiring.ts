@@ -44,6 +44,8 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import { ROUTE_BUDGETS } from "./assert-bundle-budget";
 import { EXPECTED_ROUTES } from "./assert-route-shape";
 import { INTERNAL_REQUEST_HEADERS } from "../src/lib/experiments/edge";
@@ -834,23 +836,40 @@ export function checkGateCoverage(
     ];
 
     for (const declared of routes) {
-      if (
-        !EXPECTED_ROUTES.some((expectation) => expectation.route === declared)
-      ) {
-        findings.push({
-          file: "scripts/assert-route-shape.ts",
-          rule: "R8",
-          message:
-            `${declared} is not in EXPECTED_ROUTES. An experiment route that stops ` +
-            "prerendering is the failure this whole design is arranged to avoid, and " +
-            "nothing would report it",
-        });
+      // Once per locale, because the two gates key their lists differently and
+      // both of those keyings are right for what they measure.
+      //
+      // `EXPECTED_ROUTES` is per locale: route *shape* is what it checks, and a
+      // locale whose experiment page stopped prerendering while the other's
+      // still did is precisely the silent failure this rule exists for. So the
+      // requirement is that every locale's copy is listed, not that one of them
+      // is.
+      //
+      // `ROUTE_BUDGETS` is keyed by the `[locale]` segment form, because the
+      // script payload is the same whichever language the page is in — see the
+      // header of that list. One entry covers every locale there.
+      for (const locale of LOCALES) {
+        const expected = internalPath(locale, declared);
+        if (
+          !EXPECTED_ROUTES.some((expectation) => expectation.route === expected)
+        ) {
+          findings.push({
+            file: "scripts/assert-route-shape.ts",
+            rule: "R8",
+            message:
+              `${expected} is not in EXPECTED_ROUTES. An experiment route that stops ` +
+              "prerendering is the failure this whole design is arranged to avoid, and " +
+              "nothing would report it",
+          });
+        }
       }
-      if (!ROUTE_BUDGETS.some((budget) => budget.route === declared)) {
+
+      const budgeted = declared === "/" ? "/[locale]" : `/[locale]${declared}`;
+      if (!ROUTE_BUDGETS.some((budget) => budget.route === budgeted)) {
         findings.push({
           file: "scripts/assert-bundle-budget.ts",
           rule: "R8",
-          message: `${declared} is not in ROUTE_BUDGETS, so it ships unmeasured`,
+          message: `${budgeted} is not in ROUTE_BUDGETS, so it ships unmeasured`,
         });
       }
     }

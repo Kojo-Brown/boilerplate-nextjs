@@ -3,12 +3,14 @@ import {
   check,
   checkResolvable,
   checkUnprefixed,
+  checkRawAnchors,
   checkUnresolvableAudit,
   hrefPath,
   hrefsIn,
   resolves,
   routePatterns,
   sourceFiles,
+  RAW_ANCHOR_ALLOWED,
   UNRESOLVABLE_ALLOWED,
 } from "./assert-locale-hrefs.js";
 
@@ -80,9 +82,23 @@ describe("hrefPath", () => {
 });
 
 describe("hrefsIn", () => {
-  it("reads a JSX string attribute", () => {
+  it("reads a JSX string attribute, and the element it is on", () => {
+    // The element is what rule R4 reads: it is how a `<Link>` is told from a
+    // bare `<a>` doing internal navigation.
     const sites = hrefsIn("x.tsx", `<Link href="/blog">b</Link>`);
-    expect(sites).toEqual([{ file: "x.tsx", raw: "/blog", pattern: "/blog" }]);
+    expect(sites).toEqual([
+      { file: "x.tsx", raw: "/blog", pattern: "/blog", element: "Link" },
+    ]);
+  });
+
+  it("names a bare anchor as such", () => {
+    const sites = hrefsIn("x.tsx", `<a href="/blog">b</a>`);
+    expect(sites[0]?.element).toBe("a");
+  });
+
+  it("reports no element for an object literal, which belongs to no tag", () => {
+    const sites = hrefsIn("x.ts", `const a = [{ href: "/admin" }];`);
+    expect(sites[0]?.element).toBeNull();
   });
 
   it("blanks an interpolation rather than giving up on the href", () => {
@@ -93,7 +109,10 @@ describe("hrefsIn", () => {
   it("reads the href of an object literal", () => {
     // How `nav-items.ts` holds the navigation. A gate that only read JSX would
     // have had nothing to say about the six links in the sidebar.
-    const sites = hrefsIn("x.ts", `const a = [{ labelKey: "x", href: "/admin" }];`);
+    const sites = hrefsIn(
+      "x.ts",
+      `const a = [{ labelKey: "x", href: "/admin" }];`,
+    );
     expect(sites[0]?.pattern).toBe("/admin");
   });
 
@@ -160,6 +179,61 @@ describe("R3 — the unreadable-href audit", () => {
   it("gives every exemption a reason", () => {
     for (const exception of UNRESOLVABLE_ALLOWED) {
       expect(exception.why.length).toBeGreaterThan(20);
+    }
+  });
+});
+
+describe("R4 — internal navigation goes through Link", () => {
+  it("passes against the repository as it stands", () => {
+    expect(checkRawAnchors(REPO)).toEqual([]);
+  });
+
+  it("fires on a bare anchor to a route, and not on one to a non-route", () => {
+    // This is the rule that replaced `@next/next/no-html-link-for-pages`, which
+    // a root dynamic segment turned into a false-positive generator: every
+    // single-segment path matched `/[locale]`, so `<a href="/elsewhere/">` in a
+    // skip-link test was reported as a link to a page. The distinction is
+    // *resolves*, not *looks like*.
+    const patterns = new Set(["/blog"]);
+
+    expect(
+      hrefsIn("x.tsx", `<a href="/blog">b</a>`).filter(
+        (site) =>
+          site.element === "a" &&
+          site.pattern !== null &&
+          resolves(hrefPath(site.pattern), patterns),
+      ),
+    ).toHaveLength(1);
+
+    expect(
+      hrefsIn("x.tsx", `<a href="/elsewhere/">e</a>`).filter(
+        (site) =>
+          site.element === "a" &&
+          site.pattern !== null &&
+          resolves(hrefPath(site.pattern), patterns),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("gives every exemption a reason", () => {
+    for (const exception of RAW_ANCHOR_ALLOWED) {
+      expect(exception.why.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("does not report a fragment or an off-site link", () => {
+    const patterns = routePatterns(REPO);
+    for (const href of [
+      "#main-content",
+      "https://example.test",
+      "mailto:a@b",
+    ]) {
+      expect(
+        hrefsIn("x.tsx", `<a href="${href}">x</a>`).filter(
+          (site) =>
+            site.pattern !== null && resolves(hrefPath(site.pattern), patterns),
+        ),
+      ).toHaveLength(0);
     }
   });
 });

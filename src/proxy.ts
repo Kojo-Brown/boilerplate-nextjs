@@ -321,10 +321,7 @@ export default async function proxy(
   // unbucketed request, because the two paths were the same string; they are
   // not any more, so every page request has to say which document it serves or
   // the manifest lookup misses and the shell's scripts go unauthorised.
-  const csp = decideCsp(
-    request,
-    served === undefined ? {} : { served },
-  );
+  const csp = decideCsp(request, served === undefined ? {} : { served });
 
   // The request headers the rewrite (or the pass-through) carries. Built here so
   // the policy can be added to them before the render reads it; `applyExperiments`

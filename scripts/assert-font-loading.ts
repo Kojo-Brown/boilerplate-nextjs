@@ -213,15 +213,74 @@ export const GENERIC_FAMILIES: readonly string[] = [
 ];
 
 /**
+ * The prerendered fallback shells for the `[locale]` segment.
+ *
+ * Next writes one of these for every route under a dynamic segment — the
+ * document it would stream for a param value it has not seen — and for the root
+ * segment that means `.next/server/app/[locale]/admin.html` and seventeen like
+ * it. They carry no font variables because they carry nothing: the root layout
+ * narrows the segment with `isLocale` and calls `notFound()` above everything it
+ * renders, including the `<html className={fontVariables}>` that this gate is
+ * about, so for an unknown param there is no element of ours in the document at
+ * all.
+ *
+ * That is the deliberate half of the trade rather than an oversight. A layout
+ * that wrote the chrome before deciding whether the locale existed would serve
+ * `/xx/admin` as a complete, plausible, 200-answering page — `next-intl`'s
+ * request config falls back to the default locale, so every string in it would
+ * be correct. `scripts/assert-focus-management.ts` exempts the same family for
+ * the same reason and its `SEGMENT_FALLBACK_SHELLS` has the longer note.
+ *
+ * Derived from the route list rather than typed out, so a new route cannot
+ * arrive with an unexempted shell and a reviewer cannot be asked to notice the
+ * eighteenth line of a list.
+ */
+const SEGMENT_FALLBACK_DOCUMENTS: readonly string[] = [
+  "",
+  "/login",
+  "/register",
+  "/forbidden",
+  "/blog",
+  "/blog/[slug]",
+  "/photos",
+  "/photos/[id]",
+  "/pricing",
+  "/pricing/v/[variant]",
+  "/dashboard",
+  "/posts",
+  "/posts/[id]",
+  "/admin",
+  "/settings/security",
+  "/upload",
+  "/images",
+  "/(.)photos/[id]",
+].map((route) => `[locale]${route}.html`);
+
+/**
  * Documents that legitimately carry no font variables.
  *
  * `/_global-error` replaces the root layout rather than nesting inside it, so
  * its `<html>` is rendered by Next and never receives the class that defines
- * `--font-inter` and `--font-jetbrains-mono`. Every other document in the
- * build descends from `app/layout.tsx` and must have them.
+ * `--font-inter` and `--font-jetbrains-mono`.
+ *
+ * `/_not-found` joined it with the `[locale]` restructure, and for the same
+ * reason rather than a related one. It used to be `src/app/not-found.tsx`
+ * rendering inside the root layout, which is where the class comes from; that
+ * file is now `src/app/[locale]/not-found.tsx`, the boundary for paths inside
+ * the segment, and the document for a path the segment cannot match at all is
+ * `src/app/global-not-found.tsx` — a standalone document, outside every layout,
+ * exactly like `global-error.tsx`. It declares `ui-sans-serif, system-ui,
+ * sans-serif` inline for the same reason that one does: a last-resort page
+ * whose legibility depends on the build graph it is the fallback for is not a
+ * last resort.
+ *
+ * Every other document in the build descends from
+ * `src/app/[locale]/layout.tsx` and must have them.
  */
 export const DOCUMENTS_WITHOUT_ROOT_LAYOUT: readonly string[] = [
   "_global-error.html",
+  "_not-found.html",
+  ...SEGMENT_FALLBACK_DOCUMENTS,
 ];
 
 /** Percentage points of slack when comparing a written override to a computed one. */

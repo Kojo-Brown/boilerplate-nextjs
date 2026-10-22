@@ -6,6 +6,7 @@ import {
   type Plan,
 } from "./plans";
 import type { PricingVariantId } from "./variants";
+import { Link } from "@/i18n/navigation";
 import { cn } from "@/lib/cn";
 
 /**
@@ -111,7 +112,7 @@ function PlanCard({
         ))}
       </ul>
 
-      <a
+      <Link
         href="/register"
         className={cn(
           "mt-auto rounded-lg px-4 py-2.5 text-center text-sm font-medium",
@@ -122,7 +123,7 @@ function PlanCard({
         style={plan.featured ? undefined : { borderColor: "var(--border)" }}
       >
         {annualFirst ? "Start annual plan" : "Get started"}
-      </a>
+      </Link>
     </li>
   );
 }

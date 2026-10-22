@@ -1,4 +1,5 @@
-import { Link } from "@/i18n/navigation";
+import { useLocale } from "next-intl";
+import { Link, getPathname } from "@/i18n/navigation";
 import { BlurImage } from "@/components/ui/blur-image";
 import { PHOTO_HEIGHT, PHOTO_WIDTH, photoSrc, type Photo } from "@/lib/photos";
 import { CopyLinkButton } from "./copy-link-button";
@@ -26,6 +27,13 @@ export interface PhotoDetailProps {
  */
 export function PhotoDetail({ photo, variant }: PhotoDetailProps) {
   const isModal = variant === "modal";
+  // Read rather than taken as a prop: both callers are pages under the
+  // `[locale]` segment, and the layout has already put the locale in
+  // `next-intl`'s request cache with `setRequestLocale` — so this is a cache
+  // read, not a request-time one, and the route stays prerendered.
+  // `scripts/assert-route-shape.ts` is what holds that: `/photos/[id]` is
+  // declared `prebuilt` there, so a dynamic read here fails the build.
+  const locale = useLocale();
 
   return (
     <div className="flex flex-col gap-4">
@@ -86,8 +94,17 @@ export function PhotoDetail({ photo, variant }: PhotoDetailProps) {
           // way to reach the un-intercepted route from inside the interceptor,
           // and it is also what a shared link does — which makes this the
           // fastest way to see that both render the same thing.
+          //
+          // The href goes through `getPathname` because an anchor gets no
+          // locale from anywhere: `<Link>` reads the active one and prefixes
+          // the path itself, and a bare `/photos/<id>` resolves to the default
+          // locale. So the one link in the application that has to be a full
+          // page load was also the one that dropped the visitor's language,
+          // which is rule R4 of `scripts/assert-locale-hrefs.ts` — the gate
+          // that replaced `no-html-link-for-pages` — finding something that
+          // rule never reported.
           <a
-            href={`/photos/${photo.id}`}
+            href={getPathname({ href: `/photos/${photo.id}`, locale })}
             className="text-sm underline underline-offset-4 transition-opacity hover:opacity-80"
             style={{ color: "var(--muted-foreground)" }}
           >

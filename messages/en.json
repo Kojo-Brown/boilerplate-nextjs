@@ -4,9 +4,9 @@
     "skipToContent": "Skip to main content",
     "theme": {
       "toggle": "Toggle theme",
-      "light": "Light",
-      "dark": "Dark",
-      "system": "System"
+      "light": "Light theme",
+      "dark": "Dark theme",
+      "system": "System theme"
     }
   },
   "nav": {

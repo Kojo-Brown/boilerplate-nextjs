@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
 import { useIsHydrated } from "@/hooks/use-is-hydrated";
@@ -96,11 +97,23 @@ const nextTheme: Record<Theme, Theme> = {
   dark: "system",
 };
 
-const themeLabel: Record<Theme, string> = {
-  system: "System theme",
-  light: "Light theme",
-  dark: "Dark theme",
-};
+/**
+ * The accessible name of each state, as a catalogue key under `common.theme`.
+ *
+ * A `Record<Theme, string>` of English literals until the catalogues were
+ * wired up, which meant the one control on every page of the application
+ * announced itself in English in every locale. The keys are the theme names
+ * themselves, so this map is the identity — it is kept rather than inlined
+ * because `useTranslations` is typed against the `en` catalogue through the
+ * `AppConfig` augmentation in `@/i18n/messages`, and spelling the keys out
+ * here is what makes a renamed message a compile error at the two call sites
+ * below rather than two labels that render as `common.theme.dark`.
+ */
+const themeLabelKey = {
+  system: "system",
+  light: "light",
+  dark: "dark",
+} as const satisfies Record<Theme, string>;
 
 /**
  * Cycles system → light → dark → system through `next-themes`.
@@ -131,6 +144,7 @@ const themeLabel: Record<Theme, string> = {
 export function ThemeToggle({ className }: { className?: string }) {
   const { theme, setTheme } = useTheme();
   const hydrated = useIsHydrated();
+  const t = useTranslations("common.theme");
   const current = (theme as Theme) ?? "system";
 
   if (!hydrated) {
@@ -139,10 +153,10 @@ export function ThemeToggle({ className }: { className?: string }) {
         variant="ghost"
         size="icon"
         className={className}
-        aria-label="Theme"
+        aria-label={t("toggle")}
       >
         <ContrastIcon className="h-4 w-4" />
-        <span className="sr-only">Theme</span>
+        <span className="sr-only">{t("toggle")}</span>
       </Button>
     );
   }
@@ -152,7 +166,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       variant="ghost"
       size="icon"
       className={className}
-      aria-label={themeLabel[current]}
+      aria-label={t(themeLabelKey[current])}
       onClick={() => setTheme(nextTheme[current])}
     >
       {current === "dark" ? (
@@ -162,7 +176,7 @@ export function ThemeToggle({ className }: { className?: string }) {
       ) : (
         <SystemIcon className="h-4 w-4" />
       )}
-      <span className="sr-only">{themeLabel[current]}</span>
+      <span className="sr-only">{t(themeLabelKey[current])}</span>
     </Button>
   );
 }

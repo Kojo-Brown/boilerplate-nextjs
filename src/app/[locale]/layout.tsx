@@ -187,7 +187,20 @@ export default async function RootLayout({
       suppressHydrationWarning
     >
       <body>
-        <SkipLink />
+        {/*
+          The label is passed in rather than read from the catalogue by
+          `<SkipLink>` itself, and the position of this element is why.
+          `<SkipLink>` has to be the *first* child of `<body>` — a skip link
+          after the navigation it exists to skip is decoration — which puts it
+          above `<IntlProvider>`, so there is no context for a
+          `useTranslations` of its own to read. Reading it on the server
+          instead would make the component async, which is the whole of the
+          note on `<IntlProvider>` below.
+
+          The prop already existed, described as "overridable for
+          localisation". This is that.
+        */}
+        <SkipLink>{CATALOGUES[locale].common.skipToContent}</SkipLink>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -197,25 +210,25 @@ export default async function RootLayout({
           <SessionProvider>
             <QueryProvider>
               {/*
-                * Client Components get the catalogue from here. It is inside
-                * the providers rather than wrapping them because only the tree
-                * below it calls `useTranslations()`, and the provider
-                * serialises the messages it is given into the RSC payload —
-                * mounting it higher would not add a string to the bundle, but
-                * it would put the one component that must stay a pure
-                * pass-through above the ones that have state.
-                *
-                * It is `@/components/providers/intl-provider` and not
-                * `next-intl`'s `NextIntlClientProvider` directly, because from
-                * a Server Component that name resolves to an *async* component
-                * that awaits the request config — which under
-                * `cacheComponents` ends the build on every page in the
-                * application. The wrapper is a `"use client"` module, so it
-                * gets the synchronous provider and takes the locale and the
-                * catalogue as props. Both are statically known: the locale
-                * comes from `generateStaticParams` and the catalogue is a
-                * static import. See that file and `@/i18n/catalogues`.
-                */}
+               * Client Components get the catalogue from here. It is inside
+               * the providers rather than wrapping them because only the tree
+               * below it calls `useTranslations()`, and the provider
+               * serialises the messages it is given into the RSC payload —
+               * mounting it higher would not add a string to the bundle, but
+               * it would put the one component that must stay a pure
+               * pass-through above the ones that have state.
+               *
+               * It is `@/components/providers/intl-provider` and not
+               * `next-intl`'s `NextIntlClientProvider` directly, because from
+               * a Server Component that name resolves to an *async* component
+               * that awaits the request config — which under
+               * `cacheComponents` ends the build on every page in the
+               * application. The wrapper is a `"use client"` module, so it
+               * gets the synchronous provider and takes the locale and the
+               * catalogue as props. Both are statically known: the locale
+               * comes from `generateStaticParams` and the catalogue is a
+               * static import. See that file and `@/i18n/catalogues`.
+               */}
               <IntlProvider locale={locale} messages={CATALOGUES[locale]}>
                 {children}
               </IntlProvider>

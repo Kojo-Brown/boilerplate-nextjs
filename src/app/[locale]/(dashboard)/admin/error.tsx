@@ -11,7 +11,10 @@ export default function AdminError({
     <div className="flex flex-col gap-4">
       <div>
         <h2 className="text-lg font-semibold">Something went wrong</h2>
-        <p className="mt-1 text-sm" style={{ color: "var(--muted-foreground)" }}>
+        <p
+          className="mt-1 text-sm"
+          style={{ color: "var(--muted-foreground)" }}
+        >
           {error.message ?? "An unexpected error occurred in the admin panel."}
         </p>
       </div>

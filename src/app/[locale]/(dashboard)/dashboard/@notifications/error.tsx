@@ -12,7 +12,10 @@ export default function NotificationsError({
       className="rounded-xl border p-6"
       style={{ backgroundColor: "var(--background)" }}
     >
-      <p className="text-sm font-medium" style={{ color: "var(--destructive)" }}>
+      <p
+        className="text-sm font-medium"
+        style={{ color: "var(--destructive)" }}
+      >
         Failed to load notifications
       </p>
       <p className="mt-1 text-xs" style={{ color: "var(--muted-foreground)" }}>

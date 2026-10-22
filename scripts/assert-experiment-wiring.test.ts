@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { LOCALES } from "../src/i18n/locales.js";
 import ts from "typescript";
 import {
   VARIANT_LISTS,
@@ -134,7 +135,9 @@ describe("R2 — the route files", () => {
 
     const findings = checkRouteFiles(reader(files), [ROUTED]);
     expect(findings).toHaveLength(1);
-    expect(findings[0]?.file).toBe("src/app/[locale]/demo/v/[variant]/page.tsx");
+    expect(findings[0]?.file).toBe(
+      "src/app/[locale]/demo/v/[variant]/page.tsx",
+    );
   });
 
   it("reports a missing loading segment", () => {
@@ -438,10 +441,18 @@ describe("R8 — the other gates know about these routes", () => {
         },
       },
     ]);
-    // Two routes (canonical and variant) times two gates.
-    expect(findings).toHaveLength(4);
+    // Two routes (canonical and variant), each reported once per locale
+    // against assert-route-shape — whose list is per locale, because route
+    // shape is what it checks and a locale that stopped prerendering is the
+    // failure — and once in total against assert-bundle-budget, whose list is
+    // keyed by the `[locale]` segment because the script payload is the same
+    // in every language.
+    expect(findings).toHaveLength(2 * (LOCALES.length + 1));
     expect(findings.map((finding) => finding.file)).toContain(
       "scripts/assert-bundle-budget.ts",
+    );
+    expect(findings.map((finding) => finding.file)).toContain(
+      "scripts/assert-route-shape.ts",
     );
   });
 });

@@ -58,7 +58,6 @@ vi.mock("@/i18n/navigation", () => ({
   ),
 }));
 
-
 const CHILD = <p>page content</p>;
 
 const SHELLS: ReadonlyArray<{

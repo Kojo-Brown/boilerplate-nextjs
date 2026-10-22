@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { http, passthrough } from "msw";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import { server as mswServer } from "@/test/server";
 import {
   ALLOWED_INCOMPLETE,
@@ -171,9 +173,11 @@ describe("discoverDocuments", () => {
 
 describe("missingDocuments", () => {
   it("names a required route that stopped prerendering", () => {
-    const found = allRequired().filter((t) => t.route !== "/dashboard");
+    // One locale's document, which is the sharper statement: a route that
+    // still prerenders in `en` and stopped in `ar` is reported by name.
+    const found = allRequired().filter((t) => t.route !== "/en/dashboard");
 
-    expect(missingDocuments(found)).toEqual(["/dashboard"]);
+    expect(missingDocuments(found)).toEqual(["/en/dashboard"]);
   });
 
   it("is satisfied by extra documents it does not know about", () => {
@@ -366,11 +370,11 @@ describe("buildReport", () => {
   it("fails when a required route prerendered no document", () => {
     const report = buildReport(
       THEMES.map((theme) => audit({ theme })),
-      allRequired().filter((t) => t.route !== "/admin"),
+      allRequired().filter((t) => t.route !== "/en/admin"),
       { allowedViolations: [], allowedIncomplete: [] },
     );
 
-    expect(report.missingDocuments).toEqual(["/admin"]);
+    expect(report.missingDocuments).toEqual(["/en/admin"]);
     expect(reportIsClean(report)).toBe(false);
   });
 
@@ -708,10 +712,19 @@ describe("the tables this gate ships with", () => {
     // The four fallback shells in particular: they are the documents most
     // likely to lose their place in the audit, because nothing visible changes
     // when a dynamic segment stops prerendering one.
-    expect(REQUIRED_DOCUMENTS).toContain("/blog/[slug]");
-    expect(REQUIRED_DOCUMENTS).toContain("/photos/[id]");
-    expect(REQUIRED_DOCUMENTS).toContain("/posts/[id]");
-    expect(REQUIRED_DOCUMENTS).toContain("/pricing/v/[variant]");
+    // Per locale, because an `ar` document is a different document for this
+    // gate: it is laid out right-to-left and carries different text, so it has
+    // its own reading order, contrast and target sizes.
+    for (const locale of LOCALES) {
+      for (const route of [
+        "/blog/[slug]",
+        "/photos/[id]",
+        "/posts/[id]",
+        "/pricing/v/[variant]",
+      ]) {
+        expect(REQUIRED_DOCUMENTS).toContain(internalPath(locale, route));
+      }
+    }
     expect(new Set(REQUIRED_DOCUMENTS).size).toBe(REQUIRED_DOCUMENTS.length);
   });
 

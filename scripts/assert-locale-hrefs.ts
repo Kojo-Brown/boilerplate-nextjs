@@ -55,7 +55,7 @@ const DYNAMIC = "<dynamic>";
 
 export interface Finding {
   file: string;
-  rule: "R1" | "R2" | "R3";
+  rule: "R1" | "R2" | "R3" | "R4";
   message: string;
 }
 
@@ -65,6 +65,13 @@ export interface HrefSite {
   raw: string;
   /** The href with interpolations replaced by `<dynamic>`, or `null` if unresolvable. */
   pattern: string | null;
+  /**
+   * The JSX element this href is on, or `null` for an object literal.
+   *
+   * Read so that R4 can tell a raw `<a>` from a `<Link>`. That used to be
+   * ESLint's job and cannot be any more — see the note on R4.
+   */
+  element: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -186,37 +193,60 @@ export function hrefsIn(file: string, text: string): HrefSite[] {
   );
   const sites: HrefSite[] = [];
 
-  const record = (initializer: ts.Node | undefined, raw: string): void => {
+  const record = (
+    initializer: ts.Node | undefined,
+    raw: string,
+    element: string | null,
+  ): void => {
     if (initializer === undefined) return;
 
-    if (ts.isStringLiteral(initializer)) {
-      sites.push({ file, raw: initializer.text, pattern: initializer.text });
-      return;
-    }
-    if (ts.isNoSubstitutionTemplateLiteral(initializer)) {
-      sites.push({ file, raw: initializer.text, pattern: initializer.text });
+    if (
+      ts.isStringLiteral(initializer) ||
+      ts.isNoSubstitutionTemplateLiteral(initializer)
+    ) {
+      sites.push({
+        file,
+        raw: initializer.text,
+        pattern: initializer.text,
+        element,
+      });
       return;
     }
     if (ts.isTemplateExpression(initializer)) {
       sites.push({
         file,
-        raw: raw,
+        raw,
         pattern: templatePattern(initializer),
+        element,
       });
       return;
     }
-    sites.push({ file, raw, pattern: null });
+    sites.push({ file, raw, pattern: null, element });
+  };
+
+  /** The tag an attribute belongs to, e.g. `a` or `Link`. */
+  const tagOf = (attribute: ts.JsxAttribute): string | null => {
+    const attributes = attribute.parent;
+    const opening = attributes.parent;
+    if (
+      ts.isJsxOpeningElement(opening) ||
+      ts.isJsxSelfClosingElement(opening)
+    ) {
+      return opening.tagName.getText(source);
+    }
+    return null;
   };
 
   const visit = (node: ts.Node): void => {
     if (ts.isJsxAttribute(node) && node.name.getText(source) === "href") {
+      const element = tagOf(node);
       const { initializer } = node;
       if (initializer === undefined) {
-        sites.push({ file, raw: "href", pattern: null });
+        sites.push({ file, raw: "href", pattern: null, element });
       } else if (ts.isJsxExpression(initializer)) {
-        record(initializer.expression, initializer.getText(source));
+        record(initializer.expression, initializer.getText(source), element);
       } else {
-        record(initializer, initializer.getText(source));
+        record(initializer, initializer.getText(source), element);
       }
     }
 
@@ -225,7 +255,7 @@ export function hrefsIn(file: string, text: string): HrefSite[] {
       (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name)) &&
       node.name.text === "href"
     ) {
-      record(node.initializer, node.initializer.getText(source));
+      record(node.initializer, node.initializer.getText(source), null);
     }
 
     ts.forEachChild(node, visit);
@@ -300,7 +330,7 @@ export function checkResolvable(
         message:
           `href \`${site.raw}\` resolves to no route under ${APP_SEGMENT_ROOT}. ` +
           "`typedRoutes` cannot catch this any more — under " +
-          "`localePrefix: \"as-needed\"` the generated `Route` type describes the " +
+          '`localePrefix: "as-needed"` the generated `Route` type describes the ' +
           "segment tree and these hrefs are public paths, so `href` is `string`.",
       });
     }
@@ -358,6 +388,14 @@ export const UNRESOLVABLE_ALLOWED: readonly { file: string; why: string }[] = [
     why: "`href={SKIP_LINK_HREF}` is the in-page fragment the skip link targets, not a route",
   },
   {
+    file: "src/app/[locale]/photos/_components/photo-detail.tsx",
+    why: "the one link that must be a full page load rather than a soft navigation — out of the `@modal` interceptor and into the route it shadows — so it is an `<a>`, and its href is built by `getPathname` to carry the active locale",
+  },
+  {
+    file: "src/app/global-not-found.tsx",
+    why: "the same `href={SKIP_LINK_HREF}` fragment, written out by hand because this document renders outside every layout and cannot use the Client Component",
+  },
+  {
     file: "src/components/third-party/third-party-scripts.tsx",
     why: "`href={origin}` is a rel=preconnect to a third-party origin; `src/lib/third-party/catalogue.ts` is the audit over those",
   },
@@ -410,12 +448,78 @@ export function checkUnresolvableAudit(
   return findings;
 }
 
+/**
+ * R4 — internal navigation goes through the locale-aware `Link`.
+ *
+ * ## Why this rule is here rather than in ESLint
+ *
+ * `@next/next/no-html-link-for-pages` is exactly this check and it stopped
+ * working when the tree moved under `src/app/[locale]`. The rule builds the set
+ * of routes from the app directory and asks whether an `<a href>` names one;
+ * with a dynamic segment at the root, *every single-segment path* names one. So
+ * it began reporting `<a href="/elsewhere/">` in a skip-link test and
+ * `<a href="/login/">` in a session-guard test as links to pages, 24 errors in
+ * all, none of them a link to a page. A rule that cannot tell a page from any
+ * other path is not a check, and `eslint.config.mjs` turns it off with a
+ * pointer here.
+ *
+ * This replaces it and is narrower in the one way that matters: it asks whether
+ * the href *resolves to a route* (R1 already computed that), not whether it has
+ * the shape of one. `/elsewhere` resolves to nothing, so it is not navigation
+ * and not reported.
+ *
+ * The exemptions are the two documents that render outside the provider
+ * `@/i18n/navigation` reads, which cannot use `Link` at all.
+ */
+export const RAW_ANCHOR_ALLOWED: readonly { file: string; why: string }[] = [
+  {
+    file: "src/app/[locale]/photos/_components/photo-detail.tsx",
+    why: "the one link that must be a full page load rather than a soft navigation — out of the `@modal` interceptor and into the route it shadows — so it is an `<a>`, and its href is built by `getPathname` to carry the active locale",
+  },
+  {
+    file: "src/app/global-not-found.tsx",
+    why: "renders outside every layout, so the IntlProvider that Link reads the locale from is not in the tree; its one link is to `/`, which is valid in every locale",
+  },
+];
+
+export function checkRawAnchors(
+  root: string,
+  patterns: Set<string> = routePatterns(root),
+): Finding[] {
+  const allowed = new Set(RAW_ANCHOR_ALLOWED.map((entry) => entry.file));
+  const findings: Finding[] = [];
+
+  for (const file of sourceFiles(root).filter(inScope)) {
+    if (allowed.has(file)) continue;
+
+    const text = readFileSync(path.join(root, file), "utf8");
+    for (const site of hrefsIn(file, text)) {
+      if (site.element !== "a") continue;
+      if (site.pattern === null) continue;
+      if (isOutOfScope(site.pattern)) continue;
+      if (!resolves(hrefPath(site.pattern), patterns)) continue;
+
+      findings.push({
+        file,
+        rule: "R4",
+        message:
+          `\`<a href="${site.raw}">\` navigates to a route in this application. ` +
+          "Use `Link` from `@/i18n/navigation`: a bare path carries no locale, " +
+          "so this link leaves a visitor reading `ar` on the `en` document.",
+      });
+    }
+  }
+
+  return findings;
+}
+
 export function check(root: string, options: CheckOptions = {}): Finding[] {
   const patterns = routePatterns(root);
   return [
     ...checkResolvable(root, patterns),
     ...checkUnprefixed(root),
     ...checkUnresolvableAudit(root, options),
+    ...checkRawAnchors(root, patterns),
   ];
 }
 

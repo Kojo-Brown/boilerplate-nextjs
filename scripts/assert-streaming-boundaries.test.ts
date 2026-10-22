@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import {
   EXPECTED_STREAMING,
   checkStreamingBoundaries,
@@ -176,8 +178,12 @@ describe("checkStreamingBoundaries", () => {
 });
 
 describe("EXPECTED_STREAMING", () => {
-  it("covers every route whose page renders behind a boundary", () => {
-    expect(EXPECTED_STREAMING.map((e) => e.route)).toEqual([
+  it("covers every route whose page renders behind a boundary, in every locale", () => {
+    // The list is written down as public paths and crossed with the locale
+    // registry, so the assertion is made the same way rather than by pasting
+    // the product: a third locale should make this test pass with no edit, and
+    // a route dropped from the base list should fail it.
+    const BASE = [
       "/dashboard",
       "/posts",
       "/posts/[id]",
@@ -185,7 +191,13 @@ describe("EXPECTED_STREAMING", () => {
       "/images",
       "/upload",
       "/settings/security",
-    ]);
+    ];
+
+    expect(EXPECTED_STREAMING.map((e) => e.route)).toEqual(
+      BASE.flatMap((route) =>
+        LOCALES.map((locale) => internalPath(locale, route)),
+      ),
+    );
   });
 
   it("expects at least one hole everywhere, for <UserChip>", () => {

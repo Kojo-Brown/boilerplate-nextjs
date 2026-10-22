@@ -37,7 +37,6 @@ vi.mock("@/i18n/navigation", () => ({
   ),
 }));
 
-
 describe("MobileDrawer", () => {
   const onClose = vi.fn();
 
@@ -57,7 +56,9 @@ describe("MobileDrawer", () => {
 
   it("renders dialog when open", () => {
     render(<MobileDrawer open={true} onClose={onClose} />);
-    expect(screen.getByRole("dialog", { name: "Navigation" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("dialog", { name: "Navigation" }),
+    ).toBeInTheDocument();
   });
 
   it("shows app name in drawer header", () => {
@@ -67,14 +68,18 @@ describe("MobileDrawer", () => {
 
   it("calls onClose when overlay is clicked", async () => {
     render(<MobileDrawer open={true} onClose={onClose} />);
-    const overlay = document.querySelector('div[aria-hidden="true"]') as HTMLElement;
+    const overlay = document.querySelector(
+      'div[aria-hidden="true"]',
+    ) as HTMLElement;
     await userEvent.click(overlay);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("calls onClose when close button is clicked", async () => {
     render(<MobileDrawer open={true} onClose={onClose} />);
-    await userEvent.click(screen.getByRole("button", { name: "Close navigation" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Close navigation" }),
+    );
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -91,6 +96,8 @@ describe("MobileDrawer", () => {
 
   it("renders nav links when open", () => {
     render(<MobileDrawer open={true} onClose={onClose} />);
-    expect(screen.getByRole("navigation", { name: "Main navigation" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "Main navigation" }),
+    ).toBeInTheDocument();
   });
 });

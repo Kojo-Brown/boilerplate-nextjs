@@ -13,10 +13,7 @@ export default function RegisterError({
       style={{ backgroundColor: "var(--background)" }}
     >
       <h2 className="mb-2 text-lg font-semibold">Something went wrong</h2>
-      <p
-        className="mb-4 text-sm"
-        style={{ color: "var(--muted-foreground)" }}
-      >
+      <p className="mb-4 text-sm" style={{ color: "var(--muted-foreground)" }}>
         {error.message ?? "An unexpected error occurred."}
       </p>
       <button

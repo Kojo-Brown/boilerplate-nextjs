@@ -1,5 +1,9 @@
 import * as React from "react";
-import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
+import {
+  render,
+  type RenderOptions,
+  type RenderResult,
+} from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NextIntlClientProvider } from "next-intl";
