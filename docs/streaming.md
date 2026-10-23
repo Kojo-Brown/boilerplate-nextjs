@@ -144,7 +144,7 @@ to data:
 
 What went away is a session read whose only job was to decide whether a route
 may be rendered at all. `/images` and `/upload` render no user data, so there is
-nothing left for a second check to stand next to; `src/app/(dashboard)/auth-guards.test.ts`
+nothing left for a second check to stand next to; `src/app/[locale]/(dashboard)/auth-guards.test.ts`
 names all three routes and fails if one leaves `PROTECTED_PREFIXES`.
 
 ## What CI checks

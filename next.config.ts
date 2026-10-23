@@ -1,4 +1,16 @@
+import createNextIntlPlugin from "next-intl/plugin";
 import type { NextConfig } from "next";
+
+/**
+ * Points `next-intl` at `src/i18n/request.ts`.
+ *
+ * The default location the plugin looks in is `./i18n/request.ts` relative to
+ * the project root, and this repository keeps its sources under `src/`. The
+ * path is passed explicitly rather than relying on the plugin's `src/`
+ * fallback, because the failure when it misses is a build that succeeds and an
+ * application in which every translated string renders as its own key path.
+ */
+const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 const config: NextConfig = {
   output: "standalone",
@@ -8,6 +20,55 @@ const config: NextConfig = {
   cacheComponents: true,
   // Promoted out of `experimental` in Next 16.
   typedRoutes: true,
+  experimental: {
+    /**
+     * Enables `src/app/global-not-found.tsx`.
+     *
+     * Needed because the `[locale]` restructure took the landmark out of the
+     * one document that cannot get it back any other way. `not-found.tsx` is
+     * now inside the segment, where it covers an unmatched *single* segment
+     * (`/nope` is read as a locale, fails the layout's `isLocale` check, and
+     * renders that boundary). It does not cover a path the segment cannot match
+     * at all — `/a/b/c` — whose document Next writes above the whole layout
+     * hierarchy, as its own built-in 404 with no `<main>` and no skip link.
+     * `scripts/assert-focus-management.ts` failed on exactly that.
+     *
+     * The flag is experimental and that is a cost taken deliberately: the
+     * alternatives were a root `layout.tsx` above the segment, which cannot
+     * exist because `<html lang>` is the locale and the locale is that segment,
+     * or leaving a 404 that fails WCAG 3.1.1 and 2.4.1 in the tree with an
+     * exemption. See `src/app/global-not-found.tsx`.
+     */
+    globalNotFound: true,
+    /**
+     * Enables `next/root-params`, which is how `src/i18n/request.ts` learns the
+     * locale.
+     *
+     * The alternative is `requestLocale`, which `next-intl` documents and
+     * deprecates, and which does not work for a prerender: it is request-scoped,
+     * so during a build it resolves to `undefined` and the request config falls
+     * back to `DEFAULT_LOCALE`. The visible consequence was that every
+     * server-rendered `<Link>` outside the root layout emitted an *unprefixed*
+     * href — `/ar` was prerendered with `href="/blog"` on every link, so one
+     * click took an Arabic visitor to the English document. `e2e/locale.spec.ts`
+     * is what found it.
+     *
+     * `setRequestLocale` is next-intl's own answer to that, and it has to be
+     * called in every layout *and every page*, because the cache it writes is
+     * scoped to one render entry point. That meant `await params` at the top of
+     * twenty-two page components — which would have made each one async, and an
+     * async page is a page whose entire body sits behind an await. Three of them
+     * are asserted to be synchronous functions in
+     * `src/app/[locale]/(dashboard)/auth-guards.test.ts` for exactly that
+     * reason, and `scripts/assert-streaming-boundaries.ts` measures the shells
+     * it would have collapsed.
+     *
+     * Root params are provided per prerendered variant, so they are available
+     * at build time and the locale resolves once, in the request config, for
+     * every render in the tree.
+     */
+    rootParams: true,
+  },
   /**
    * React Compiler, on for every client component.
    *
@@ -84,7 +145,34 @@ const config: NextConfig = {
   async headers() {
     return [
       {
+        // `en`, which `localePrefix: "as-needed"` serves unprefixed — so this
+        // is the same entry it was before the `[locale]` segment existed.
         source: "/pricing",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "private, max-age=0, must-revalidate",
+          },
+        ],
+      },
+      {
+        // Every prefixed locale, and the reason this is a pattern rather than
+        // one entry per locale: this file is compiled to CommonJS by
+        // `next typegen` without the `@/` alias, so it cannot import the locale
+        // registry to iterate it (the same constraint the comment above
+        // records for the experiment registry). A literal `/ar/pricing` would
+        // be a third place that has to be edited when a locale is added, and
+        // the one whose omission is invisible — a missing entry here is a
+        // shared-cacheable experiment page, which looks exactly like a working
+        // one.
+        //
+        // `:locale` matches one segment, so this is wider than the locale
+        // registry: `/xx/pricing` matches it too. That is harmless in this
+        // direction — it pins `private` on a path that 404s — and
+        // `scripts/assert-experiment-wiring.ts` is what holds the narrow end,
+        // checking that every routed experiment's canonical path is covered
+        // for every locale the registry declares.
+        source: "/:locale/pricing",
         headers: [
           {
             key: "Cache-Control",
@@ -109,4 +197,4 @@ const config: NextConfig = {
   },
 };
 
-export default config;
+export default withNextIntl(config);

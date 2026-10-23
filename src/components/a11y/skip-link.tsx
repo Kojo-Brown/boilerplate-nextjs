@@ -1,7 +1,16 @@
 import { MAIN_CONTENT_ID, SKIP_LINK_HREF } from "@/lib/a11y/route-focus";
 
 export interface SkipLinkProps {
-  /** Overridable for localisation; the default is the conventional wording. */
+  /**
+   * The label, which the caller supplies from the catalogue.
+   *
+   * `src/app/[locale]/layout.tsx` passes `common.skipToContent`. The default is
+   * kept for the one caller that cannot: this element has to be the first child
+   * of `<body>`, which is above `<IntlProvider>`, so a `useTranslations` here
+   * would have no context to read — and reading the catalogue on the server
+   * would make this an async component in the position where
+   * `cacheComponents` refuses one. See `@/components/providers/intl-provider`.
+   */
   children?: React.ReactNode;
 }
 

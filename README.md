@@ -41,10 +41,14 @@ pnpm dev  # http://localhost:3000
 ```
 src/
 ├── app/
-│   ├── (auth)/          # Login, register pages
-│   ├── (dashboard)/     # Protected pages
-│   ├── layout.tsx       # Root layout
-│   └── page.tsx         # Home page
+│   ├── [locale]/        # Every page. `en` unprefixed, `ar` under /ar
+│   │   ├── (auth)/      # Login, register pages
+│   │   ├── (dashboard)/ # Protected pages
+│   │   ├── layout.tsx   # Root layout — `<html lang>` is this segment
+│   │   └── page.tsx     # Home page
+│   ├── api/             # Route handlers, outside the locale segment
+│   ├── global-error.tsx # Full-document 500
+│   └── global-not-found.tsx  # Full-document 404 for an unmatched path
 ├── actions/             # Server Actions
 ├── components/
 │   ├── layout/          # Nav, Sidebar, Footer
@@ -54,9 +58,17 @@ src/
 │   ├── actions.ts       # ActionResult<T> helpers
 │   ├── env.ts           # Zod-validated env vars
 │   └── prisma.ts        # Prisma singleton
+├── i18n/
+│   ├── locales.ts       # The locale registry; imports nothing
+│   ├── routing.ts       # localePrefix: "as-needed"
+│   ├── navigation.ts    # Locale-aware Link, redirect, usePathname
+│   └── path.ts          # Public path ⇄ segment path
 ├── styles/
 │   └── globals.css      # TailwindCSS + design tokens (@theme inline)
 └── types/               # Shared types
+messages/
+├── en.json              # Reference catalogue
+└── ar.json              # RTL, six CLDR plural categories
 prisma/
 ├── schema.prisma        # User, Account, Session, Post
 └── seed.ts
@@ -136,8 +148,8 @@ a new tab, renders a full page instead. Same route, two renderings, chosen by
 how you arrived.
 
 ```
-app/@modal/(.)photos/[id]/page.tsx   soft navigation → modal
-app/photos/[id]/page.tsx             hard navigation → full page
+app/[locale]/@modal/(.)photos/[id]/page.tsx   soft navigation → modal
+app/[locale]/photos/[id]/page.tsx             hard navigation → full page
 ```
 
 The point is that a `useState` dialog has no URL, so it cannot be shared,
@@ -146,10 +158,31 @@ reloaded, or closed with the Back button. Here closing the modal _is_ a
 
 Every way of breaking this is silent — a wrong `(.)` marker, a misplaced
 `@modal`, or a root layout that stops rendering `{modal}` all still compile and
-still serve the right URLs. `src/app/photos/interception.test.ts` asserts the
+still serve the right URLs. `src/app/[locale]/photos/interception.test.ts` asserts the
 wiring for that reason.
 [docs/intercepting-routes.md](./docs/intercepting-routes.md) has the full
 walkthrough.
+
+### Locales
+
+The route tree is `app/[locale]`, with `localePrefix: "as-needed"`: `en` is
+served at `/dashboard` and `ar` at `/ar/dashboard`, and `/en/dashboard`
+redirects to the unprefixed form so each page has one canonical URL.
+
+`ar` is the second locale rather than an `es`/`fr` placeholder for two reasons
+that are the point of the exercise: it reads right-to-left, so it is the only
+kind of locale that can show whether the layout is direction-agnostic, and its
+CLDR plural rules have all six categories against English's two.
+
+Everything navigates through `@/i18n/navigation` rather than `next/link`. An
+absolute href carries no locale, so a plain `<Link href="/posts">` on an Arabic
+page points at the English document — and `scripts/assert-locale-hrefs.ts` is
+the gate over that, since `typedRoutes` cannot type these hrefs any more:
+`next typegen` derives its `Route` type from the segment paths while the URLs
+served are the public ones, and under `as-needed` those disagree.
+
+[docs/i18n.md](./docs/i18n.md) has the whole of it, including what the
+restructure cost the other gates and how far the string extraction goes.
 
 ## Geo targeting and A/B routing
 

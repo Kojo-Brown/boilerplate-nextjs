@@ -55,7 +55,7 @@ import { findApiRoute } from "../src/lib/api/runtimes";
 import { selectPolicy } from "../src/lib/rate-limit/policy";
 import { VITALS_ENDPOINT } from "../src/lib/vitals/queue";
 
-export const ROOT_LAYOUT = "src/app/layout.tsx";
+export const ROOT_LAYOUT = "src/app/[locale]/layout.tsx";
 export const REPORTER_MODULE = "src/components/vitals/web-vitals-reporter.tsx";
 export const REPORTER_COMPONENT = "WebVitalsReporter";
 

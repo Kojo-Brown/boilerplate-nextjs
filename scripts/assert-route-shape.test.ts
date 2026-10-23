@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { CATALOGUES } from "../src/i18n/catalogues.js";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 import {
   EXPECTED_ROUTES,
   checkRouteShape,
@@ -13,67 +16,91 @@ import {
  * A manifest shaped like the one the current build produces. Tests mutate a
  * copy of this to describe a regression, so each case says exactly which part
  * of a real build it is corrupting.
+ *
+ * Built per locale from one description, the way `EXPECTED_ROUTES` is, because
+ * that is what the build writes: `/en/blog` and `/ar/blog` as separate entries,
+ * both pointing back at the one segment `/[locale]/blog`. A fixture listing
+ * only the `en` half would have made every `ar` expectation fail for want of a
+ * manifest entry rather than for want of a route, which is a test of the
+ * fixture.
  */
 function goodManifest(): PrerenderManifest {
-  return {
-    routes: {
-      "/": { initialRevalidateSeconds: false },
-      "/_not-found": { initialRevalidateSeconds: false },
-      "/forbidden": { initialRevalidateSeconds: false },
-      "/login": { initialRevalidateSeconds: false },
-      "/register": { initialRevalidateSeconds: false },
-      "/blog": { initialRevalidateSeconds: 60, srcRoute: "/blog" },
-      "/blog/seed-post-cache-life": {
-        initialRevalidateSeconds: 300,
-        srcRoute: "/blog/[slug]",
-      },
-      "/blog/seed-post-partial-prerendering": {
-        initialRevalidateSeconds: 300,
-        srcRoute: "/blog/[slug]",
-      },
-      "/photos": { initialRevalidateSeconds: false, srcRoute: "/photos" },
-      "/photos/mountain-golden-hour": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/photos/[id]",
-      },
-      "/photos/ocean-at-sunset": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/photos/[id]",
-      },
-      "/photos/stars-over-the-range": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/photos/[id]",
-      },
-      "/pricing": { initialRevalidateSeconds: false, srcRoute: "/pricing" },
-      "/pricing/v/control": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/pricing/v/[variant]",
-      },
-      "/pricing/v/annual-first": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/pricing/v/[variant]",
-      },
-      "/dashboard": { initialRevalidateSeconds: false, srcRoute: "/dashboard" },
-      "/posts": { initialRevalidateSeconds: false, srcRoute: "/posts" },
-      "/admin": { initialRevalidateSeconds: false, srcRoute: "/admin" },
-      "/images": { initialRevalidateSeconds: false, srcRoute: "/images" },
-      "/upload": { initialRevalidateSeconds: false, srcRoute: "/upload" },
-      "/settings/security": {
-        initialRevalidateSeconds: false,
-        srcRoute: "/settings/security",
-      },
-    },
-    dynamicRoutes: {
-      "/blog/[slug]": {},
-      "/photos/[id]": {},
-      "/pricing/v/[variant]": {},
-    },
+  /** Static pages: no revalidation window, no `srcRoute` of their own. */
+  const STATIC_PAGES = [
+    "/",
+    "/forbidden",
+    "/login",
+    "/register",
+    "/dashboard",
+    "/posts",
+    "/admin",
+    "/images",
+    "/upload",
+    "/settings/security",
+    "/photos",
+    "/pricing",
+  ];
+
+  /** `[segment, revalidateSeconds, concrete params]` */
+  const PREBUILT: Array<[string, number | false, string[]]> = [
+    [
+      "/blog/[slug]",
+      300,
+      ["seed-post-cache-life", "seed-post-partial-prerendering"],
+    ],
+    [
+      "/photos/[id]",
+      false,
+      ["mountain-golden-hour", "ocean-at-sunset", "stars-over-the-range"],
+    ],
+    ["/pricing/v/[variant]", false, ["control", "annual-first"]],
+  ];
+
+  const routes: PrerenderManifest["routes"] = {
+    "/_not-found": { initialRevalidateSeconds: false },
   };
+  const dynamicRoutes: PrerenderManifest["dynamicRoutes"] = {};
+
+  for (const locale of LOCALES) {
+    for (const page of STATIC_PAGES) {
+      routes[internalPath(locale, page)] = { initialRevalidateSeconds: false };
+    }
+
+    // The ISR route, which is the one with a window that has to survive.
+    routes[internalPath(locale, "/blog")] = {
+      initialRevalidateSeconds: 60,
+      srcRoute: `/[locale]/blog`,
+    };
+
+    for (const [segment, revalidate, params] of PREBUILT) {
+      dynamicRoutes[internalPath(locale, segment)] = {};
+      const base = segment.slice(0, segment.lastIndexOf("/"));
+      for (const param of params) {
+        routes[internalPath(locale, `${base}/${param}`)] = {
+          initialRevalidateSeconds: revalidate,
+          // The literal `[locale]`, which is how the build spells it: both
+          // locales' pages point back at the same segment.
+          srcRoute: `/[locale]${segment}`,
+        };
+      }
+    }
+  }
+
+  return { routes, dynamicRoutes };
 }
 
-/** A shell carrying the dashboard chrome — what a healthy build writes. */
-const CHROME =
-  "<html><body><nav>Dashboard Posts Upload Image Showcase</nav><main></main></body></html>";
+/**
+ * A shell carrying the dashboard chrome — what a healthy build writes.
+ *
+ * Every locale's nav labels, in one string, because the shell reader in these
+ * tests answers for every route. The gate resolves its needles from the
+ * catalogue per locale (see `shellMustContainNav`), so an English-only fixture
+ * would fail every `ar` expectation — correctly, and for a reason that has
+ * nothing to do with what each case is testing.
+ */
+const CHROME = `<html><body><nav>${LOCALES.flatMap((locale) =>
+  Object.values(CATALOGUES[locale].nav),
+).join(" ")}</nav><main></main></body></html>`;
 
 /**
  * `checkRouteShape` with the healthy defaults filled in, so each test only has
@@ -95,13 +122,15 @@ describe("checkRouteShape", () => {
   it("catches the regression it exists for: a static route gone dynamic", () => {
     // This is what awaiting auth() in the root layout did to every route —
     // the page simply stops appearing in the prerender manifest.
+    // One locale only, which is also the sharper statement: the gate reports
+    // the locale whose document went missing rather than the route in general.
     const manifest = goodManifest();
-    delete manifest.routes["/"];
+    delete manifest.routes["/en"];
 
     const violations = check(manifest);
 
     expect(violations).toHaveLength(1);
-    expect(violations[0]?.route).toBe("/");
+    expect(violations[0]?.route).toBe("/en");
     expect(violations[0]?.problem).toContain(
       "missing from the prerender manifest",
     );
@@ -109,12 +138,12 @@ describe("checkRouteShape", () => {
 
   it("reports every regressed route, not just the first", () => {
     const manifest = goodManifest();
-    delete manifest.routes["/login"];
-    delete manifest.routes["/register"];
+    delete manifest.routes["/en/login"];
+    delete manifest.routes["/en/register"];
 
     expect(check(manifest).map((v) => v.route)).toEqual([
-      "/login",
-      "/register",
+      "/en/login",
+      "/en/register",
     ]);
   });
 
@@ -122,9 +151,9 @@ describe("checkRouteShape", () => {
     // /blog present but with no window is precisely the state the repository
     // was in: statically listed, yet re-rendered on every request.
     const manifest = goodManifest();
-    manifest.routes["/blog"] = {
+    manifest.routes["/en/blog"] = {
       initialRevalidateSeconds: false,
-      srcRoute: "/blog",
+      srcRoute: "/[locale]/blog",
     };
 
     const violations = check(manifest);
@@ -138,12 +167,15 @@ describe("checkRouteShape", () => {
 
   it("distinguishes a missing window from a wrong one", () => {
     const manifest = goodManifest();
-    manifest.routes["/blog"] = { srcRoute: "/blog" };
+    manifest.routes["/en/blog"] = { srcRoute: "/[locale]/blog" };
 
     expect(check(manifest)[0]?.problem).toContain("no window at all");
 
     const wrong = goodManifest();
-    wrong.routes["/blog"] = { initialRevalidateSeconds: 30, srcRoute: "/blog" };
+    wrong.routes["/en/blog"] = {
+      initialRevalidateSeconds: 30,
+      srcRoute: "/[locale]/blog",
+    };
 
     expect(check(wrong)[0]?.problem).toContain("built with 30s");
   });
@@ -152,13 +184,15 @@ describe("checkRouteShape", () => {
     // The unseeded-CI-database failure: the segment still exists, but nothing
     // was enumerated from it.
     const manifest = goodManifest();
-    delete manifest.routes["/blog/seed-post-cache-life"];
-    delete manifest.routes["/blog/seed-post-partial-prerendering"];
+    delete manifest.routes["/en/blog/seed-post-cache-life"];
+    delete manifest.routes["/en/blog/seed-post-partial-prerendering"];
 
     const violations = check(manifest);
 
+    // One locale, not both: the `ar` pages are still there, and the gate
+    // counting prebuilt pages per locale is what makes that a failure.
     expect(violations).toHaveLength(1);
-    expect(violations[0]?.route).toBe("/blog/[slug]");
+    expect(violations[0]?.route).toBe("/en/blog/[slug]");
     expect(violations[0]?.problem).toContain("pnpm db:seed");
   });
 
@@ -171,15 +205,20 @@ describe("checkRouteShape", () => {
 
   it("checks the window on every prebuilt page, not only the first", () => {
     const manifest = goodManifest();
-    manifest.routes["/blog/seed-post-partial-prerendering"] = {
+    manifest.routes["/en/blog/seed-post-partial-prerendering"] = {
       initialRevalidateSeconds: 60,
-      srcRoute: "/blog/[slug]",
+      srcRoute: "/[locale]/blog/[slug]",
     };
 
     const violations = check(manifest);
 
+    // Named by the concrete page, not by the segment: the window is a property
+    // of each prerendered instance, and saying which one regressed is the
+    // whole value of checking them all.
     expect(violations).toHaveLength(1);
-    expect(violations[0]?.route).toBe("/blog/seed-post-partial-prerendering");
+    expect(violations[0]?.route).toBe(
+      "/en/blog/seed-post-partial-prerendering",
+    );
   });
 
   it("ignores routes it was given no expectation for", () => {
@@ -205,7 +244,6 @@ describe("checkRouteShape — Partial Prerendering shells", () => {
     const manifest = goodManifest();
     manifest.routes["/posts"] = {
       initialRevalidateSeconds: false,
-      srcRoute: "/posts",
     };
     return manifest;
   }
@@ -314,17 +352,28 @@ describe("EXPECTED_ROUTES", () => {
     // the route it shadows: if `/photos/[id]` stops being prebuilt, a shared
     // link becomes an on-demand render of static data.
     const routes = EXPECTED_ROUTES.map((e) => e.route);
-    expect(routes).toContain("/photos");
-    expect(routes).toContain("/photos/[id]");
+    for (const locale of LOCALES) {
+      expect(routes).toContain(internalPath(locale, "/photos"));
+      expect(routes).toContain(internalPath(locale, "/photos/[id]"));
+    }
   });
 
   it("asks for no revalidation window on the photo routes", () => {
     // The catalogue is a module. Asserting a window here would fail every
     // build, and adding one to the source would be inventing a TTL for data
     // that only changes when the code does.
-    for (const route of ["/photos", "/photos/[id]"]) {
-      const expectation = EXPECTED_ROUTES.find((e) => e.route === route);
-      expect(expectation?.revalidateSeconds).toBeUndefined();
+    // The expectation is looked up and asserted to *exist* before its window
+    // is read. `find` returning `undefined` makes `?.revalidateSeconds`
+    // undefined too, so without that first line this test passed vacuously the
+    // moment the routes gained a locale prefix — which is exactly what it did.
+    for (const locale of LOCALES) {
+      for (const route of ["/photos", "/photos/[id]"]) {
+        const expectation = EXPECTED_ROUTES.find(
+          (e) => e.route === internalPath(locale, route),
+        );
+        expect(expectation).toBeDefined();
+        expect(expectation?.revalidateSeconds).toBeUndefined();
+      }
     }
   });
 });
@@ -332,11 +381,11 @@ describe("EXPECTED_ROUTES", () => {
 describe("formatViolations", () => {
   it("names the route, the problem, and why it was expected", () => {
     const manifest = goodManifest();
-    delete manifest.routes["/blog"];
+    delete manifest.routes["/en/blog"];
 
     const output = formatViolations(check(manifest));
 
-    expect(output).toContain("/blog");
+    expect(output).toContain("/en/blog");
     expect(output).toContain("expected because:");
     expect(output).toContain("Phase 5 ISR item");
   });

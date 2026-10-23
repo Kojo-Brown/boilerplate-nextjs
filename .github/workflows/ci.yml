@@ -791,6 +791,27 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The companion to the gate above, and the replacement for a lint rule.
+      # With the route tree under `src/app/[locale]`, `typedRoutes` can no
+      # longer type an href — the generated `Route` type describes the segment
+      # paths while the URLs this application serves are the public ones, and
+      # under `localePrefix: "as-needed"` those disagree. So `href` is `string`
+      # on the navigation wrappers, and this reads every href literal in the
+      # tree and resolves it against the routes on disk.
+      #
+      # It also replaces `@next/next/no-html-link-for-pages`, which a dynamic
+      # segment at the root of the tree turned into a false-positive generator:
+      # every single-segment path matches `/[locale]`, so the rule reported 24
+      # links to pages, none of which was one. Rule R4 here asks whether an
+      # href *resolves* instead, and found two raw `<a>` elements doing internal
+      # navigation that the lint rule never reported.
+      #
+      # Static analysis, so it needs no build output.
+      - name: Assert locale hrefs
+        run: pnpm exec tsx scripts/assert-locale-hrefs.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.

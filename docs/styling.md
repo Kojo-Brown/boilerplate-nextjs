@@ -230,7 +230,7 @@ system → light → dark → system and is mounted in every shell:
 | `app/(auth)/layout.tsx`        | `/login`, `/register`                                        |
 | `app/page.tsx`                 | `/` — renders under the root layout, so it inherits no shell |
 
-`src/app/theme-control.test.tsx` asserts each of those mounts. That test exists
+`src/app/[locale]/theme-control.test.tsx` asserts each of those mounts. That test exists
 because the component was written, correct, and rendered by _nothing_ for weeks
 while its own eight unit tests passed — a component's tests render it
 themselves, so they can never catch its absence from the application.

@@ -41,7 +41,7 @@ so taking it would let a framework upgrade move the line between "good" and
 
 ## The client
 
-`<WebVitalsReporter>` is mounted in `src/app/layout.tsx` and can only be mounted
+`<WebVitalsReporter>` is mounted in `src/app/[locale]/layout.tsx` and can only be mounted
 there. `useReportWebVitals` has to be subscribed before the measurements it
 waits for are produced, and LCP and TTFB are produced during the first paint —
 so a reporter mounted inside a route group misses the landing page on every

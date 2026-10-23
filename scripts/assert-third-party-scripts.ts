@@ -84,7 +84,7 @@ import type { ThirdParty } from "../src/lib/third-party/catalogue";
 
 export const CATALOGUE_MODULE = "src/lib/third-party/catalogue.ts";
 export const CATALOGUE_SPECIFIER = "@/lib/third-party/catalogue";
-export const ROOT_LAYOUT = "src/app/layout.tsx";
+export const ROOT_LAYOUT = "src/app/[locale]/layout.tsx";
 export const NEXT_CONFIG = "next.config.ts";
 
 /** The `next/script` component, as this repository imports it. */

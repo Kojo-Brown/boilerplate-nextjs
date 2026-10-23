@@ -120,10 +120,52 @@ export const SHARED_BASELINE_GZIP_BUDGET_BYTES = 155_000;
  * API handlers are absent. They return data, load no client JavaScript, and
  * write no document to measure.
  */
+/**
+ * ## Why these carry `/[locale]` rather than a locale
+ *
+ * The documents in the build are `/en/blog`, `/ar/blog` and the `[locale]`
+ * fallback shell, and `matchRoute` turns a `[segment]` into `[^/]+` — which
+ * matches `en`, `ar` *and* the literal `[locale]`. So one pattern per route
+ * covers all three, which is the right granularity here and not a shortcut:
+ * what this gate measures is the script payload, and the chunks a route loads
+ * are the same whichever language its text is in. The one number that does
+ * differ between locales is the size of the document itself, and that is not
+ * what a bundle budget is about.
+ *
+ * It also means `worstPage` names the heaviest locale, so a locale that somehow
+ * did pull in more JavaScript than the others would be reported by name rather
+ * than averaged away.
+ */
+/**
+ * ## The numbers below were raised for next-intl, with the measurement
+ *
+ * Every localised route came in 6.0 to 14.8 kB gzipped over its previous
+ * budget, and all of it is one thing: the `use-intl` runtime that
+ * `<IntlProvider>` and `useTranslations` put in the client graph. It is in the
+ * two chunks that carry the providers (11.8 kB and 10.1 kB gzipped, shared with
+ * other code), and it reaches every route because the provider is in the root
+ * layout — which is also why `/forbidden`, whose markup is a heading and a
+ * link and which translates nothing, still pays 7.3 kB of it.
+ *
+ * Two measurements establish that the locale itself is not a factor, which was
+ * worth checking because the gate names `/ar` as the worst page on every route:
+ * `/en/upload` and `/ar/upload` reference the *same twenty chunks*, with no
+ * chunk unique to either, and the same 584 bytes of inline script. `/ar` is
+ * named because the two are equal and something has to be. The catalogues go
+ * into the RSC payload rather than into a chunk, so the Arabic text costs
+ * nothing a bundle budget can see.
+ *
+ * The budgets are the measured first load plus about 8 kB, which is the
+ * headroom the earlier numbers in this list carried. Raising them is the
+ * deliberate option this gate's own failure message offers; the alternative
+ * would have been to mount the provider below the layout, which is the same
+ * runtime loaded by nearly every route anyway, for the cost of a second place
+ * the catalogue has to be wired into.
+ */
 export const ROUTE_BUDGETS: readonly RouteBudget[] = [
   {
-    route: "/",
-    gzipBudgetBytes: 260_000,
+    route: "/[locale]",
+    gzipBudgetBytes: 276_000,
     because:
       "the landing page: baseline, providers, the theme toggle and the nav. " +
       "Nothing route-specific, so this is close to the floor for a page under the root layout",
@@ -142,27 +184,27 @@ export const ROUTE_BUDGETS: readonly RouteBudget[] = [
       "the 80 kB every other route pays is the providers, not the framework",
   },
   {
-    route: "/forbidden",
-    gzipBudgetBytes: 250_000,
+    route: "/[locale]/forbidden",
+    gzipBudgetBytes: 266_000,
     because: "the 403 page: markup and a link back, like the 404",
   },
   {
-    route: "/login",
-    gzipBudgetBytes: 262_000,
+    route: "/[locale]/login",
+    gzipBudgetBytes: 283_000,
     because: "the credentials form and its client-side validation",
   },
   {
-    route: "/register",
-    gzipBudgetBytes: 262_000,
+    route: "/[locale]/register",
+    gzipBudgetBytes: 283_000,
     because: "the registration form; the same shape as /login",
   },
   {
-    route: "/blog",
-    gzipBudgetBytes: 262_000,
+    route: "/[locale]/blog",
+    gzipBudgetBytes: 277_000,
     because: "the ISR post index: a server-rendered list, no client state",
   },
   {
-    route: "/blog/[slug]",
+    route: "/[locale]/blog/[slug]",
     // Raised from 262 kB when the third-party embed facade landed: the route
     // measured 250.9 kB and now measures 265.4 kB. The 14.5 kB is the poster
     // image pipeline — `next/image`'s client runtime and `BlurImage` — which
@@ -170,78 +212,78 @@ export const ROUTE_BUDGETS: readonly RouteBudget[] = [
     // arithmetic is not close: the embed it replaces is roughly 1.2 MB of
     // JavaScript across ten requests, loaded on render rather than on the
     // press. See docs/third-party-scripts.md.
-    gzipBudgetBytes: 277_000,
+    gzipBudgetBytes: 294_000,
     because:
       "a prerendered post body plus the video facade's poster. Four documents are built " +
       "from it and the largest is the one budgeted",
   },
   {
-    route: "/photos",
-    gzipBudgetBytes: 275_000,
+    route: "/[locale]/photos",
+    gzipBudgetBytes: 290_000,
     because: "the gallery grid, plus the client navigation the modal needs",
   },
   {
-    route: "/photos/[id]",
-    gzipBudgetBytes: 276_000,
+    route: "/[locale]/photos/[id]",
+    gzipBudgetBytes: 292_000,
     because: "a single photo page, reached directly rather than intercepted",
   },
   {
-    route: "/(.)photos/[id]",
-    gzipBudgetBytes: 275_000,
+    route: "/[locale]/(.)photos/[id]",
+    gzipBudgetBytes: 291_000,
     because:
       "the intercepted modal. It renders the same photo inside the gallery route, " +
       "so it costs roughly what /photos/[id] does",
   },
   {
-    route: "/pricing",
-    gzipBudgetBytes: 262_000,
+    route: "/[locale]/pricing",
+    gzipBudgetBytes: 277_000,
     because:
       "the canonical pricing page: static markup and the theme toggle, like the other " +
       "public routes. The experiment adds no client JavaScript at all — the arm is " +
       "chosen in the proxy, so neither arm ships a chooser",
   },
   {
-    route: "/pricing/v/[variant]",
-    gzipBudgetBytes: 262_000,
+    route: "/[locale]/pricing/v/[variant]",
+    gzipBudgetBytes: 277_000,
     because:
       "the non-canonical arms. Same component, same imports, so this tracking /pricing " +
       "is the check that an arm has not quietly acquired a client component of its own",
   },
   {
-    route: "/dashboard",
-    gzipBudgetBytes: 268_000,
+    route: "/[locale]/dashboard",
+    gzipBudgetBytes: 286_000,
     because:
       "four parallel slots streaming into one shell; the client cost is the router, not the data",
   },
   {
-    route: "/posts",
-    gzipBudgetBytes: 276_000,
+    route: "/[locale]/posts",
+    gzipBudgetBytes: 299_000,
     because: "the post table with its mutation forms",
   },
   {
-    route: "/posts/[id]",
-    gzipBudgetBytes: 280_000,
+    route: "/[locale]/posts/[id]",
+    gzipBudgetBytes: 301_000,
     because:
       "the heaviest route in the application: the editor form, optimistic concurrency and the conflict UI",
   },
   {
-    route: "/admin",
-    gzipBudgetBytes: 267_000,
+    route: "/[locale]/admin",
+    gzipBudgetBytes: 288_000,
     because: "the admin view; a table and the role-gated controls",
   },
   {
-    route: "/images",
-    gzipBudgetBytes: 276_000,
+    route: "/[locale]/images",
+    gzipBudgetBytes: 297_000,
     because: "the next/image showcase — many images, little script",
   },
   {
-    route: "/upload",
-    gzipBudgetBytes: 270_000,
+    route: "/[locale]/upload",
+    gzipBudgetBytes: 292_000,
     because: "the upload form: file input, progress and client-side validation",
   },
   {
-    route: "/settings/security",
-    gzipBudgetBytes: 268_000,
+    route: "/[locale]/settings/security",
+    gzipBudgetBytes: 290_000,
     because:
       "three password inputs, `useActionState` and a toast. Measured at 259.4 kB, " +
       "level with /dashboard: the page adds one small client component to the " +
@@ -677,6 +719,36 @@ export function formatViolations(violations: readonly Violation[]): string {
  * application rather than any page of it, which is a number no visitor ever
  * waits for.
  */
+/**
+ * Whether a document is a fallback shell for the `[locale]` segment.
+ *
+ * These are excluded from the measurement, and the reason is not that they are
+ * uninteresting — it is that including them silently voided the shared-baseline
+ * check. `sharedChunks` is an *intersection* across every document, on the
+ * argument that a baseline a visitor cannot avoid is the one worth naming. The
+ * root layout narrows `[locale]` and calls `notFound()` above everything it
+ * renders, so these shells reference almost no scripts, and intersecting with
+ * one of them produced:
+ *
+ *     Shared by every route: 0.0 kB across 0 chunk(s) (budget 155.0 kB)
+ *
+ * A baseline of zero passes its budget trivially, and "own" cost — first load
+ * minus the baseline — became first load for every route in the table. The gate
+ * went on reporting numbers and stopped measuring the thing it reports.
+ *
+ * They are also not pages in the sense this gate means. A visitor reaches one
+ * only by asking for a locale that does not exist, and what they are served
+ * into it is the 404 boundary; there is no navigation whose cost this document
+ * is. `scripts/assert-focus-management.ts` and `scripts/assert-font-loading.ts`
+ * exempt the same family, and the first of those has the longer note on why
+ * they are empty by design.
+ */
+export function isSegmentFallbackShell(relativePath: string): boolean {
+  return (
+    relativePath === "[locale].html" || relativePath.startsWith("[locale]/")
+  );
+}
+
 export function readPagePayloads(nextDir: string): PagePayload[] {
   const appDir = path.join(nextDir, "server", "app");
   const documents: string[] = [];
@@ -693,6 +765,7 @@ export function readPagePayloads(nextDir: string): PagePayload[] {
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.name.endsWith(".html")) {
+        if (isSegmentFallbackShell(path.relative(appDir, full))) continue;
         documents.push(full);
       }
     }

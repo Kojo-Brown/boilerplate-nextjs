@@ -14,6 +14,22 @@ const config = [
       // underscore (destructured props that exist only to be dropped from a
       // spread, for instance). Teach the rule that convention rather than
       // leaving warnings that `--max-warnings 0` would fail on.
+      // Off, and replaced by rule R4 of `scripts/assert-locale-hrefs.ts`.
+      //
+      // The rule asks whether an `<a href>` names a page, and it answers that
+      // by building the route set from the app directory. With the tree under
+      // `src/app/[locale]` there is a dynamic segment at the root, so *every
+      // single-segment path* matches one: it began reporting
+      // `<a href="/elsewhere/">` in a skip-link test and `<a href="/login/">`
+      // in a session-guard test as links to pages — 24 errors, none of them a
+      // link to a page.
+      //
+      // The replacement asks whether the href *resolves* to a route rather
+      // than whether it has the shape of one, which is the distinction the
+      // dynamic segment destroyed, and it checks the thing this rule never
+      // could: whether the href was written against the public paths or the
+      // segment tree.
+      "@next/next/no-html-link-for-pages": "off",
       "@typescript-eslint/no-unused-vars": [
         "warn",
         {

@@ -23,6 +23,25 @@ const alias = {
   ),
 };
 
+// `next-intl` is transformed rather than left external.
+//
+// Vitest resolves an externalised dependency with Node's own resolver, and that
+// resolver sees neither `resolve.alias` nor the module mocks in
+// `src/test/setup.ts`. `next` ships no `exports` map, so its subpaths are plain
+// files that only resolve once something appends `.js` — which Next's own
+// bundler does and Node does not. The two things together meant
+// `next-intl/navigation`, which imports `next/navigation` at module scope from
+// inside its own package, failed to import at all: two tests of the dashboard
+// layout died on `Cannot find module .../next/navigation`, raised from a file
+// neither of them mentions.
+//
+// Inlining puts next-intl's imports through Vite, where the `next/navigation`
+// mock applies like it does for this repository's own modules. Scoped to this
+// one package rather than set globally, because every other dependency here
+// resolves correctly as an external and transforming them all is a cost paid on
+// every run.
+const server = { deps: { inline: ["next-intl" as const] } };
+
 // `e2e/` holds Playwright specs, which use a different `test` runtime and
 // throw if Vitest collects them. `pnpm test:e2e` owns that directory.
 const exclude = ["node_modules/**", "dist/**", ".next/**", "e2e/**"];
@@ -41,6 +60,7 @@ export default defineConfig({
           name: "dom",
           environment: "jsdom",
           globals: true,
+          server,
           setupFiles: ["./src/test/setup.ts"],
           include: ["src/**/*.test.tsx"],
           exclude,
@@ -53,6 +73,7 @@ export default defineConfig({
           name: "node",
           environment: "node",
           globals: true,
+          server,
           setupFiles: ["./src/test/setup.ts"],
           // `scripts/` holds build tooling (the CI warning gate) and
           // `eslint-rules/` the local ESLint plugin; both are plain Node, so they

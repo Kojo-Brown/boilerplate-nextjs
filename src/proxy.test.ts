@@ -547,9 +547,21 @@ describe("proxy — experiment routing", () => {
     expect(cookies.some((c) => c.startsWith(`${ASSIGNMENT_COOKIE}=`))).toBe(
       true,
     );
+    // Scoped to the two experiment cookies rather than `every`, because
+    // `next-intl` puts a third one on this response: `NEXT_LOCALE`, which it
+    // does not offer an `httpOnly` for. That is deliberate on its part and
+    // harmless — it is a display preference, and everything that decides
+    // anything re-derives the locale from the path — but it means `every`
+    // would be asserting an attribute one of the cookies cannot carry.
+    const experimentCookies = cookies.filter(
+      (c) =>
+        c.startsWith(`${VISITOR_COOKIE}=`) ||
+        c.startsWith(`${ASSIGNMENT_COOKIE}=`),
+    );
+    expect(experimentCookies).toHaveLength(2);
     // https in these tests, so the cookies must carry Secure.
-    expect(cookies.every((c) => c.includes("Secure"))).toBe(true);
-    expect(cookies.every((c) => c.includes("HttpOnly"))).toBe(true);
+    expect(experimentCookies.every((c) => c.includes("Secure"))).toBe(true);
+    expect(experimentCookies.every((c) => c.includes("HttpOnly"))).toBe(true);
   });
 
   it("rewrites to the assigned arm without changing the URL", async () => {
@@ -585,7 +597,16 @@ describe("proxy — experiment routing", () => {
       }),
       event,
     );
-    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    // The canonical *page*, at its segment path — not "no rewrite".
+    //
+    // Every page request is rewritten now, because `/pricing` is answered by
+    // `src/app/[locale]/pricing/page.tsx` and the path that reaches it is
+    // `/en/pricing`. What distinguishes the control arm is that no `/v/<arm>`
+    // appears in it: the canonical page renders itself, which is the property
+    // this test has always been about.
+    const rewrite = response.headers.get("x-middleware-rewrite");
+    expect(rewrite).toContain("/en/pricing");
+    expect(rewrite).not.toContain("/v/");
   });
 
   it("reports the exposure on the canonical path", async () => {
@@ -603,7 +624,11 @@ describe("proxy — experiment routing", () => {
       request("/blog", { address: freshAddress(), country: "US" }),
       event,
     );
-    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    // Rewritten onto the `[locale]` segment like every other page, and
+    // untouched by the experiment: no arm in the path, no exposure header.
+    const rewrite = response.headers.get("x-middleware-rewrite");
+    expect(rewrite).toContain("/en/blog");
+    expect(rewrite).not.toContain("/v/");
     expect(response.headers.get("x-experiment-exposure")).toBeNull();
   });
 
@@ -649,7 +674,14 @@ describe("proxy — experiment routing", () => {
 
     expect(response.headers.get("location")).toBe("https://example.test/login");
     expect(response.headers.get("x-middleware-rewrite")).toBeNull();
-    expect(response.headers.getSetCookie().length).toBe(2);
+    // The two experiment cookies, named rather than counted: `next-intl` adds
+    // `NEXT_LOCALE` to this response too, and a count would have been a test of
+    // how many cookies the proxy happens to write.
+    const cookies = response.headers.getSetCookie();
+    expect(cookies.some((c) => c.startsWith(`${VISITOR_COOKIE}=`))).toBe(true);
+    expect(cookies.some((c) => c.startsWith(`${ASSIGNMENT_COOKIE}=`))).toBe(
+      true,
+    );
   });
 
   it("still reports the rate-limit budget on a bucketed response", async () => {
@@ -875,5 +907,154 @@ describe("proxy — the hardening headers", () => {
 
     expect(response.headers.get(CSP_HEADER)).toContain("'nonce-");
     expect(response.headers.get("ratelimit-remaining")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Locale negotiation: the second concern, and the composition questions it
+// raises with the four around it. The routing itself is next-intl's, and the
+// path arithmetic is tested in `@/i18n/path`; what is asserted here is where it
+// sits in the order and what it must not touch.
+// ---------------------------------------------------------------------------
+
+describe("proxy — locale negotiation", () => {
+  it("rewrites an unprefixed page onto the default locale's segment", async () => {
+    // `src/app/pricing` does not exist any more: the only thing that answers
+    // `/pricing` is `src/app/[locale]/pricing/page.tsx`, reached at
+    // `/en/pricing`. Without this rewrite the whole application 404s at the
+    // default locale, which is the one every existing link points at.
+    const response = await proxy(
+      request("/blog", { address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toContain("/en/blog");
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("rewrites a prefixed page onto its own segment, not the default", async () => {
+    const response = await proxy(
+      request("/ar/blog", { address: freshAddress() }),
+      event,
+    );
+
+    const rewrite = response.headers.get("x-middleware-rewrite");
+    expect(rewrite).toContain("/ar/blog");
+    expect(rewrite).not.toContain("/en/");
+  });
+
+  it("maps the locale root onto the bare segment", async () => {
+    const response = await proxy(
+      request("/ar", { address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toMatch(/\/ar$/u);
+  });
+
+  it("leaves route handlers outside the segment entirely", async () => {
+    // `/api/*` is not under `src/app/[locale]`. next-intl does not know that:
+    // the first segment of `/api/health` is not a locale, so it reads the path
+    // as unprefixed and would rewrite it to `/en/api/health` — a handler that
+    // does not exist. For a visitor whose cookie says `ar` it would answer with
+    // a *redirect*, which turns every `fetch` from an Arabic page into a 404,
+    // `/api/auth/callback/credentials` included.
+    const response = await proxy(
+      request("/api/health", { address: freshAddress() }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("does not redirect an auth endpoint into a locale", async () => {
+    const response = await proxy(
+      request("/api/auth/session", {
+        address: freshAddress(),
+        cookies: { NEXT_LOCALE: "ar" },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+  });
+
+  it("redirects to the cookie's locale, and does so before bucketing", async () => {
+    // A redirect renders no document, so there is no arm worth assigning and
+    // no visitor cookie worth minting — the visitor is about to arrive at
+    // `/ar/pricing` and be bucketed there.
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: { NEXT_LOCALE: "ar" },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("location")).toContain("/ar/pricing");
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("buckets a prefixed experiment path, and rewrites inside that locale", async () => {
+    // The regression this guards is silent: an experiment's `route.path` is
+    // `/pricing`, which equals `/ar/pricing` for no experiment, so before the
+    // locale was stripped every visitor on a prefixed locale was served the
+    // canonical arm with no exposure header to say so. The experiment would
+    // have gone on reporting a difference between two populations, one of which
+    // was never split.
+    const response = await proxy(
+      request("/ar/pricing", {
+        address: freshAddress(),
+        country: "US",
+        cookies: {
+          [VISITOR_COOKIE]: "0189d0aa-4b27-4d1f-9c3e-2f7f8a1b2c3d",
+          [ASSIGNMENT_COOKIE]: "pricing-cta:annual-first",
+        },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("x-middleware-rewrite")).toContain(
+      "/ar/pricing/v/annual-first",
+    );
+    expect(response.headers.get("x-experiment-exposure")).toBe(
+      "pricing-cta:annual-first",
+    );
+  });
+
+  it("hardens and gives a policy to a locale redirect", async () => {
+    // Every return path goes through the same two steps. A redirect that is
+    // missing `nosniff` is still a response a browser will sniff.
+    const response = await proxy(
+      request("/pricing", {
+        address: freshAddress(),
+        cookies: { NEXT_LOCALE: "ar" },
+      }),
+      event,
+    );
+
+    expect(response.headers.get("location")).toContain("/ar/pricing");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(
+      response.headers.get("content-security-policy") ??
+        response.headers.get("content-security-policy-report-only"),
+    ).toBeTruthy();
+  });
+
+  it("keeps the locale cookie on a rebuilt response", async () => {
+    // The response is rebuilt as a rewrite, so next-intl's own `Set-Cookie`
+    // does not survive on its own. Without it a visitor who was redirected to
+    // `/ar` once is renegotiated from `Accept-Language` on every later request.
+    const response = await proxy(
+      request("/ar/blog", { address: freshAddress() }),
+      event,
+    );
+
+    expect(
+      response.headers.getSetCookie().some((c) => c.startsWith("NEXT_LOCALE=")),
+    ).toBe(true);
   });
 });

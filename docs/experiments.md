@@ -18,9 +18,9 @@ src/lib/experiments/
 ├── assignment.ts    the precedence rules: override → cookie → targeting → hash
 ├── routing.ts       assignment → rewrite target
 └── edge.ts          the only module that touches a request
-src/proxy.ts         calls two functions from edge.ts
-src/app/pricing/     the canonical page (control) and v/[variant] (the rest)
-scripts/assert-experiment-wiring.ts   the CI gate over all of it
+src/proxy.ts                         calls two functions from edge.ts
+src/app/[locale]/pricing/            the canonical page (control) and v/[variant] (the rest)
+scripts/assert-experiment-wiring.ts  the CI gate over all of it
 ```
 
 ## The request

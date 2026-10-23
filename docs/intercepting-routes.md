@@ -118,20 +118,20 @@ a photo does a full page load instead of opening the modal:
 - `app/layout.tsx` stops rendering `{modal}`
 - a tile becomes a `<button onClick={router.push}>`
 
-`src/app/photos/interception.test.ts` asserts the file paths and the layout
+`src/app/[locale]/photos/interception.test.ts` asserts the file paths and the layout
 wiring directly, for exactly that reason — the same reason
 `scripts/assert-route-shape.ts` exists one level up.
 
 ## What is asserted where
 
-| Claim                                                         | Where                                 |
-| ------------------------------------------------------------- | ------------------------------------- |
-| The interceptor and slot are at the paths the router requires | `src/app/photos/interception.test.ts` |
-| Dismissal navigates rather than hiding                        | `photo-modal.test.tsx`                |
-| Tiles are links carrying the photo's own URL                  | `photo-grid.test.tsx`                 |
-| Modal and page render the same photo                          | `photo-detail.test.tsx`               |
-| `/photos` is static, `/photos/[id]` is prebuilt               | `scripts/assert-route-shape.ts`       |
-| A click opens a modal; a reload renders a page                | `e2e/photos.spec.ts`                  |
+| Claim                                                         | Where                                          |
+| ------------------------------------------------------------- | ---------------------------------------------- |
+| The interceptor and slot are at the paths the router requires | `src/app/[locale]/photos/interception.test.ts` |
+| Dismissal navigates rather than hiding                        | `photo-modal.test.tsx`                         |
+| Tiles are links carrying the photo's own URL                  | `photo-grid.test.tsx`                          |
+| Modal and page render the same photo                          | `photo-detail.test.tsx`                        |
+| `/photos` is static, `/photos/[id]` is prebuilt               | `scripts/assert-route-shape.ts`                |
+| A click opens a modal; a reload renders a page                | `e2e/photos.spec.ts`                           |
 
 Only the last one can observe interception itself, and it needs a real
 browser. See the note on E2E in the README — Playwright is not yet wired into

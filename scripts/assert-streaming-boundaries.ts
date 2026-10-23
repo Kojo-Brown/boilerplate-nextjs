@@ -28,6 +28,8 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { LOCALES } from "../src/i18n/locales.js";
+import { internalPath } from "../src/i18n/path.js";
 
 export interface StreamingExpectation {
   /** Route path as it appears in the build output. */
@@ -58,8 +60,22 @@ export interface StreamingExpectation {
  *
  * Every dashboard route carries at least one hole for `<UserChip>` in
  * `(dashboard)/layout.tsx`; the counts below are that plus the page's own.
+ *
+ * These are public paths, and `EXPECTED_STREAMING` below is them crossed with
+ * the locale registry — `/dashboard` is prerendered as `/en/dashboard` and
+ * `/ar/dashboard` now that the tree is under `src/app/[locale]`. The same split
+ * as in `scripts/assert-route-shape.ts`: where the shell boundary falls is a
+ * property of the route, so it is written down once, and the locale axis is
+ * derived so that adding a locale cannot leave one of them unchecked.
+ *
+ * The needles need no translation, and it is worth saying why, because the
+ * route-shape gate's did. These are page headings — `">Dashboard</h1>"` — and
+ * the string extraction so far covers the navigation, the theme control, the
+ * post counts and the auth forms. A heading that moves into the catalogues
+ * fails this gate for `ar` on its next build, which is the right moment to
+ * learn that it needs a catalogue key here too.
  */
-export const EXPECTED_STREAMING: readonly StreamingExpectation[] = [
+const BASE_STREAMING: readonly StreamingExpectation[] = [
   {
     route: "/dashboard",
     mustPrerender: [">Dashboard</h1>", ">Session</h2>", ">User ID</dt>"],
@@ -143,6 +159,15 @@ export const EXPECTED_STREAMING: readonly StreamingExpectation[] = [
       "the warning about what this form does has to be in the document that renders the form, not streamed in after it",
   },
 ];
+
+/** `BASE_STREAMING`, once per locale. */
+export const EXPECTED_STREAMING: readonly StreamingExpectation[] =
+  BASE_STREAMING.flatMap((expectation) =>
+    LOCALES.map((locale) => ({
+      ...expectation,
+      route: internalPath(locale, expectation.route),
+    })),
+  );
 
 export interface Violation {
   route: string;

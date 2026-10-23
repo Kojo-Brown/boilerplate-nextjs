@@ -71,7 +71,7 @@ Adding it found two routes with no landmark at all: `/login` and `/register`
 rendered a centred `<div>`, so the skip link had nowhere to go on the first
 page a signed-out visitor sees. `/_not-found` was worse — it inherited the root
 layout, so it _had_ the skip link, and fell back to Next's built-in 404, which
-has no `<main>`. `src/app/not-found.tsx` exists for that reason and `/_not-found`
+has no `<main>`. `src/app/[locale]/not-found.tsx` exists for that reason and `/_not-found`
 is in the gate's `REQUIRED_DOCUMENTS` so that deleting it fails the build
 rather than silently restoring the built-in.
 

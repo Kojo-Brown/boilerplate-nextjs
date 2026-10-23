@@ -247,9 +247,9 @@ properties.
   - **Test** `src/lib/auth/password-change.test.ts` › "writes the hash and revokes the families in one transaction"
   - **Test** `src/lib/auth/password-change.test.ts` › "revokes nothing when the row no longer holds the verified hash"
   - **Test** `scripts/assert-session-hardening.test.ts` › "fails when the revocation is keyed on one family instead of the user"
-- **Mitigation** — the change is reachable by a person and counted as a credential attempt. `src/app/(dashboard)/settings/security/page.tsx` mounts the form — a revocation with nothing rendering it is the `ThemeToggle` defect in a worse place — and because the action verifies the current password before writing, `src/lib/rate-limit/policy.ts` puts a POST to that path on the same ten-a-minute bucket as `/login`. Without its own rule the Server Action fallback would have allowed 120 guesses a minute against an account whose identity the caller already knows.
+- **Mitigation** — the change is reachable by a person and counted as a credential attempt. `src/app/[locale]/(dashboard)/settings/security/page.tsx` mounts the form — a revocation with nothing rendering it is the `ThemeToggle` defect in a worse place — and because the action verifies the current password before writing, `src/lib/rate-limit/policy.ts` puts a POST to that path on the same ten-a-minute bucket as `/login`. Without its own rule the Server Action fallback would have allowed 120 guesses a minute against an account whose identity the caller already knows.
   - **Test** `src/lib/rate-limit/policy.test.ts` › "counts a password change against the credential budget too"
-  - **Test** `src/app/(dashboard)/settings/security/page.test.tsx` › "mounts the change-password form"
+  - **Test** `src/app/[locale]/(dashboard)/settings/security/page.test.tsx` › "mounts the change-password form"
 
 ### A08:2021 — Software and Data Integrity Failures
 

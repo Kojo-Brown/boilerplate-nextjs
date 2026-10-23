@@ -58,7 +58,7 @@ API handlers are dynamic.
 
 ## The prerequisite nobody had measured
 
-`src/app/layout.tsx` awaited `auth()` at the root of the tree. Because that
+`src/app/[locale]/layout.tsx` awaited `auth()` at the root of the tree. Because that
 reads cookies, **it made every route in the application dynamic** — including
 the ones Phase 5 marked done as ISR.
 
@@ -122,7 +122,7 @@ one change rather than a staged rollout.
 `revalidate` and `dynamicParams` are hard compile errors:
 
 ```
-./src/app/blog/[slug]/page.tsx:16:14
+./src/app/[locale]/blog/[slug]/page.tsx:16:14
 Route segment config "dynamicParams" is not compatible with
 `nextConfig.cacheComponents`. Please remove it.
 ```
@@ -230,7 +230,7 @@ boundary.
 > authorisation check, and two routes leaned on it: `/images` and `/upload` are
 > absent from `PROTECTED_PREFIXES` in `auth.config.ts`, so the proxy does not
 > gate them. Both now call `getRequiredSession()` themselves, covered by
-> `src/app/(dashboard)/auth-guards.test.ts`. That is where the check belonged
+> `src/app/[locale]/(dashboard)/auth-guards.test.ts`. That is where the check belonged
 > anyway — Next does not re-render a shared layout when the user navigates
 > between sibling routes inside it, so a layout-level check is skipped on
 > exactly those navigations.

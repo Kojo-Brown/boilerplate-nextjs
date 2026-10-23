@@ -1,10 +1,37 @@
 // @vitest-environment jsdom
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
+import { NextIntlClientProvider } from "next-intl";
+// The labels come from the catalogue now, so the component needs the provider.
+// Asserted against the shipped `en` file rather than against literals repeated
+// here: a renamed message should break this test, which is the only place it
+// can break before it reaches a page.
+import { renderWithProviders as render } from "@/test/render";
+import { CATALOGUES } from "@/i18n/catalogues";
+import { DEFAULT_LOCALE } from "@/i18n/locales";
 import { ThemeToggle } from "./theme-toggle";
+
+const theme = CATALOGUES.en.common.theme;
+
+/**
+ * The server render the hydration tests need, with the provider around it.
+ *
+ * `renderToStaticMarkup` takes a single element, so the provider has to be in
+ * the tree rather than supplied by a test renderer.
+ */
+function staticMarkup(element: React.ReactElement): string {
+  return renderToStaticMarkup(
+    <NextIntlClientProvider
+      locale={DEFAULT_LOCALE}
+      messages={CATALOGUES[DEFAULT_LOCALE]}
+    >
+      {element}
+    </NextIntlClientProvider>,
+  );
+}
 
 const mockSetTheme = vi.fn();
 let mockTheme = "system";
@@ -28,7 +55,7 @@ describe("ThemeToggle", () => {
     render(<ThemeToggle />);
     expect(screen.getByRole("button")).toHaveAttribute(
       "aria-label",
-      "System theme",
+      theme.system,
     );
   });
 
@@ -37,7 +64,7 @@ describe("ThemeToggle", () => {
     render(<ThemeToggle />);
     expect(screen.getByRole("button")).toHaveAttribute(
       "aria-label",
-      "Light theme",
+      theme.light,
     );
   });
 
@@ -46,7 +73,7 @@ describe("ThemeToggle", () => {
     render(<ThemeToggle />);
     expect(screen.getByRole("button")).toHaveAttribute(
       "aria-label",
-      "Dark theme",
+      theme.dark,
     );
   });
 
@@ -85,13 +112,13 @@ describe("ThemeToggle", () => {
 
     it("renders a neutral label on the server, whatever the stored theme", () => {
       mockTheme = "dark";
-      const html = renderToStaticMarkup(<ThemeToggle />);
-      expect(html).toContain('aria-label="Theme"');
-      expect(html).not.toContain("Dark theme");
+      const html = staticMarkup(<ThemeToggle />);
+      expect(html).toContain(`aria-label="${theme.toggle}"`);
+      expect(html).not.toContain(theme.dark);
     });
 
     it("still renders a button, so the header does not reflow on hydration", () => {
-      const html = renderToStaticMarkup(<ThemeToggle />);
+      const html = staticMarkup(<ThemeToggle />);
       expect(html).toContain("<button");
     });
 
@@ -103,15 +130,15 @@ describe("ThemeToggle", () => {
       // include `disabled:pointer-events-none disabled:opacity-50`, so a plain
       // `not.toContain("disabled")` fails on the class list and says nothing
       // about the attribute.
-      expect(renderToStaticMarkup(<ThemeToggle />)).not.toMatch(
+      expect(staticMarkup(<ThemeToggle />)).not.toMatch(
         /<button[^>]*\sdisabled[\s=>]/,
       );
     });
 
     it("passes className through to the placeholder", () => {
-      expect(
-        renderToStaticMarkup(<ThemeToggle className="my-class" />),
-      ).toContain("my-class");
+      expect(staticMarkup(<ThemeToggle className="my-class" />)).toContain(
+        "my-class",
+      );
     });
   });
 });

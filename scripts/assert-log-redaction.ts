@@ -112,35 +112,35 @@ export const CONSOLE_EXCEPTIONS: readonly { file: string; why: string }[] = [
     why: "validates NEXT_PUBLIC_* only, which is public by construction, and runs in the browser",
   },
   {
-    file: "src/app/blog/error.tsx",
+    file: "src/app/[locale]/blog/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/blog/[slug]/error.tsx",
+    file: "src/app/[locale]/blog/[slug]/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/photos/error.tsx",
+    file: "src/app/[locale]/photos/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/photos/[id]/error.tsx",
+    file: "src/app/[locale]/photos/[id]/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/pricing/error.tsx",
+    file: "src/app/[locale]/pricing/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/pricing/v/[variant]/error.tsx",
+    file: "src/app/[locale]/pricing/v/[variant]/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/(dashboard)/upload/error.tsx",
+    file: "src/app/[locale]/(dashboard)/upload/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
   {
-    file: "src/app/(dashboard)/settings/security/error.tsx",
+    file: "src/app/[locale]/(dashboard)/settings/security/error.tsx",
     why: "a client error boundary: writes to the browser's own console",
   },
 ];
