@@ -181,18 +181,28 @@ export const ALLOWED_VIOLATIONS: readonly Allowance[] = [
     because:
       "Next generates this static 500 document itself and gives its `<html>` no `lang`; `global-error.tsx` cannot replace it, only the runtime boundary it is the fallback for",
   },
-  {
-    route: "/blog/[slug]",
-    rule: "document-title",
-    because:
-      "the fallback shell for an unseen slug is prerendered before the slug exists, so `generateMetadata` has not run; Next streams the title into the real response",
-  },
-  {
-    route: "/photos/[id]",
-    rule: "document-title",
-    because:
-      "the same fallback-shell property as /blog/[slug]: the title is derived from the photo this document does not yet know",
-  },
+  /*
+   * One entry per locale rather than one pattern covering both, and the
+   * difference is what happens when a locale stops prerendering its shell: a
+   * pattern would go on matching the surviving locale and stay silent, where
+   * these report a stale allowance naming the locale that disappeared. The
+   * route is the *segment* path — `internalPath`, not `localisePath` — because
+   * that is how the build names its documents, for the default locale too.
+   */
+  ...LOCALES.flatMap((locale): Allowance[] => [
+    {
+      route: internalPath(locale, "/blog/[slug]"),
+      rule: "document-title",
+      because:
+        "the fallback shell for an unseen slug is prerendered before the slug exists, so `generateMetadata` has not run; Next streams the title into the real response",
+    },
+    {
+      route: internalPath(locale, "/photos/[id]"),
+      rule: "document-title",
+      because:
+        "the same fallback-shell property as /blog/[slug]: the title is derived from the photo this document does not yet know",
+    },
+  ]),
 ];
 
 /**
@@ -212,15 +222,19 @@ export const ALLOWED_INCOMPLETE: readonly Allowance[] = [
   // satisfied by a skip link as well as by a landmark, and there is now one in
   // every document — see docs/focus-management.md. The rule passes on its
   // merits rather than by exemption.
-  {
-    // Seeded slugs rather than a fixed list: `prisma/seed.ts` owns the titles,
-    // and a gate that named them would fail the next time the seed changed.
-    route: /^\/blog\/(?!\[)/,
+
+  // Seeded slugs rather than a fixed list: `prisma/seed.ts` owns the titles,
+  // and a gate that named them would fail the next time the seed changed. One
+  // pattern per locale, for the reason given above `ALLOWED_VIOLATIONS`'
+  // locale entries, and anchored at the locale's own blog prefix so a pattern
+  // written for `en` cannot absorb an `ar` document.
+  ...LOCALES.map((locale): Allowance => ({
+    route: new RegExp(`^${internalPath(locale, "/blog/")}(?!\\[)`),
     rule: "color-contrast",
     htmlIncludes: "bg-gradient-to-t",
     because:
       "the video facade's caption sits on `from-black/80 to-transparent` over a thumbnail, and axe reports a gradient as undecidable rather than measuring it. Reviewed by hand: the text box is `pb-3` from the bottom, inside the region that is at least 80% black, which is 12.6:1 against white even over the lightest possible frame",
-  },
+  })),
 ];
 
 /**
@@ -298,10 +312,18 @@ export const RULES_THAT_MUST_RUN = ["color-contrast", "target-size"] as const;
 /**
  * Documents that legitimately carry no theme class.
  *
- * `global-error.tsx` replaces the root layout, so the provider that writes
- * `.light`/`.dark` onto `<html>` is not in that document at all — it follows
- * `prefers-color-scheme` instead, which the runner sets alongside the stored
- * theme, so its dark pass is a real dark pass by the other mechanism.
+ * Both replace the root layout rather than rendering inside it, so the provider
+ * that writes `.light`/`.dark` onto `<html>` is not in either document at all —
+ * they follow `prefers-color-scheme` instead, which the runner sets alongside
+ * the stored theme, so their dark pass is a real dark pass by the other
+ * mechanism.
+ *
+ * `/_not-found` joined this list when the route tree moved under `[locale]`.
+ * A `not-found.tsx` inside the segment cannot answer a URL whose first segment
+ * is not a locale — there is no locale to render it in — so that document is
+ * `global-not-found.tsx`, which sits outside the layout hierarchy for the same
+ * reason `global-error.tsx` does and inherits the same absence. It does carry
+ * `lang` and a `<title>` of its own, which is why only this check excuses it.
  *
  * Listed rather than inferred, and checked in both directions: a document here
  * that turns out to have the class is reported as a stale entry, the same way
@@ -309,6 +331,7 @@ export const RULES_THAT_MUST_RUN = ["color-contrast", "target-size"] as const;
  */
 export const DOCUMENTS_WITHOUT_THEME_CLASS: readonly string[] = [
   "/_global-error",
+  "/_not-found",
 ];
 
 export interface Finding {
@@ -337,8 +360,102 @@ export interface Report {
    * The entry is no longer true, so it should go rather than stay as a hole.
    */
   themedDespiteExemption: readonly string[];
+  /**
+   * Locale shells that were skipped without every locale's real document being
+   * present to stand in for them — see {@link shellsWithoutCounterparts}.
+   */
+  shellsMissingCounterparts: readonly string[];
   /** How many (document, theme) pairs were audited. */
   audited: number;
+}
+
+/**
+ * The dynamic segment every page is routed through, as the build spells it.
+ *
+ * Literal rather than derived from the routing config, because this is a fact
+ * about the *filesystem* the build walked: the directory is named `[locale]`
+ * and that name is what ends up in a document's path. `routeForFile` would
+ * report the same string however the segment were configured.
+ */
+export const LOCALE_SEGMENT = "[locale]";
+
+/**
+ * Whether `route` is the fallback shell Next prerenders for the locale segment
+ * itself, rather than a document any request is answered with.
+ *
+ * Such a shell is rendered before the segment's parameter exists, and the
+ * locale is not one value among many in this layout — it *is* `<html lang>`
+ * and `<html dir>`, it selects the catalogue every string comes from, and it
+ * decides which stylesheet link the document carries. So the shell has no
+ * `lang`, no `<title>`, no theme class and no CSS, and every rule that reads
+ * any of those reports a violation that describes the hole rather than the
+ * page: 72 of them here, none fixable, on 18 documents nobody is served.
+ *
+ * Nobody is served them because the parameter is closed. `generateStaticParams`
+ * enumerates the registry, so every locale that exists is prerendered, and the
+ * segment's layout calls `notFound()` for a value that is not in it — a request
+ * for `/de/blog` is a 404, not this shell. That argument is checked rather than
+ * trusted: {@link localeShellCounterparts} is compared against what the build
+ * actually wrote, so a shell whose concrete documents stopped being prerendered
+ * fails the gate instead of quietly becoming the thing being served.
+ */
+export function isLocaleShell(route: string): boolean {
+  return (
+    route === `/${LOCALE_SEGMENT}` || route.startsWith(`/${LOCALE_SEGMENT}/`)
+  );
+}
+
+/**
+ * The concrete documents a locale shell stands in for, one per locale.
+ *
+ * `/[locale]/blog` → `/en/blog`, `/ar/blog`. These are the documents the audit
+ * covers in the shell's place, and the gate requires all of them to exist
+ * before it agrees to skip the shell.
+ */
+export function localeShellCounterparts(route: string): string[] {
+  const rest = route.slice(`/${LOCALE_SEGMENT}`.length);
+  return LOCALES.map((locale) =>
+    internalPath(locale, rest === "" ? "/" : rest),
+  );
+}
+
+/**
+ * Splits the build's documents into the ones to audit and the locale shells to
+ * skip, keeping both so the report can hold the skipped ones to account.
+ */
+export function partitionDocuments(found: readonly AuditTarget[]): {
+  audited: AuditTarget[];
+  shells: AuditTarget[];
+} {
+  const audited: AuditTarget[] = [];
+  const shells: AuditTarget[] = [];
+  for (const target of found) {
+    (isLocaleShell(target.route) ? shells : audited).push(target);
+  }
+  return { audited, shells };
+}
+
+/**
+ * Locale shells whose concrete documents are not all in the build output.
+ *
+ * The check that keeps {@link isLocaleShell} from being a blind spot. Skipping
+ * a shell is only sound while every locale's real document is audited in its
+ * place; a route that prerenders its shell and nothing else is a route this
+ * gate would otherwise stop looking at entirely.
+ */
+export function shellsWithoutCounterparts(
+  shells: readonly AuditTarget[],
+  audited: readonly AuditTarget[],
+): string[] {
+  const routes = new Set(audited.map((target) => target.route));
+  return shells
+    .map((shell) => shell.route)
+    .filter(
+      (route) =>
+        !localeShellCounterparts(route).every((counterpart) =>
+          routes.has(counterpart),
+        ),
+    );
 }
 
 /** Every prerendered document under `.next/server/app`, in a stable order. */
@@ -453,6 +570,8 @@ export function buildReport(
     themes?: readonly Theme[];
     rulesThatMustRun?: readonly string[];
     withoutThemeClass?: readonly string[];
+    /** The locale shells `partitionDocuments` held back from the audit. */
+    shells?: readonly AuditTarget[];
   } = {},
 ): Report {
   const allowedViolations = options.allowedViolations ?? ALLOWED_VIOLATIONS;
@@ -550,6 +669,10 @@ export function buildReport(
     unstyled,
     rulesThatDidNotRun,
     themedDespiteExemption: [...themedAnyway].sort(),
+    shellsMissingCounterparts: shellsWithoutCounterparts(
+      options.shells ?? [],
+      found,
+    ),
     audited: audits.length,
   };
 }
@@ -561,7 +684,8 @@ export function reportIsClean(report: Report): boolean {
     report.missingDocuments.length === 0 &&
     report.unstyled.length === 0 &&
     report.rulesThatDidNotRun.length === 0 &&
-    report.themedDespiteExemption.length === 0
+    report.themedDespiteExemption.length === 0 &&
+    report.shellsMissingCounterparts.length === 0
   );
 }
 
@@ -640,6 +764,20 @@ export function formatReport(report: Report): string {
       "  These documents are listed as carrying no theme class, and do carry it.\n" +
         "  Remove them from DOCUMENTS_WITHOUT_THEME_CLASS so the check applies:\n" +
         report.themedDespiteExemption.map((route) => `    ${route}`).join("\n"),
+    );
+  }
+
+  if (report.shellsMissingCounterparts.length > 0) {
+    sections.push(
+      "  These locale shells were skipped, and the documents that were supposed\n" +
+        "  to be audited in their place are not in the build output — so these\n" +
+        "  routes went unaudited entirely:\n" +
+        report.shellsMissingCounterparts
+          .map(
+            (route) =>
+              `    ${route}\n      expected ${localeShellCounterparts(route).join(", ")}`,
+          )
+          .join("\n"),
     );
   }
 
@@ -886,7 +1024,9 @@ export async function auditDocuments(
 
 async function main(argv: readonly string[]): Promise<number> {
   const nextDir = path.resolve(argv[0] ?? ".next");
-  const targets = discoverDocuments(path.join(nextDir, "server", "app"));
+  const { audited: targets, shells } = partitionDocuments(
+    discoverDocuments(path.join(nextDir, "server", "app")),
+  );
 
   if (targets.length === 0) {
     console.error(
@@ -898,7 +1038,9 @@ async function main(argv: readonly string[]): Promise<number> {
   const { run, close } = await createChromiumRunner(nextDir);
   let report: Report;
   try {
-    report = buildReport(await auditDocuments(run, targets), targets);
+    report = buildReport(await auditDocuments(run, targets), targets, {
+      shells,
+    });
   } finally {
     await close();
   }
@@ -913,7 +1055,8 @@ async function main(argv: readonly string[]): Promise<number> {
 
   console.log(
     `WCAG 2.2 AA audit OK — ${targets.length} prerendered document(s) × ` +
-      `${THEMES.length} theme(s), ${WCAG_TAGS.length} rule set(s), no violations.`,
+      `${THEMES.length} theme(s), ${WCAG_TAGS.length} rule set(s), no violations` +
+      `${shells.length === 0 ? "" : `; ${shells.length} locale shell(s) skipped, each covered by ${LOCALES.length} real document(s)`}.`,
   );
   return 0;
 }

@@ -17,18 +17,49 @@ success criteria. The rest needs a keyboard, a screen reader and a person.
 pnpm build && pnpm exec tsx scripts/assert-accessibility.ts
 ```
 
-- **Every prerendered document.** 31 of them at the time of writing: the fifteen
-  concrete routes, the four fallback shells for dynamic segments
-  (`/blog/[slug]`, `/photos/[id]`, `/posts/[id]`, `/pricing/v/[variant]`), the
-  intercepted modal slot, the seeded blog posts and photos, `/_not-found` and
-  `/_global-error`. A new route is in the audit the moment it prerenders;
+- **Every prerendered document, in every locale.** 60 of them at the time of
+  writing, out of the 78 the build writes: each concrete route, the fallback
+  shells for the dynamic segments below it (`/blog/[slug]`, `/photos/[id]`,
+  `/posts/[id]`, `/pricing/v/[variant]`), the intercepted modal slot and the
+  seeded blog posts and photos — all of that once per locale, because an `ar`
+  document is a different document and not a copy of the `en` one — plus
+  `/_not-found` and `/_global-error`, which sit above the locale segment and
+  exist once. A new route is in the audit the moment it prerenders;
   `REQUIRED_DOCUMENTS` is the other direction, and fails if a route the audit
-  used to cover stops producing a document.
+  used to cover stops producing a document, per locale.
+- **Not the 18 `[locale]` fallback shells**, which are the other 18 documents
+  and the only exclusion this gate makes. See [below](#why-the-locale-shells-are-excluded).
 - **Both themes.** The dark palette is a different set of colours and no
   light-mode run can speak for it. See [the finding](#what-it-found) below.
 - **Rule sets** `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22a`,
   `wcag22aa`. Deliberately not `best-practice`: a gate that fails on advice
   nobody agreed to is a gate people stop running.
+
+### Why the `[locale]` shells are excluded
+
+Every page lives under `src/app/[locale]`, so the build also writes a fallback
+shell per route for the locale segment itself — `/[locale]`, `/[locale]/blog`,
+and sixteen more. Auditing those produced 72 violations describing a hole rather
+than a page.
+
+The locale is not one value among many in this layout. It **is** `<html lang>`
+and `<html dir>`, it selects the catalogue every string is read from, and it
+decides which stylesheet the document links. A shell rendered before that
+parameter exists therefore has no `lang`, no `<title>`, no theme class and no
+CSS: `html-has-lang` and `document-title` fail on all eighteen in both themes,
+and none of them can be fixed without hard-coding a locale into the shell, which
+is the defect the segment exists to prevent.
+
+Nobody is served one, because the parameter is closed. `generateStaticParams`
+enumerates the locale registry, so every locale that exists is prerendered, and
+the segment calls `notFound()` for a value that is not in it — `/de/blog` is a
+404, not this shell.
+
+That argument is checked rather than trusted. For every shell it skips, the gate
+requires each locale's concrete document to be in the build output, and fails
+naming the shell when they are not. Without it, a route that prerendered its
+shell and nothing else would drop out of the audit in silence, which is the
+failure mode this gate exists to catch.
 
 ### Why the build output and not a running server
 
@@ -77,18 +108,26 @@ One desktop viewport, 1280×900.
 
 ## Allowances
 
-Four, each with its reason in the source. An allowance that stops matching
-anything **fails the gate** — an exemption nobody needs is a hole waiting for
-the next regression — and an allowance can be pinned to a rule, a route, a theme
-and a substring of the offending markup, so an exemption for one element cannot
-absorb a second element failing the same rule on the same page.
+Seven, each with its reason in the source, and six of them are the same two
+properties written once per locale rather than once as a pattern. That is
+deliberate: a pattern covering both locales goes on matching the surviving one
+when a locale's shell stops being prerendered, and says nothing, where a
+per-locale entry reports the locale that disappeared by name.
 
-| Document              | Rule             | Why                                                                                                                                                                                                                               |
-| --------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/_global-error`      | `html-has-lang`  | Next generates this static 500 document itself, as `<html id="__next_error__">` with no `lang`, whether or not the app defines `global-error.tsx`. Pinned to Next's own markup.                                                   |
-| `/blog/[slug]`        | `document-title` | A fallback shell is prerendered before the slug exists, so `generateMetadata` has not run and the title streams into the real response. The concrete seeded posts all carry theirs.                                               |
-| `/photos/[id]`        | `document-title` | The same property.                                                                                                                                                                                                                |
-| `/blog/<seeded slug>` | `color-contrast` | The video facade's caption sits on `from-black/80 to-transparent` over a thumbnail; axe reports a gradient as undecidable. Reviewed: the text is inside the ≥80%-black region, 12.6:1 against white even over the lightest frame. |
+An allowance that stops matching anything **fails the gate** — an exemption
+nobody needs is a hole waiting for the next regression — and an allowance can be
+pinned to a rule, a route, a theme and a substring of the offending markup, so an
+exemption for one element cannot absorb a second element failing the same rule on
+the same page. The routes are segment paths (`/en/blog/[slug]`, not
+`/blog/[slug]`), because that is how the build names its documents — for the
+default locale too.
+
+| Document                                           | Rule             | Why                                                                                                                                                                                                                               |
+| -------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/_global-error`                                   | `html-has-lang`  | Next generates this static 500 document itself, as `<html id="__next_error__">` with no `lang`, whether or not the app defines `global-error.tsx`. Pinned to Next's own markup.                                                   |
+| `/en/blog/[slug]`, `/ar/blog/[slug]`               | `document-title` | A fallback shell is prerendered before the slug exists, so `generateMetadata` has not run and the title streams into the real response. The concrete seeded posts all carry theirs.                                               |
+| `/en/photos/[id]`, `/ar/photos/[id]`               | `document-title` | The same property.                                                                                                                                                                                                                |
+| `/en/blog/<seeded slug>`, `/ar/blog/<seeded slug>` | `color-contrast` | The video facade's caption sits on `from-black/80 to-transparent` over a thumbnail; axe reports a gradient as undecidable. Reviewed: the text is inside the ≥80%-black region, 12.6:1 against white even over the lightest frame. |
 
 A fourth entry has been retired: `/posts/[id]` was exempt from `bypass`,
 because that shell's nav subtree streams and the document had no landmark. The
@@ -105,6 +144,20 @@ a visitor actually lands on when the root layout throws, and it renders
 `<html lang="en">` with its own styles for both colour schemes — it carries them
 inline rather than importing `globals.css`, because the layout that links that
 stylesheet is what just failed.
+
+Two documents are additionally exempt from the theme-class assertion, which is a
+non-vacuity check rather than an allowance: `/_global-error` and `/_not-found`
+both replace the root layout, so the provider that writes `.light`/`.dark` onto
+`<html>` is in neither of them. They follow `prefers-color-scheme`, which the
+runner sets alongside the stored theme, so their dark pass is a real dark pass by
+the other mechanism. `/_not-found` joined that list with the locale segment: a
+`not-found.tsx` inside `[locale]` cannot answer a URL whose first segment is not
+a locale — there is no locale to render it in — so that document is
+`global-not-found.tsx`, which sits outside the layout hierarchy for the same
+reason `global-error.tsx` does. Both still carry `lang` and a `<title>`, which is
+why only this one check excuses them, and a document listed here that turns out
+to carry the class after all is reported as stale, the same way an unused
+allowance is.
 
 ## What it found
 

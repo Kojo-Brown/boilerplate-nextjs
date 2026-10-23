@@ -20,9 +20,13 @@ import {
   createAssetServer,
   discoverDocuments,
   formatReport,
+  isLocaleShell,
+  localeShellCounterparts,
   missingDocuments,
+  partitionDocuments,
   reportIsClean,
   routeForFile,
+  shellsWithoutCounterparts,
   type Allowance,
   type AuditTarget,
   type AxeResult,
@@ -378,6 +382,34 @@ describe("buildReport", () => {
     expect(reportIsClean(report)).toBe(false);
   });
 
+  it("passes when every skipped locale shell has its locales audited", () => {
+    const report = reportFor(
+      THEMES.map((theme) => audit({ theme })),
+      {
+        shells: [{ route: "/[locale]/admin", file: "shell.html" }],
+      },
+    );
+
+    expect(report.shellsMissingCounterparts).toEqual([]);
+    expect(reportIsClean(report)).toBe(true);
+  });
+
+  it("fails when a skipped locale shell has nothing standing in for it", () => {
+    // The shell is not audited and its locales did not prerender, so this
+    // route is covered by nothing at all. Skipping is only sound while the
+    // real documents are there.
+    const report = reportFor(
+      THEMES.map((theme) => audit({ theme })),
+      {
+        shells: [{ route: "/[locale]/nowhere", file: "shell.html" }],
+      },
+    );
+
+    expect(report.shellsMissingCounterparts).toEqual(["/[locale]/nowhere"]);
+    expect(reportIsClean(report)).toBe(false);
+    expect(formatReport(report)).toContain("went unaudited entirely");
+  });
+
   describe("non-vacuity", () => {
     it("fails when the browser parsed no CSS at all", () => {
       const report = reportFor(
@@ -701,6 +733,92 @@ describe("createAssetServer", () => {
   });
 });
 
+describe("isLocaleShell", () => {
+  it("recognises the shell for the locale segment itself", () => {
+    expect(isLocaleShell("/[locale]")).toBe(true);
+    expect(isLocaleShell("/[locale]/blog")).toBe(true);
+    expect(isLocaleShell("/[locale]/blog/[slug]")).toBe(true);
+  });
+
+  it("leaves every document a request is answered with", () => {
+    // A resolved locale, including the default one, whose documents are the
+    // whole point of the audit.
+    for (const locale of LOCALES) {
+      expect(isLocaleShell(internalPath(locale, "/"))).toBe(false);
+      expect(isLocaleShell(internalPath(locale, "/blog/[slug]"))).toBe(false);
+    }
+    // The documents above the segment, and a deeper bracketed segment that is
+    // not the locale.
+    expect(isLocaleShell("/_not-found")).toBe(false);
+    expect(isLocaleShell("/_global-error")).toBe(false);
+    expect(isLocaleShell("/en/pricing/v/[variant]")).toBe(false);
+  });
+
+  it("matches on the whole segment rather than its prefix", () => {
+    expect(isLocaleShell("/[locale]x")).toBe(false);
+    expect(isLocaleShell("/x/[locale]")).toBe(false);
+  });
+});
+
+describe("localeShellCounterparts", () => {
+  it("names the document each locale is served in the shell's place", () => {
+    expect(localeShellCounterparts("/[locale]")).toEqual(
+      LOCALES.map((locale) => internalPath(locale, "/")),
+    );
+    expect(localeShellCounterparts("/[locale]/blog/[slug]")).toEqual(
+      LOCALES.map((locale) => internalPath(locale, "/blog/[slug]")),
+    );
+  });
+});
+
+describe("partitionDocuments", () => {
+  it("holds the locale shells back and keeps everything else", () => {
+    const documents: AuditTarget[] = [
+      { route: "/[locale]", file: "a.html" },
+      { route: "/[locale]/blog", file: "b.html" },
+      { route: "/en", file: "c.html" },
+      { route: "/_not-found", file: "d.html" },
+    ];
+
+    const { audited, shells } = partitionDocuments(documents);
+
+    expect(audited.map((target) => target.route)).toEqual([
+      "/en",
+      "/_not-found",
+    ]);
+    expect(shells.map((target) => target.route)).toEqual([
+      "/[locale]",
+      "/[locale]/blog",
+    ]);
+  });
+});
+
+describe("shellsWithoutCounterparts", () => {
+  const shell: AuditTarget = { route: "/[locale]/blog", file: "shell.html" };
+
+  it("accepts a shell every locale has a real document for", () => {
+    const audited = LOCALES.map((locale) => ({
+      route: internalPath(locale, "/blog"),
+      file: `${locale}.html`,
+    }));
+
+    expect(shellsWithoutCounterparts([shell], audited)).toEqual([]);
+  });
+
+  it("reports a shell whose locales stopped prerendering", () => {
+    // The hole the skip would otherwise be: one locale's document is gone, so
+    // skipping the shell means that route is audited in one direction only —
+    // or, with both gone, not at all.
+    const audited = [
+      { route: internalPath(LOCALES[0], "/blog"), file: "one.html" },
+    ];
+
+    expect(shellsWithoutCounterparts([shell], audited)).toEqual([
+      "/[locale]/blog",
+    ]);
+  });
+});
+
 describe("the tables this gate ships with", () => {
   it("gives every allowance a reason", () => {
     for (const allowance of [...ALLOWED_VIOLATIONS, ...ALLOWED_INCOMPLETE]) {
@@ -733,6 +851,50 @@ describe("the tables this gate ships with", () => {
   });
 
   it("keeps the theme-class exemption to the documents that cannot have one", () => {
-    expect([...DOCUMENTS_WITHOUT_THEME_CLASS]).toEqual(["/_global-error"]);
+    // Both replace the root layout, so neither has the theme provider in it.
+    // The list is exact rather than a superset check: an entry added for a
+    // document that renders inside the layout would excuse a real regression.
+    expect([...DOCUMENTS_WITHOUT_THEME_CLASS]).toEqual([
+      "/_global-error",
+      "/_not-found",
+    ]);
+  });
+
+  it("allows the fallback-shell titles in every locale, not just the default", () => {
+    // The bug this is written against: these two allowances named `/blog/[slug]`
+    // and `/photos/[id]`, which were the document paths until the route tree
+    // moved under `[locale]`. Afterwards they matched nothing — reported as
+    // stale — while the documents they were written for, now `/en/…` and
+    // `/ar/…`, failed `document-title` unexcused.
+    for (const locale of LOCALES) {
+      for (const route of ["/blog/[slug]", "/photos/[id]"]) {
+        expect(
+          ALLOWED_VIOLATIONS.some(
+            (allowance) =>
+              allowance.rule === "document-title" &&
+              allowance.route === internalPath(locale, route),
+          ),
+          `${locale} ${route}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("allows the seeded blog's gradient caption in every locale", () => {
+    for (const locale of LOCALES) {
+      const allowance = ALLOWED_INCOMPLETE.find(
+        (candidate) =>
+          candidate.rule === "color-contrast" &&
+          candidate.route instanceof RegExp &&
+          candidate.route.test(
+            internalPath(locale, "/blog/seed-post-cache-life"),
+          ),
+      );
+      expect(allowance, locale).toBeDefined();
+      // And not the fallback shell, which has no caption to excuse.
+      expect(
+        (allowance?.route as RegExp).test(internalPath(locale, "/blog/[slug]")),
+      ).toBe(false);
+    }
   });
 });
