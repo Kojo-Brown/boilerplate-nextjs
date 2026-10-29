@@ -126,6 +126,10 @@ export const UNSCOPED_READERS: readonly { file: string; why: string }[] = [
     file: "src/lib/auth/password-change.ts",
     why: "the same two untenanted tables the rehash and the sign-out already write: `users` for the hash and `session_families` for the revocation, both of which belong to a person across every workspace they are in. Scoping either would make changing a password — and the sign-out it performs — apply to one workspace",
   },
+  {
+    file: "src/lib/auth/session-revocation.ts",
+    why: '`session_families` again, and the same sentence as the password change\'s half of it: a session belongs to a person across every workspace they are a member of, so a scoped revocation would end the sessions of one workspace and leave the rest running — which is the opposite of what "sign out everywhere" promises',
+  },
 ];
 
 // ---------------------------------------------------------------------------

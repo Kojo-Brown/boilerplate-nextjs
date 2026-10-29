@@ -6,15 +6,21 @@ vi.mock("@/lib/auth/password-change", () => ({
   prismaPasswordChangeStore: {},
   reportPasswordChange: vi.fn(),
 }));
+vi.mock("@/lib/auth/session-revocation", () => ({
+  revokeEverySession: vi.fn(),
+  prismaSessionRevocationStore: {},
+  reportSessionRevocation: vi.fn(),
+}));
 
 import type { Session } from "next-auth";
 import { auth, signOut } from "@/auth";
 import { changeUserPassword } from "@/lib/auth/password-change";
+import { revokeEverySession } from "@/lib/auth/session-revocation";
 import type { PasswordChangeOutcome } from "@/lib/auth/password-change";
 import { setRequestHeaders } from "@/test/request-headers";
 import { ORIGIN_REJECTED_MESSAGE } from "@/lib/actions/origin";
 import { UNAUTHENTICATED_MESSAGE } from "@/lib/actions/define-authed-action";
-import { changePasswordAction } from "./account";
+import { changePasswordAction, signOutEverywhereAction } from "./account";
 
 /**
  * The action half of "sign out everywhere".
@@ -31,6 +37,7 @@ import { changePasswordAction } from "./account";
 const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
 const mockSignOut = vi.mocked(signOut);
 const mockChange = vi.mocked(changeUserPassword);
+const mockRevoke = vi.mocked(revokeEverySession);
 
 /**
  * The fixture credentials, named once rather than repeated as literals — see
@@ -82,6 +89,7 @@ beforeEach(() => {
       digest: "NEXT_REDIRECT;replace;/login;307;",
     });
   });
+  mockRevoke.mockResolvedValue(2);
 });
 
 describe("changePasswordAction", () => {
@@ -275,6 +283,108 @@ describe("changePasswordAction", () => {
 
     await changePasswordAction(null, form());
 
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "Sign out everywhere", without a password.
+ *
+ * Built as the TDD kata in `docs/tdd-kata.md`: this block is the kata's first
+ * commit and existed, failing, before the action did. The cases are the
+ * decisions the action makes and nothing the library beneath it decides —
+ * `session-revocation.test.ts` owns the statement itself.
+ */
+describe("signOutEverywhereAction", () => {
+  it("refuses an anonymous caller before revoking anything", async () => {
+    const result = await signOutEverywhereAction(null, new FormData());
+
+    expect(result).toEqual({
+      success: false,
+      error: "You must be signed in to sign out of your sessions.",
+    });
+    // The bespoke sentence rather than the factory's, which is the only part of
+    // the refusal this action gets to decide.
+    expect(result.success === false && result.error).not.toBe(
+      UNAUTHENTICATED_MESSAGE,
+    );
+    expect(mockRevoke).not.toHaveBeenCalled();
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cross-origin post", async () => {
+    signedIn();
+    setRequestHeaders({
+      origin: "https://evil.example",
+      host: "localhost:3000",
+    });
+
+    const result = await signOutEverywhereAction(null, new FormData());
+
+    expect(result).toEqual({ success: false, error: ORIGIN_REJECTED_MESSAGE });
+    expect(mockRevoke).not.toHaveBeenCalled();
+  });
+
+  it("revokes every live family of the session's own user", async () => {
+    // The id comes from the session. A form field naming the account would
+    // make this action a way to end somebody else's sessions, and it is the
+    // one field a caller would most like to supply.
+    signedIn("user-42");
+
+    await expect(
+      signOutEverywhereAction(null, new FormData()),
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining("NEXT_REDIRECT"),
+    });
+
+    // The shape of the statement is `session-revocation.test.ts`'s to assert.
+    // What this file owns is the argument: one account, and the session's.
+    expect(mockRevoke).toHaveBeenCalledWith(
+      { userId: "user-42" },
+      expect.anything(),
+    );
+  });
+
+  it("signs this browser out once the revocation has landed", async () => {
+    signedIn();
+
+    // The revocation cannot clear a cookie — that needs a response — so
+    // without this the person stays on a page whose session is already dead
+    // and discovers it on their next click.
+    await expect(
+      signOutEverywhereAction(null, new FormData()),
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining("NEXT_REDIRECT"),
+    });
+    expect(mockSignOut).toHaveBeenCalledWith({ redirectTo: "/login" });
+  });
+
+  it("reports success when the revocation committed but the sign-out failed", async () => {
+    // Same argument as the password change: the write is committed by the time
+    // `signOut` runs, so "Something went wrong. Please try again." would be
+    // false. The cookie this browser still holds names a revoked family, so
+    // the proxy redirects its next request anyway.
+    signedIn();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockSignOut.mockRejectedValue(new Error("cookie store unavailable"));
+
+    const result = await signOutEverywhereAction(null, new FormData());
+
+    expect(result).toEqual({ success: true, data: undefined });
+    expect(error).toHaveBeenCalled();
+  });
+
+  it("does not sign this browser out when the revocation failed", async () => {
+    // The order is load-bearing in this direction too. Signing out first — or
+    // signing out regardless — would end the one session the caller is holding
+    // while every other session kept running, and the form would have said
+    // they were all gone.
+    signedIn();
+    mockRevoke.mockRejectedValue(new Error("connection terminated"));
+
+    const result = await signOutEverywhereAction(null, new FormData());
+
+    expect(result).toMatchObject({ success: false });
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 });

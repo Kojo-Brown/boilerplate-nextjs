@@ -2,7 +2,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-vi.mock("@/actions/account", () => ({ changePasswordAction: vi.fn() }));
+vi.mock("@/actions/account", () => ({
+  changePasswordAction: vi.fn(),
+  signOutEverywhereAction: vi.fn(),
+}));
 vi.mock("@/lib/toast", () => ({
   toast: Object.assign(vi.fn(), { error: vi.fn() }),
 }));
@@ -10,7 +13,7 @@ vi.mock("@/lib/toast", () => ({
 import SecuritySettingsPage from "./page";
 
 /**
- * The page must mount the form.
+ * The page must mount both forms.
  *
  * `ChangePasswordForm` has its own tests, and every one of them renders it —
  * which is exactly why they cannot notice it being absent from the application.
@@ -29,6 +32,28 @@ describe("SecuritySettingsPage", () => {
       screen.getByRole("button", {
         name: "Change password and sign out everywhere",
       }),
+    ).toBeInTheDocument();
+  });
+
+  it("mounts the sign-out-everywhere form", () => {
+    // The same argument as the case above, and it applies with more force: for
+    // an account that signs in with Google this button is the only revocation
+    // there is, and `sign-out-everywhere-form.test.tsx` renders the component
+    // itself in every one of its cases.
+    render(<SecuritySettingsPage />);
+
+    expect(
+      screen.getByRole("button", { name: "Sign out of every session" }),
+    ).toBeInTheDocument();
+  });
+
+  it("explains that signing out everywhere needs no password", () => {
+    // The card is what tells a Google-only account that the revocation it
+    // cannot reach through the password form is here.
+    render(<SecuritySettingsPage />);
+
+    expect(
+      screen.getByText(/without changing your password/),
     ).toBeInTheDocument();
   });
 

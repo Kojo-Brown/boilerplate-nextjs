@@ -294,6 +294,49 @@ and on the action no longer calling the library. Every one of those leaves a
 working application — the password changes, the form says so, and the cookies
 that were the reason for changing it go on working.
 
+### Revoking without the password
+
+The paragraphs above have a hole in them, and it is the account that most needs
+the feature. `changeUserPassword` verifies a current password before it writes
+anything and answers `no_password` when there is none — which is every account
+that signs in through Google. Those accounts could not revoke a stolen cookie
+at all; it worked until the absolute deadline.
+
+`signOutEverywhereAction` is the same revocation with no credential in front of
+it, posted from the second card on `/settings/security`.
+`@/lib/auth/session-revocation` holds the statement:
+
+```ts
+const { count } = await unscopedPrisma.sessionFamily.updateMany({
+  where: { userId, revokedAt: null },
+  data: { revokedAt: now, revokedReason: "REVOKED_BY_USER" },
+});
+```
+
+The same predicate, the same reason, the same refusal to spare the caller's own
+family — and the same sign-out immediately afterwards, for the same reason the
+password change needs one. Three differences from the snippet above, all of
+them consequences of there being one write instead of two:
+
+- **No transaction.** One statement is atomic, and there is no second write for
+  it to be consistent with. The password change's transaction exists because a
+  new hash without its revocation is worse than neither.
+- **No compare-and-set.** Nothing was verified, so there is no verified value
+  for the write to be conditional on. Two concurrent presses both succeed and
+  the second ends nothing, which is the correct answer to "sign out everywhere"
+  twice.
+- **No gate rule of its own.** R7's four checks exist because the password
+  change's revocation can be dropped, mis-keyed or moved off the transaction
+  client while leaving a working application, and a mocked unit test sees none
+  of it. Here the statement is a store method with its own cases — the
+  predicate key and the `revokedAt: null` among them — and the action's own
+  tests fail if the library call goes away. What R7 protects against that a test
+  cannot is the wrong _client_, and with no transaction there is no second
+  client to confuse.
+
+How it was built, test-first and one commit per step, is written up in
+[tdd-kata.md](./tdd-kata.md).
+
 ## Operating it
 
 Security events are written to stdout as one JSON line each, under
@@ -311,6 +354,13 @@ reconstructs a timeline from afterwards, and its `incorrect` outcome is a
 signed-in caller guessing at the password of the account they are already in.
 The line carries an id, an outcome and a count; it cannot carry either password,
 because `reportPasswordChange` is not given them.
+
+A user-initiated revocation writes one `warn` line under
+`"event":"session_revocation"`, carrying the account and the number of families
+it ended. Zero is a line too: it means every family had already ended, which is
+what somebody reconstructing a timeline needs to see rather than guess at. The
+line is deliberately not in the table of events worth paging on in
+[log-redaction.md](./log-redaction.md) — the account's owner asked for it.
 
 `session_families` rows are kept after revocation on purpose: an operator
 answering "why was I signed out?" needs to see `TOKEN_REUSE` rather than
