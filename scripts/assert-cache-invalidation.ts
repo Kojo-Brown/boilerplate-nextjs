@@ -223,8 +223,17 @@ function exportedValueNames(source: ts.SourceFile): string[] {
  * `assert-transactional-writes.ts` T2 requires the callback to bind its client
  * as exactly `tx`, so a rename is a build failure rather than a way to make
  * this gate stop looking.
+ *
+ * `unscopedPrisma` is the third and was missing, which this gate's own kata
+ * found: `@/lib/tenancy/client` re-exports the singleton under that name, and
+ * for one commit `signOutEverywhereAction` wrote `session_families` through it
+ * directly from `src/actions/account.ts`. R1 saw nothing. The hole was latent
+ * rather than live — the only unscoped action write in the tree, in
+ * `registerAction`, happens inside `unscopedPrisma.$transaction` and so arrives
+ * through `tx` — but a rule that is one import alias away from passing an
+ * unreported mutation is not a rule.
  */
-const CLIENT_NAMES = new Set(["prisma", "tx"]);
+const CLIENT_NAMES = new Set(["prisma", "tx", "unscopedPrisma"]);
 
 /** Whether a node's subtree contains a `<client>.<model>.<write>(...)` call. */
 function containsPrismaWrite(root: ts.Node): boolean {

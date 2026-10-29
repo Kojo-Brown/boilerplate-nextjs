@@ -121,6 +121,32 @@ describe("R1 — a writing action must invalidate", () => {
     expect(findings[0]?.message).toContain("createPostAction");
   });
 
+  it("sees a write made through the named unscoped client", () => {
+    // Checked against the failure it names rather than against a passing tree:
+    // this is the shape `signOutEverywhereAction` had for one commit of the
+    // kata in `docs/tdd-kata.md`, and with `unscopedPrisma` missing from
+    // `CLIENT_NAMES` the gate reported nothing at all.
+    const findings = checkSources([
+      file(
+        "src/actions/account.ts",
+        `"use server";
+         import { unscopedPrisma } from "@/lib/tenancy/client";
+         export const signOutEverywhereAction = defineAuthedFormAction({
+           handler: async ({ user }) => {
+             await unscopedPrisma.sessionFamily.updateMany({
+               where: { userId: user.id, revokedAt: null },
+               data: { revokedAt: new Date() },
+             });
+           },
+         });`,
+      ),
+    ]);
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.rule).toBe("R1");
+    expect(findings[0]?.message).toContain("signOutEverywhereAction");
+  });
+
   it("accepts `emit` as the report for a transactional write", () => {
     // The duty is unchanged — an action that writes must say what it wrote —
     // and only the mechanism moved: the event is recorded in the transaction
