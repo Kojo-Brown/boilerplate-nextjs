@@ -7,6 +7,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ChangePasswordForm } from "./_components/change-password-form";
+import { SignOutEverywhereForm } from "./_components/sign-out-everywhere-form";
 
 export const metadata: Metadata = {
   title: "Security",
@@ -38,7 +39,8 @@ export default function SecuritySettingsPage() {
           className="mt-1 text-sm"
           style={{ color: "var(--muted-foreground)" }}
         >
-          Manage the credential this account signs in with.
+          Manage the credential this account signs in with, and the sessions it
+          has open.
         </p>
       </div>
 
@@ -54,6 +56,21 @@ export default function SecuritySettingsPage() {
         </CardHeader>
         <CardContent>
           <ChangePasswordForm />
+        </CardContent>
+      </Card>
+
+      <Card className="max-w-xl">
+        <CardHeader>
+          <CardTitle>Sign out everywhere</CardTitle>
+          <CardDescription>
+            Ends every session this account has open, including this one,
+            without changing your password. An account that signs in with Google
+            has no password to change, so this is the only way it can revoke a
+            session cookie taken from another device.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <SignOutEverywhereForm />
         </CardContent>
       </Card>
     </div>
