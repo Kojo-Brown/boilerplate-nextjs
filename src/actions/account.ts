@@ -6,20 +6,22 @@ import { isFrameworkSignal } from "@/lib/api/errors";
 import { logError } from "@/lib/logging/logger";
 import { ActionError } from "@/lib/actions/result";
 import { defineAuthedFormAction } from "@/lib/actions/define-authed-action";
-// Unscoped: `session_families` has no tenant column. A session belongs to a
-// person across every workspace they are a member of, and scoping this write
-// would end the sessions of one workspace.
-import { unscopedPrisma } from "@/lib/tenancy/client";
 import {
   changeUserPassword,
   prismaPasswordChangeStore,
   reportPasswordChange,
   type PasswordChangeOutcome,
 } from "@/lib/auth/password-change";
+import {
+  prismaSessionRevocationStore,
+  reportSessionRevocation,
+  revokeEverySession,
+} from "@/lib/auth/session-revocation";
 
 /**
- * The account's own mutations. One so far: changing the password, which is also
- * the application's "sign out everywhere".
+ * The account's own mutations. Two: changing the password, which signs every
+ * session out as a side effect, and signing every session out on its own —
+ * which is the only one of the pair an account with no password can use.
  *
  * ## Why signing out is part of the action and not a follow-up
  *
@@ -34,13 +36,13 @@ import {
  */
 
 /**
- * Where a successful change lands.
+ * Where both mutations in this module land.
  *
  * `/login` with no query string on purpose: the sign-in page is asserted static
  * by `scripts/assert-route-shape.ts`, and a page that reads `searchParams` to
  * render a notice stops being prerenderable. The redirect is the notice.
  */
-const POST_PASSWORD_CHANGE_PATH = "/login";
+const SIGN_IN_PATH = "/login";
 
 /**
  * Eight characters, matching `registerSchema` and the credentials provider.
@@ -85,6 +87,13 @@ const changePasswordSchema = z
 const passwordChange = {
   store: prismaPasswordChangeStore,
   report: reportPasswordChange,
+  now: () => new Date(),
+};
+
+/** The same bindings for `@/lib/auth/session-revocation`, module-private too. */
+const sessionRevocation = {
+  store: prismaSessionRevocationStore,
+  report: reportSessionRevocation,
   now: () => new Date(),
 };
 
@@ -150,7 +159,10 @@ export const changePasswordAction = defineAuthedFormAction({
 
     if (outcome.kind !== "changed") throw refusal(outcome);
 
-    await endThisBrowsersSession();
+    await endThisBrowsersSession({
+      action: "changePassword",
+      committed: "the change committed",
+    });
   },
 });
 
@@ -173,12 +185,15 @@ export const signOutEverywhereAction = defineAuthedFormAction({
   input: z.object({}),
   unauthenticatedMessage: "You must be signed in to sign out of your sessions.",
   handler: async ({ user }): Promise<void> => {
-    await unscopedPrisma.sessionFamily.updateMany({
-      where: { userId: user.id, revokedAt: null },
-      data: { revokedAt: new Date(), revokedReason: "REVOKED_BY_USER" },
-    });
+    await revokeEverySession({ userId: user.id }, sessionRevocation);
 
-    await endThisBrowsersSession();
+    // After the revocation and only after it. A sign-out first would end the
+    // one session the caller is holding while every session they asked to end
+    // carried on, and the form would have told them otherwise.
+    await endThisBrowsersSession({
+      action: "signOutEverywhere",
+      committed: "the revocation committed",
+    });
   },
 });
 
@@ -197,14 +212,19 @@ export const signOutEverywhereAction = defineAuthedFormAction({
  * navigation and nothing else: the cookie the browser still holds names a
  * revoked family, so the proxy redirects the next request to /login by itself.
  */
-async function endThisBrowsersSession(): Promise<void> {
+async function endThisBrowsersSession(context: {
+  /** The action whose name the line is filed under. */
+  action: string;
+  /** What had already committed by the time the sign-out ran. */
+  committed: string;
+}): Promise<void> {
   try {
-    await signOut({ redirectTo: POST_PASSWORD_CHANGE_PATH });
+    await signOut({ redirectTo: SIGN_IN_PATH });
   } catch (thrown) {
     if (isFrameworkSignal(thrown)) throw thrown;
     logError("action.failed", {
-      action: "changePassword",
-      detail: "the change committed but signing this browser out failed.",
+      action: context.action,
+      detail: `${context.committed} but signing this browser out failed.`,
       error: thrown,
     });
   }

@@ -111,6 +111,7 @@ export type LogEvent =
   | "outbox.claim_taken_over"
   | "password_change"
   | "password_rehash"
+  | "session_revocation"
   | "upload.quarantine_delete_failed"
   | "vitals.delivery_failed";
 

@@ -6,14 +6,16 @@ vi.mock("@/lib/auth/password-change", () => ({
   prismaPasswordChangeStore: {},
   reportPasswordChange: vi.fn(),
 }));
-vi.mock("@/lib/tenancy/client", () => ({
-  unscopedPrisma: { sessionFamily: { updateMany: vi.fn() } },
+vi.mock("@/lib/auth/session-revocation", () => ({
+  revokeEverySession: vi.fn(),
+  prismaSessionRevocationStore: {},
+  reportSessionRevocation: vi.fn(),
 }));
 
 import type { Session } from "next-auth";
 import { auth, signOut } from "@/auth";
 import { changeUserPassword } from "@/lib/auth/password-change";
-import { unscopedPrisma } from "@/lib/tenancy/client";
+import { revokeEverySession } from "@/lib/auth/session-revocation";
 import type { PasswordChangeOutcome } from "@/lib/auth/password-change";
 import { setRequestHeaders } from "@/test/request-headers";
 import { ORIGIN_REJECTED_MESSAGE } from "@/lib/actions/origin";
@@ -35,19 +37,7 @@ import { changePasswordAction, signOutEverywhereAction } from "./account";
 const mockAuth = vi.mocked(auth as () => Promise<Session | null>);
 const mockSignOut = vi.mocked(signOut);
 const mockChange = vi.mocked(changeUserPassword);
-/**
- * The one statement "sign out everywhere" is, reached through the named
- * unscoped client — the same indirection `password-change.test.ts` uses, and
- * for the same reason: a Prisma delegate is not a function this file can
- * `vi.mocked` directly.
- */
-const mockRevoke = vi.mocked(
-  (
-    unscopedPrisma as unknown as {
-      sessionFamily: { updateMany: ReturnType<typeof vi.fn> };
-    }
-  ).sessionFamily.updateMany,
-);
+const mockRevoke = vi.mocked(revokeEverySession);
 
 /**
  * The fixture credentials, named once rather than repeated as literals — see
@@ -99,7 +89,7 @@ beforeEach(() => {
       digest: "NEXT_REDIRECT;replace;/login;307;",
     });
   });
-  mockRevoke.mockResolvedValue({ count: 2 });
+  mockRevoke.mockResolvedValue(2);
 });
 
 describe("changePasswordAction", () => {
@@ -347,13 +337,12 @@ describe("signOutEverywhereAction", () => {
       digest: expect.stringContaining("NEXT_REDIRECT"),
     });
 
-    expect(mockRevoke).toHaveBeenCalledWith({
-      // `revokedAt: null` and not a blanket update: a family that ended in
-      // `TOKEN_REUSE` keeps saying so, because the first reason is the one an
-      // operator answering "why was I signed out?" needs.
-      where: { userId: "user-42", revokedAt: null },
-      data: { revokedAt: expect.any(Date), revokedReason: "REVOKED_BY_USER" },
-    });
+    // The shape of the statement is `session-revocation.test.ts`'s to assert.
+    // What this file owns is the argument: one account, and the session's.
+    expect(mockRevoke).toHaveBeenCalledWith(
+      { userId: "user-42" },
+      expect.anything(),
+    );
   });
 
   it("signs this browser out once the revocation has landed", async () => {
