@@ -6,6 +6,10 @@ import { isFrameworkSignal } from "@/lib/api/errors";
 import { logError } from "@/lib/logging/logger";
 import { ActionError } from "@/lib/actions/result";
 import { defineAuthedFormAction } from "@/lib/actions/define-authed-action";
+// Unscoped: `session_families` has no tenant column. A session belongs to a
+// person across every workspace they are a member of, and scoping this write
+// would end the sessions of one workspace.
+import { unscopedPrisma } from "@/lib/tenancy/client";
 import {
   changeUserPassword,
   prismaPasswordChangeStore,
@@ -145,6 +149,34 @@ export const changePasswordAction = defineAuthedFormAction({
     );
 
     if (outcome.kind !== "changed") throw refusal(outcome);
+
+    await endThisBrowsersSession();
+  },
+});
+
+/**
+ * Ends every live session for the caller's account, then signs this browser
+ * out.
+ *
+ * The password change already does this, but only for somebody who can supply
+ * their current password — and an account that signs in through Google has no
+ * password to supply, so until now it had no way to revoke a stolen cookie at
+ * all. This is the same revocation without the credential.
+ *
+ * No input: the account is the session's, and a form field naming it would make
+ * this a way to end another person's sessions. `z.object({})` rather than a
+ * missing schema, because the factory requires one and an action that takes
+ * nothing should say so.
+ */
+export const signOutEverywhereAction = defineAuthedFormAction({
+  name: "signOutEverywhere",
+  input: z.object({}),
+  unauthenticatedMessage: "You must be signed in to sign out of your sessions.",
+  handler: async ({ user }): Promise<void> => {
+    await unscopedPrisma.sessionFamily.updateMany({
+      where: { userId: user.id, revokedAt: null },
+      data: { revokedAt: new Date(), revokedReason: "REVOKED_BY_USER" },
+    });
 
     await endThisBrowsersSession();
   },
