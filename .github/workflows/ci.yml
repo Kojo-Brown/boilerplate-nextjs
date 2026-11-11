@@ -854,7 +854,34 @@ jobs:
       # `@playwright/test` version in the lockfile, so this step needs no
       # version of its own and cannot drift from it.
       - name: Install Chromium for the accessibility audit
-        run: pnpm exec playwright install --with-deps chromium
+        run: |
+          # Retried, because this step has already failed once for a reason
+          # that has nothing to do with the browser: `--with-deps` runs
+          # `apt-get install` for Chromium's shared libraries and the font
+          # packages it renders text with, and on 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` — ten minutes of
+          # "Temporary failure resolving", then exit 100. Nothing about that is
+          # a statement about the code under test.
+          #
+          # Three attempts and then a real failure, rather than
+          # `continue-on-error`: a job that goes on without a browser is a job
+          # that reports green having audited nothing. `apt-get update` between
+          # attempts because a stale index is the other way this fails.
+          #
+          # The failure is loud rather than partial, which is what makes the
+          # retry safe for the visual gate: `apt-get` installs the whole set or
+          # none of it, so there is no state where the fonts are half-present
+          # and the baselines quietly shift under a comparison.
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed; retrying."
+            sudo apt-get update || true
+            sleep $((attempt * 20))
+          done
+          echo "::error::Chromium install failed three times; see the apt output above."
+          exit 1
 
       # A real browser, because the first version of this gate ran axe in jsdom
       # and passed the whole application: with no layout engine,
@@ -975,7 +1002,34 @@ jobs:
       # in this file: the committed baselines are pixels produced by *this*
       # browser, and a different one would differ on every image.
       - name: Install Chromium
-        run: pnpm exec playwright install --with-deps chromium
+        run: |
+          # Retried, because this step has already failed once for a reason
+          # that has nothing to do with the browser: `--with-deps` runs
+          # `apt-get install` for Chromium's shared libraries and the font
+          # packages it renders text with, and on 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` — ten minutes of
+          # "Temporary failure resolving", then exit 100. Nothing about that is
+          # a statement about the code under test.
+          #
+          # Three attempts and then a real failure, rather than
+          # `continue-on-error`: a job that goes on without a browser is a job
+          # that reports green having audited nothing. `apt-get update` between
+          # attempts because a stale index is the other way this fails.
+          #
+          # The failure is loud rather than partial, which is what makes the
+          # retry safe for the visual gate: `apt-get` installs the whole set or
+          # none of it, so there is no state where the fonts are half-present
+          # and the baselines quietly shift under a comparison.
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed; retrying."
+            sudo apt-get update || true
+            sleep $((attempt * 20))
+          done
+          echo "::error::Chromium install failed three times; see the apt output above."
+          exit 1
 
       # `pnpm start` is started by Playwright's own `webServer`, which is what
       # the config's `env` block feeds.
