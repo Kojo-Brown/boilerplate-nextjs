@@ -689,9 +689,45 @@ and an allowance that stops matching anything fails the job: an exemption nobody
 needs is a hole waiting for the next regression.
 [docs/accessibility.md](./docs/accessibility.md) has the arithmetic, the
 allowance table, and — at the same length — what this gate does **not** support:
-nothing is clicked or focused, streamed content is audited as its fallback,
-`target-size` runs only at desktop width, and axe automates exactly one of
-WCAG 2.2's new criteria.
+it audits documents, so nothing is clicked or focused, streamed content is
+audited as its fallback, `target-size` runs only at desktop width, and axe
+automates exactly one of WCAG 2.2's new criteria.
+
+## The journey suites: interaction, and pixels
+
+The other half of that list. Two Playwright projects walk one critical journey —
+landing, register, a rejected submit, sign in, the dashboard, the posts list,
+the create-post dialog, and on mobile the navigation drawer — at 1280×900 and on
+a Pixel 5. One spec runs the same rule sets against each state **in a hydrated
+browser, after a click**; the other photographs it and compares with a committed
+baseline. Both are the `Journey (a11y + visual)` job and block a merge.
+
+Five defects came out of the first run, and the shape of them is the argument
+for the suite. Two `aria-modal` overlays never moved the focus into themselves,
+so the focused control was the one a screen reader had just been told to ignore
+— axe automates no focus-trap rule and jsdom has no sequential focus navigation,
+so neither existing gate could have failed. `hover:opacity-90` on the primary
+button put white-on-primary at **4.05:1**: an opacity is a blend with whatever
+is behind the button, so a hover state written that way moves the text's
+contrast and nothing in the markup shows it. And both auth forms used
+`id="email"` — Next keeps the route you navigated away from mounted and hidden,
+so on `/register` a label's `for` resolved to `/login`'s input.
+
+**Every step carries a witness** that must hold before anything is measured, and
+that is the load-bearing part: an axe run against a dialog that never opened
+reports no violations, and a screenshot of a skeleton matches a baseline of the
+same skeleton. Both are green and neither measured anything. The first
+`dashboard` step waited only for the greeting, so the three parallel slots were
+still skeletons — the baseline recorded grey blocks and the next run reported
+5,883 differing pixels.
+
+Baselines are recorded **on the runner**, by
+`.github/workflows/update-snapshots.yml`, because a screenshot is only
+meaningful against the Chromium build and fonts that produced it.
+[docs/visual-regression.md](./docs/visual-regression.md) has the journey table,
+the four things that make a comparison reproducible, how to review a baseline
+change — and what this still does not cover: one path, one theme, one locale,
+and the older end-to-end specs are still outside CI.
 
 ## CI
 
