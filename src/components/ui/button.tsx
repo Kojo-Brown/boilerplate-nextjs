@@ -4,23 +4,18 @@ import * as React from "react";
 import { cn } from "@/lib/cn";
 
 type ButtonVariant =
-  | "default"
-  | "destructive"
-  | "outline"
-  | "secondary"
-  | "ghost"
-  | "link";
+  "default" | "destructive" | "outline" | "secondary" | "ghost" | "link";
 
 type ButtonSize = "default" | "sm" | "lg" | "icon";
 
 const variantClasses: Record<ButtonVariant, string> = {
   default:
-    "bg-[var(--primary)] text-[var(--primary-foreground)] shadow hover:opacity-90",
+    "bg-[var(--primary)] text-[var(--primary-foreground)] shadow hover:bg-[var(--primary-hover)]",
   destructive: "bg-red-600 text-white shadow-sm hover:bg-red-700",
   outline:
     "border bg-transparent shadow-sm hover:bg-[var(--muted)] hover:text-[var(--foreground)]",
   secondary:
-    "bg-[var(--muted)] text-[var(--foreground)] shadow-sm hover:opacity-80",
+    "bg-[var(--muted)] text-[var(--foreground)] shadow-sm hover:bg-[var(--muted-hover)]",
   ghost: "hover:bg-[var(--muted)] hover:text-[var(--foreground)]",
   link: "text-[var(--primary)] underline-offset-4 hover:underline",
 };
@@ -32,8 +27,7 @@ const sizeClasses: Record<ButtonSize, string> = {
   icon: "h-9 w-9",
 };
 
-export interface ButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
   size?: ButtonSize;
 }

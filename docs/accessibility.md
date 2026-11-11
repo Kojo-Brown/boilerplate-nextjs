@@ -104,7 +104,9 @@ runner seeds `localStorage` and `next-themes`' own inline script puts
 `.light`/`.dark` on `<html>`. `themeClassApplied` is the check that keeps the
 dark pass from quietly becoming a second light pass if that ever changes.
 
-One desktop viewport, 1280×900.
+One desktop viewport, 1280×900. The interactive suite uses the same number on
+desktop on purpose, so that a finding which appears there and not here is a
+statement about interaction rather than about width.
 
 ## Allowances
 
@@ -188,9 +190,21 @@ Not a list of things to get to eventually — a list of the claims this gate doe
 **Interaction.** Nothing is clicked, focused, or typed into. A dialog's focus
 trap, a drawer's `Escape` handler, the focus ring on a control two tabs in, a
 validation message announced after a failed submit: none of it is audited here.
-Focus management across navigations is now covered — by a gate of its own over
-these same documents, plus an end-to-end suite, see docs/focus-management.md —
-and the rest of the interactive surface is still in `SPEC.md`.
+Focus management across navigations is covered by a gate of its own over these
+same documents, plus an end-to-end suite — see docs/focus-management.md.
+
+The rest of it is now covered too, by `e2e/a11y-journey.spec.ts`, which runs
+these same rule sets against eight states of one critical journey in a real
+browser, after hydration and after a click, at two widths. That is where the
+dialog, the drawer, the post-submit error and the keyboard assertions axe has no
+rule for all live; see docs/visual-regression.md. It found five defects on its
+first run, none of which could have failed any gate that existed before it —
+including two `aria-modal` overlays that never moved the focus into themselves,
+and a primary button whose hover state was 4.05:1.
+
+Two things that suite deliberately does not reach: it walks one path, so most of
+the application is still audited only as documents, and it runs in one theme and
+one locale where this gate runs in two of each.
 
 That gate is where this one's blind spot showed: all 31 documents below were
 clean while `/login`, `/register` and `/_not-found` had no `<main>` landmark at
@@ -202,9 +216,12 @@ automates and still have nowhere for a skip link to go.
 Suspense boundary is the fallback, not the content. A table rendered after the
 query returns is not in this audit.
 
-**Touch targets at phone width.** `target-size` (2.5.8) runs, but at 1280px. It
-is a touch criterion, and a narrow viewport is where it bites; that pass belongs
-with the device matrix of the interactive suite.
+**Touch targets at phone width.** `target-size` (2.5.8) runs here, but at
+1280px. It is a touch criterion, and a narrow viewport is where it bites. That
+pass is the `journey-mobile` project — a Pixel 5 descriptor, so `hasTouch` and
+`isMobile` are set and the criterion means what it is supposed to mean — over
+the eight interactive states, not over all 60 documents. The documents are still
+only ever evaluated at one width.
 
 **Most of what WCAG 2.2 added.** axe automates exactly one 2.2 rule,
 `target-size`. The new criteria it cannot test, and how this application stands

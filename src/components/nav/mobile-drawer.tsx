@@ -3,6 +3,7 @@
 import React from "react";
 import { createPortal } from "react-dom";
 import { useIsHydrated } from "@/hooks/use-is-hydrated";
+import { useModalFocus } from "@/hooks/use-modal-focus";
 import { NavLinks } from "./nav-links";
 
 interface MobileDrawerProps {
@@ -17,6 +18,12 @@ export function MobileDrawer({
   appName = "App",
 }: MobileDrawerProps) {
   const hydrated = useIsHydrated();
+  const [panel, setPanel] = React.useState<HTMLDivElement | null>(null);
+
+  // The drawer declared `aria-modal="true"` and left the focus on the trigger
+  // behind it, which that attribute tells a screen reader to ignore. Same
+  // defect as `<DialogContent>`'s and the same fix; see the hook.
+  useModalFocus(open, panel);
 
   React.useEffect(() => {
     if (!open) return;
@@ -44,9 +51,23 @@ export function MobileDrawer({
         onClick={onClose}
       />
       <div
+        ref={setPanel}
+        // The target of the trigger's `aria-controls` in `app-shell.tsx`. It
+        // was dangling: this panel had no id, so the attribute named an element
+        // that does not exist. axe skips that check while `aria-expanded` is
+        // `false`, on the reasonable assumption that a collapsed control may
+        // not have rendered its target yet — which is why nothing caught it
+        // until a suite opened the drawer and audited it.
+        id="mobile-drawer"
         role="dialog"
         aria-modal="true"
         aria-label="Navigation"
+        // So `useModalFocus` can fall back to the panel. The drawer always
+        // renders a close button, so the fallback is unreachable today; it is
+        // here because the alternative to a focusable container is a `Tab`
+        // that escapes the overlay, and that should not depend on the contents
+        // staying as they are.
+        tabIndex={-1}
         className="absolute inset-y-0 start-0 flex w-64 flex-col border-e shadow-xl"
         style={{ backgroundColor: "var(--background)" }}
       >

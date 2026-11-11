@@ -26,11 +26,11 @@ export function RegisterForm() {
     <div className="flex flex-col gap-4">
       <form action={formAction} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="name" className="text-sm font-medium">
+          <label htmlFor="register-name" className="text-sm font-medium">
             Name
           </label>
           <input
-            id="name"
+            id="register-name"
             name="name"
             type="text"
             autoComplete="name"
@@ -44,11 +44,11 @@ export function RegisterForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="email" className="text-sm font-medium">
+          <label htmlFor="register-email" className="text-sm font-medium">
             Email
           </label>
           <input
-            id="email"
+            id="register-email"
             name="email"
             type="email"
             autoComplete="email"
@@ -62,11 +62,11 @@ export function RegisterForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="password" className="text-sm font-medium">
+          <label htmlFor="register-password" className="text-sm font-medium">
             Password
           </label>
           <input
-            id="password"
+            id="register-password"
             name="password"
             type="password"
             autoComplete="new-password"

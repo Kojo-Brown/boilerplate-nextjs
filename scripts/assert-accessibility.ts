@@ -26,8 +26,8 @@
  *     below are applied by the application's own mechanism rather than by this
  *     file's imitation of one.
  *   - One desktop viewport. `target-size` is a touch criterion and a narrow
- *     viewport is where it bites; that pass belongs with the interactive suite,
- *     which has a device matrix. See `docs/accessibility.md`.
+ *     viewport is where it bites; that pass is `e2e/a11y-journey.spec.ts`'s
+ *     `journey-mobile` project. See `docs/accessibility.md`.
  *
  * Both themes are audited because the dark palette is a separate set of
  * colours that no light-mode run can speak for. The first run of this gate
@@ -43,24 +43,19 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import axe from "axe-core";
+import { WCAG_TAGS } from "../src/lib/a11y/wcag.js";
 import { LOCALES } from "../src/i18n/locales.js";
 import { internalPath } from "../src/i18n/path.js";
 import { chromium } from "@playwright/test";
 
 /**
- * The rule sets axe runs. WCAG 2.2 AA is the target, so every level-A and
- * level-AA tag up to 2.2 is in scope and nothing else is — `best-practice`
- * rules are deliberately excluded, because a gate that fails on advice nobody
- * agreed to is a gate people start passing with `--no-verify`.
+ * The rule sets axe runs, re-exported so this gate's own callers and tests keep
+ * importing it from here.
+ *
+ * The list moved to `src/lib/a11y/wcag.ts` when the interactive suite started
+ * needing it too — see that file for why it is shared rather than copied.
  */
-export const WCAG_TAGS = [
-  "wcag2a",
-  "wcag2aa",
-  "wcag21a",
-  "wcag21aa",
-  "wcag22a",
-  "wcag22aa",
-] as const;
+export { WCAG_TAGS };
 
 export type Theme = "light" | "dark";
 
