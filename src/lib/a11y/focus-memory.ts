@@ -10,6 +10,8 @@
  * and then cannot tell the fallback from the restore.
  */
 
+import { canTakeFocus } from "./focus-target";
+
 /** Keyed by pathname, so a route remembers its own focus and nothing else's. */
 export type FocusMemory = Map<string, WeakRef<HTMLElement>>;
 
@@ -42,45 +44,6 @@ export function rememberFocusedElement(
 
   memory.set(pathname, new WeakRef(target));
   return true;
-}
-
-/**
- * Whether an element can actually take the focus.
- *
- * Two conditions, and the second one cost a browser to find.
- *
- * `isConnected` is the obvious one: a `WeakRef` keeps dereferencing for as
- * long as anything at all holds the node — a React fiber, an event handler
- * closure, this very map — so a node removed from the document still derefs
- * to a live object. Focusing it moves focus to nowhere, and `activeElement`
- * falls back to `<body>`.
- *
- * Visibility is the one that is not obvious, and `isConnected` alone is
- * wrong without it. Next keeps the page you navigated away from *mounted and
- * hidden* so that Back can be instant, so the outgoing route's DOM is still
- * connected, still answers to `getElementById`, and is still what this map
- * remembers — while `focus()` on it is a silent no-op, because focusing a
- * `display: none` element does nothing and reports nothing. Measured on a
- * real Back press: the remembered element was the previous page's `<main>`,
- * `isConnected` true, `checkVisibility()` false, and the focus attempt
- * retried for its entire budget without ever landing.
- *
- * `checkVisibility` is unavailable in jsdom, which performs no layout and in
- * which `offsetParent` is `null` for everything — so there, absence is read
- * as visible. That is the honest default for an environment that cannot
- * answer the question, and it is why the claim this guard makes is asserted
- * in `e2e/focus-management.spec.ts` rather than in the unit suite.
- */
-function canTakeFocus(element: HTMLElement): boolean {
-  if (!element.isConnected) return false;
-
-  const checkVisibility = element.checkVisibility?.bind(element);
-  if (checkVisibility === undefined) return true;
-
-  return checkVisibility({
-    checkVisibilityCSS: true,
-    contentVisibilityAuto: true,
-  });
 }
 
 /**

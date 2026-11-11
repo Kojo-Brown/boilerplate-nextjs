@@ -113,9 +113,27 @@
   :root {
     --primary: oklch(55% 0.2 250);
     --primary-foreground: oklch(100% 0 0);
+    /* The hover colour, as a colour, because the thing it replaced was an
+       opacity and an opacity is a blend with whatever is behind the button.
+       `hover:opacity-90` over this page background took white-on-primary from
+       4.74:1 to **4.05:1** — under AA, for as long as the pointer was on the
+       control. `e2e/a11y-journey.spec.ts` is what found it, and it could only
+       have been found that way: the static gate audits documents nothing has
+       hovered, and the hover state has no markup of its own for anyone to
+       review.
+
+       Darker here and lighter under `.dark` below, which is the same inversion
+       `--primary-foreground` already makes and for the same reason — the text
+       on this button is white in one theme and near-black in the other, so
+       "more contrast" points in opposite directions. 6.34:1 with white. */
+    --primary-hover: oklch(48% 0.2 250);
     --background: oklch(100% 0 0);
     --foreground: oklch(9% 0 0);
     --muted: oklch(96% 0 0);
+    /* Same change for the secondary variant, which was `hover:opacity-80`.
+       Nothing hovered it during the journey, so this one is the same defect
+       fixed rather than the same defect found; 15.84:1 with `--foreground`. */
+    --muted-hover: oklch(91% 0 0);
     --muted-foreground: oklch(45% 0 0);
     --border: oklch(90% 0 0);
     --radius: 0.5rem;
@@ -134,9 +152,12 @@
        too. Both directions are then 6.42:1. See docs/accessibility.md. */
     --primary: oklch(65% 0.2 250);
     --primary-foreground: oklch(9% 0 0);
+    /* Lighter, not darker: the label here is `oklch(9%)`. 7.95:1. */
+    --primary-hover: oklch(72% 0.2 250);
     --background: oklch(9% 0 0);
     --foreground: oklch(98% 0 0);
     --muted: oklch(15% 0 0);
+    --muted-hover: oklch(22% 0 0);
     --muted-foreground: oklch(65% 0 0);
     --border: oklch(22% 0 0);
   }

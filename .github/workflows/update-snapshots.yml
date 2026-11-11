@@ -1,0 +1,203 @@
+# Records the visual journey's baseline images, in the environment that will
+# later compare against them, and commits them to the branch.
+#
+# ## Why this exists
+#
+# A screenshot baseline is only meaningful against the Chromium build and the
+# fonts that produced it. Text rasterisation differs between builds and between
+# font sets, so a baseline recorded on a contributor's machine fails on the
+# runner for reasons nobody can act on — and the usual response to that is a
+# `maxDiffPixelRatio` wide enough to make the gate stop detecting anything.
+#
+# The authoring sandbox this suite was written in makes the point concretely:
+# it cannot reach `cdn.playwright.dev` at all, so it cannot install the pinned
+# browser, and it has a Chromium nine builds newer than the pinned one. Nothing
+# recorded there could have been committed.
+#
+# So the recording happens on the runner. This is not a convenience for one
+# sandbox; it is the only place a baseline for this repository is defined.
+#
+# ## How to use it
+#
+# Push a commit to any branch with `[update-snapshots]` in its message, or run
+# this workflow by hand once it is on the default branch. It records every
+# image, commits whatever changed, and pushes to the same branch.
+#
+# A marker in the commit message rather than a label, because a label needs the
+# pull request to exist and this is frequently wanted on the commit that creates
+# it. The push it makes is by `github-actions[bot]` with `GITHUB_TOKEN`, which
+# deliberately does not trigger workflows — so the verification run is the next
+# push, which is the right way round: a run that recorded its own baselines and
+# then compared against them would be green by construction.
+#
+# ## Review it like code
+#
+# The diff is images. An image changing is not evidence of anything on its own,
+# and this workflow has no opinion about whether the change was intended — it
+# records what the application renders today. The pull request is where someone
+# says why it moved. See docs/visual-regression.md.
+name: Update visual snapshots
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+
+concurrency:
+  group: update-snapshots-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXTAUTH_URL: http://localhost:3000
+  DATABASE_URL: postgresql://app_rls@localhost:5432/nextjs_ci
+  DATABASE_ADMIN_URL: postgresql://postgres@localhost:5432/nextjs_ci
+
+jobs:
+  record:
+    name: Record and commit
+    # `workflow_dispatch` carries no head commit, so the marker is only asked
+    # for on a push.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, '[update-snapshots]')
+    runs-on: ubuntu-latest
+
+    # The only job in this repository that writes to the repository. Scoped to
+    # `contents` and to nothing else.
+    permissions:
+      contents: write
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: nextjs_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      # `ref` is explicit because a `push` event checks out the commit rather
+      # than the branch, and a detached HEAD has nothing to push back to.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.ref_name }}
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Mint a throwaway auth secret for this run
+        run: echo "NEXTAUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply schema to the CI database
+        run: pnpm exec prisma db push
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
+
+      - name: Apply row-level security policies
+        run: pnpm db:rls
+
+      - name: Seed the CI database
+        run: pnpm db:seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
+
+      - name: Build
+        run: pnpm build
+
+      - name: Install Chromium
+        run: |
+          # Deliberately not `--with-deps`, which is what the Playwright
+          # documentation suggests and what this step used to run.
+          #
+          # `--with-deps` shells out to `apt-get install` for Chromium's shared
+          # libraries and a set of font packages. On 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` for forty-three minutes:
+          # three attempts, ten minutes of "Temporary failure resolving" each,
+          # `E: Unable to fetch some archives`, exit 100. Nothing in that is a
+          # statement about the code under test, and no amount of retrying got
+          # past it.
+          #
+          # It is also unnecessary here. `ubuntu-latest` ships Google Chrome and
+          # Chromium, so the shared libraries Playwright's build links against
+          # are already on the image — the apt call was buying a handful of
+          # extra CJK and Thai font packages at the cost of a hard dependency on
+          # a package mirror, for an application that renders Latin and Arabic.
+          #
+          # The fonts are the part worth being explicit about, because the
+          # visual baselines are pixels of rendered text. Dropping the apt
+          # install makes the font set *more* stable, not less: it becomes a
+          # property of the runner image, which both the recording workflow and
+          # this job take from the same place, rather than of whatever Ubuntu
+          # was serving on the day each one ran.
+          #
+          # The retry stays for the download itself, which crosses a network
+          # too. Three attempts and then a real failure rather than
+          # `continue-on-error`: a job that carries on without a browser is a
+          # job that reports green having audited nothing.
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed; retrying."
+            sleep $((attempt * 15))
+          done
+          echo "::error::Chromium install failed three times; see the output above."
+          exit 1
+
+      # `--update-snapshots` writes a missing image and overwrites a differing
+      # one. The run can still fail — a witness that does not hold means the
+      # state was never reached, and an image of the wrong state is worse than
+      # no image — so this is deliberately not `continue-on-error`.
+      - name: Record the baselines
+        run: pnpm exec playwright test --project=journey-desktop --project=journey-mobile visual-journey --update-snapshots
+        env:
+          AUTH_SECRET: ${{ env.NEXTAUTH_SECRET }}
+
+      # Stale images are removed as well as new ones added, so a renamed step
+      # does not leave an orphan behind for `assert-visual-baselines.ts` to
+      # fail on afterwards. `git add -A` over that one directory is what makes
+      # a deletion part of the commit.
+      - name: Commit whatever changed
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A e2e/__screenshots__
+          if git diff --cached --quiet; then
+            echo "No baseline changed; nothing to commit."
+            exit 0
+          fi
+          git diff --cached --name-status
+          git commit -m 'chore: record visual journey baselines
+
+          Recorded by .github/workflows/update-snapshots.yml on the CI runner,
+          which is the environment the comparison runs in. See
+          docs/visual-regression.md.'
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: update-snapshots-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore

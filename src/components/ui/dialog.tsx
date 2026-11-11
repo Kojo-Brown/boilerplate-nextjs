@@ -3,6 +3,7 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useIsHydrated } from "@/hooks/use-is-hydrated";
+import { useModalFocus } from "@/hooks/use-modal-focus";
 import { cn } from "@/lib/cn";
 
 interface DialogContextValue {
@@ -116,6 +117,23 @@ export const DialogContent = React.forwardRef<
 >(({ className, children, ...props }, ref) => {
   const { open, onOpenChange } = useDialog();
 
+  // State and not a ref, because `useModalFocus` has to re-run when the node
+  // appears and a ref assignment does not re-render. It appears late here
+  // twice over: `<DialogPortal>` renders nothing until hydration, and nothing
+  // at all until `open`.
+  const [panel, setPanel] = React.useState<HTMLDivElement | null>(null);
+
+  useModalFocus(open, panel);
+
+  // The panel's ref has two consumers — this component, for the focus hook,
+  // and whatever was forwarded in. `<PhotoModal>` passes one, so dropping
+  // either would be a regression in a different file.
+  function attachPanel(node: HTMLDivElement | null): void {
+    setPanel(node);
+    if (typeof ref === "function") ref(node);
+    else if (ref !== null) ref.current = node;
+  }
+
   React.useEffect(() => {
     if (!open) return;
     const onKeyDown = (e: KeyboardEvent) => {
@@ -135,9 +153,13 @@ export const DialogContent = React.forwardRef<
     <DialogPortal>
       <DialogOverlay />
       <div
-        ref={ref}
+        ref={attachPanel}
         role="dialog"
         aria-modal="true"
+        // Keeps `useModalFocus`'s fallback reachable: a dialog with no
+        // focusable content still has to take the focus itself, or
+        // `aria-modal` hides the page from a screen reader whose focus is
+        // still on it.
         tabIndex={-1}
         className={cn(
           "fixed left-1/2 top-1/2 z-50 w-full max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-xl border bg-[var(--background)] p-6 shadow-lg focus:outline-none",

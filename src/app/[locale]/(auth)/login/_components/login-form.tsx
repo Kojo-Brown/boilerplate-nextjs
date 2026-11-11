@@ -26,11 +26,11 @@ export function LoginForm() {
     <div className="flex flex-col gap-4">
       <form action={formAction} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="email" className="text-sm font-medium">
+          <label htmlFor="login-email" className="text-sm font-medium">
             Email
           </label>
           <input
-            id="email"
+            id="login-email"
             name="email"
             type="email"
             autoComplete="email"
@@ -44,11 +44,11 @@ export function LoginForm() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="password" className="text-sm font-medium">
+          <label htmlFor="login-password" className="text-sm font-medium">
             Password
           </label>
           <input
-            id="password"
+            id="login-password"
             name="password"
             type="password"
             autoComplete="current-password"

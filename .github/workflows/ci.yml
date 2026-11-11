@@ -812,6 +812,21 @@ jobs:
         env:
           NODE_OPTIONS: --throw-deprecation
 
+      # The visual suite's registry and its committed images, compared. Static
+      # — no browser, no server, no database — which is why it sits here with
+      # the cheap gates rather than inside the `e2e` job that would otherwise
+      # be the first thing to notice.
+      #
+      # It catches the direction Playwright cannot. A *missing* baseline fails
+      # the run that needs it, eventually; an *orphaned* one is silent for
+      # ever, because a renamed step leaves its `.png` behind and nothing ever
+      # opens it again. Same property as an unused accessibility allowance, and
+      # failed on for the same reason.
+      - name: Assert visual baselines
+        run: pnpm exec tsx scripts/assert-visual-baselines.ts
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
       # The only gate here that talks to a database, because the claim is
       # "Postgres will not return another tenant's rows" and no arrangement of
       # TypeScript establishes it.
@@ -839,7 +854,44 @@ jobs:
       # `@playwright/test` version in the lockfile, so this step needs no
       # version of its own and cannot drift from it.
       - name: Install Chromium for the accessibility audit
-        run: pnpm exec playwright install --with-deps chromium
+        run: |
+          # Deliberately not `--with-deps`, which is what the Playwright
+          # documentation suggests and what this step used to run.
+          #
+          # `--with-deps` shells out to `apt-get install` for Chromium's shared
+          # libraries and a set of font packages. On 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` for forty-three minutes:
+          # three attempts, ten minutes of "Temporary failure resolving" each,
+          # `E: Unable to fetch some archives`, exit 100. Nothing in that is a
+          # statement about the code under test, and no amount of retrying got
+          # past it.
+          #
+          # It is also unnecessary here. `ubuntu-latest` ships Google Chrome and
+          # Chromium, so the shared libraries Playwright's build links against
+          # are already on the image — the apt call was buying a handful of
+          # extra CJK and Thai font packages at the cost of a hard dependency on
+          # a package mirror, for an application that renders Latin and Arabic.
+          #
+          # The fonts are the part worth being explicit about, because the
+          # visual baselines are pixels of rendered text. Dropping the apt
+          # install makes the font set *more* stable, not less: it becomes a
+          # property of the runner image, which both the recording workflow and
+          # this job take from the same place, rather than of whatever Ubuntu
+          # was serving on the day each one ran.
+          #
+          # The retry stays for the download itself, which crosses a network
+          # too. Three attempts and then a real failure rather than
+          # `continue-on-error`: a job that carries on without a browser is a
+          # job that reports green having audited nothing.
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed; retrying."
+            sleep $((attempt * 15))
+          done
+          echo "::error::Chromium install failed three times; see the output above."
+          exit 1
 
       # A real browser, because the first version of this gate ran axe in jsdom
       # and passed the whole application: with no layout engine,
@@ -877,6 +929,150 @@ jobs:
           if-no-files-found: error
           include-hidden-files: true
 
+  # The journey suites: WCAG 2.2 AA over the application as a browser renders
+  # it, and a pixel comparison of the same eight states.
+  #
+  # This is the first Playwright suite this repository runs in CI, and it runs
+  # only the two journey projects. The older specs stay out: they were written
+  # against a developer's own machine, several of them assume a database that
+  # has been through other specs first, and wiring all of them in at once would
+  # arrive as a wall of unrelated failures. That gap is still open and
+  # `SPEC.md` still records it.
+  #
+  # A job of its own rather than more steps on `build`, because it needs a
+  # running server. It repeats the build instead of downloading `build`'s
+  # artifact: `next start` serves from `.next` *and* `node_modules`, the
+  # artifact is only the former, and a job that needs the install anyway saves
+  # little by not building. One Node major, not two — the claims here are about
+  # rendering and the accessibility tree, neither of which the Node version
+  # decides.
+  e2e:
+    name: Journey (a11y + visual)
+    runs-on: ubuntu-latest
+    needs: [lint, format, typecheck, test]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: nextjs_ci
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --strict-peer-dependencies
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Mint a throwaway auth secret for this run
+        run: echo "NEXTAUTH_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+
+      - name: Apply schema to the CI database
+        run: pnpm exec prisma db push
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
+
+      - name: Apply row-level security policies
+        run: pnpm db:rls
+
+      # The journey signs in as the seeded demo account and reads its
+      # workspace's posts, so the seed is a precondition and not a nicety: an
+      # empty database turns the dashboard's panels and the posts list into
+      # their empty states, and both suites would be measuring those.
+      - name: Seed the CI database
+        run: pnpm db:seed
+        env:
+          DATABASE_URL: ${{ env.DATABASE_ADMIN_URL }}
+
+      - name: Build
+        run: pnpm run strict pnpm build
+        env:
+          NODE_OPTIONS: --throw-deprecation
+
+      # The pinned build, from the `@playwright/test` version in the lockfile.
+      # It cannot drift from it, and that matters more here than anywhere else
+      # in this file: the committed baselines are pixels produced by *this*
+      # browser, and a different one would differ on every image.
+      - name: Install Chromium
+        run: |
+          # Deliberately not `--with-deps`, which is what the Playwright
+          # documentation suggests and what this step used to run.
+          #
+          # `--with-deps` shells out to `apt-get install` for Chromium's shared
+          # libraries and a set of font packages. On 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` for forty-three minutes:
+          # three attempts, ten minutes of "Temporary failure resolving" each,
+          # `E: Unable to fetch some archives`, exit 100. Nothing in that is a
+          # statement about the code under test, and no amount of retrying got
+          # past it.
+          #
+          # It is also unnecessary here. `ubuntu-latest` ships Google Chrome and
+          # Chromium, so the shared libraries Playwright's build links against
+          # are already on the image — the apt call was buying a handful of
+          # extra CJK and Thai font packages at the cost of a hard dependency on
+          # a package mirror, for an application that renders Latin and Arabic.
+          #
+          # The fonts are the part worth being explicit about, because the
+          # visual baselines are pixels of rendered text. Dropping the apt
+          # install makes the font set *more* stable, not less: it becomes a
+          # property of the runner image, which both the recording workflow and
+          # this job take from the same place, rather than of whatever Ubuntu
+          # was serving on the day each one ran.
+          #
+          # The retry stays for the download itself, which crosses a network
+          # too. Three attempts and then a real failure rather than
+          # `continue-on-error`: a job that carries on without a browser is a
+          # job that reports green having audited nothing.
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install chromium; then
+              exit 0
+            fi
+            echo "::warning::Chromium install attempt $attempt failed; retrying."
+            sleep $((attempt * 15))
+          done
+          echo "::error::Chromium install failed three times; see the output above."
+          exit 1
+
+      # `pnpm start` is started by Playwright's own `webServer`, which is what
+      # the config's `env` block feeds.
+      - name: Run the journey suites
+        run: pnpm exec playwright test --project=journey-desktop --project=journey-mobile
+        env:
+          AUTH_SECRET: ${{ env.NEXTAUTH_SECRET }}
+
+      # The report carries the actual/expected/diff triple for a failed
+      # screenshot, which is the only form in which a visual failure is
+      # reviewable at all — a line of text saying "5,883 pixels differ" tells
+      # nobody whether that is a regression or an intended restyle.
+      - name: Upload the Playwright report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # A matrix renames every check ("Build" became "Build (Node 22)"), which
   # silently unsets any branch protection pinned to the old names — and adding
   # a Node major later would rename them again. This job is the one stable
@@ -884,7 +1080,7 @@ jobs:
   ci:
     name: CI
     runs-on: ubuntu-latest
-    needs: [lint, format, typecheck, test, build]
+    needs: [lint, format, typecheck, test, build, e2e]
     if: always()
     steps:
       - name: Verify every job succeeded

@@ -11,7 +11,10 @@ const sizeMap = {
   lg: { px: 48, cls: "text-base" },
 } as const;
 
-function getInitials(name: string | null | undefined, email: string | null | undefined): string {
+function getInitials(
+  name: string | null | undefined,
+  email: string | null | undefined,
+): string {
   if (name) {
     return name
       .split(" ")
@@ -57,6 +60,15 @@ export async function UserAvatar({ size = "md" }: UserAvatarProps) {
         backgroundColor: "var(--primary)",
         color: "var(--primary-foreground)",
       }}
+      // `role="img"` is what makes the rest of this legal. `aria-label` on a
+      // bare `<div>` is a prohibited attribute — the mapping has no role to
+      // hang a name on, so the label is dropped and the element is announced
+      // by its text content, which is two letters. With the role, the initials
+      // become the image and the label is the name. Found by
+      // `e2e/a11y-journey.spec.ts`, which audits the dashboard with a session
+      // on it; the prerendered documents the static gate reads have no avatar,
+      // because there is no user in them.
+      role="img"
       aria-label={label}
       title={label}
     >
