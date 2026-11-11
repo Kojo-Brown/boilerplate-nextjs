@@ -123,32 +123,42 @@ jobs:
 
       - name: Install Chromium
         run: |
-          # Retried, because this step has already failed once for a reason
-          # that has nothing to do with the browser: `--with-deps` runs
-          # `apt-get install` for Chromium's shared libraries and the font
-          # packages it renders text with, and on 2026-11-11 the runner could
-          # not resolve `azure.archive.ubuntu.com` — ten minutes of
-          # "Temporary failure resolving", then exit 100. Nothing about that is
-          # a statement about the code under test.
+          # Deliberately not `--with-deps`, which is what the Playwright
+          # documentation suggests and what this step used to run.
           #
-          # Three attempts and then a real failure, rather than
-          # `continue-on-error`: a job that goes on without a browser is a job
-          # that reports green having audited nothing. `apt-get update` between
-          # attempts because a stale index is the other way this fails.
+          # `--with-deps` shells out to `apt-get install` for Chromium's shared
+          # libraries and a set of font packages. On 2026-11-11 the runner could
+          # not resolve `azure.archive.ubuntu.com` for forty-three minutes:
+          # three attempts, ten minutes of "Temporary failure resolving" each,
+          # `E: Unable to fetch some archives`, exit 100. Nothing in that is a
+          # statement about the code under test, and no amount of retrying got
+          # past it.
           #
-          # The failure is loud rather than partial, which is what makes the
-          # retry safe for the visual gate: `apt-get` installs the whole set or
-          # none of it, so there is no state where the fonts are half-present
-          # and the baselines quietly shift under a comparison.
+          # It is also unnecessary here. `ubuntu-latest` ships Google Chrome and
+          # Chromium, so the shared libraries Playwright's build links against
+          # are already on the image — the apt call was buying a handful of
+          # extra CJK and Thai font packages at the cost of a hard dependency on
+          # a package mirror, for an application that renders Latin and Arabic.
+          #
+          # The fonts are the part worth being explicit about, because the
+          # visual baselines are pixels of rendered text. Dropping the apt
+          # install makes the font set *more* stable, not less: it becomes a
+          # property of the runner image, which both the recording workflow and
+          # this job take from the same place, rather than of whatever Ubuntu
+          # was serving on the day each one ran.
+          #
+          # The retry stays for the download itself, which crosses a network
+          # too. Three attempts and then a real failure rather than
+          # `continue-on-error`: a job that carries on without a browser is a
+          # job that reports green having audited nothing.
           for attempt in 1 2 3; do
-            if pnpm exec playwright install --with-deps chromium; then
+            if pnpm exec playwright install chromium; then
               exit 0
             fi
             echo "::warning::Chromium install attempt $attempt failed; retrying."
-            sudo apt-get update || true
-            sleep $((attempt * 20))
+            sleep $((attempt * 15))
           done
-          echo "::error::Chromium install failed three times; see the apt output above."
+          echo "::error::Chromium install failed three times; see the output above."
           exit 1
 
       # `--update-snapshots` writes a missing image and overwrites a differing
